@@ -1,0 +1,354 @@
+import { useEffect, useMemo, useState } from 'react'
+import { RefreshCw, Search, Plus, X, Database, Cloud, HardDrive, Users, Lock, ExternalLink } from 'lucide-react'
+import type { AtlasDb, AtlasFunction, BatchItem, Claim, GithubCredits } from '../../../shared/types'
+import Treemap from './Treemap'
+import { sortFns, SORT_LABELS, type SortKey } from '../atlas/sort'
+
+const pct = (n: number, d: number): string => (d ? `${((n / d) * 100).toFixed(1)}%` : '0%')
+const PALETTE = [
+  '#4363d8', '#e6194B', '#3cb44b', '#f58231', '#911eb4', '#00a0b0', '#f032e6', '#469990',
+  '#9A6324', '#a83232', '#808000', '#7d4bd8', '#0ea5e9', '#d97706', '#059669', '#db2777'
+]
+
+export default function AtlasView({
+  onAdd,
+  liveEnabled,
+  claimsEnabled
+}: {
+  onAdd: (item: BatchItem) => void
+  liveEnabled: boolean
+  claimsEnabled: boolean
+}): JSX.Element {
+  const [db, setDb] = useState<AtlasDb | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [generating, setGenerating] = useState(false)
+  const [source, setSource] = useState<'local' | 'live'>('local')
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState<'all' | 'unmatched' | 'matched'>('all')
+  const [moduleFilter, setModuleFilter] = useState<string | null>(null)
+  const [sort, setSort] = useState<SortKey>('unmatched')
+  const [colorBy, setColorBy] = useState<'status' | 'author'>('status')
+  const [authorFilter, setAuthorFilter] = useState<string | null>(null)
+  const [showNearMiss, setShowNearMiss] = useState(true)
+  const [selectedFn, setSelectedFn] = useState<AtlasFunction | null>(null)
+  const [claims, setClaims] = useState<Claim[]>([])
+  const [whoami, setWhoami] = useState<{ hasKey: boolean; handle: string }>({ hasKey: false, handle: '' })
+  const [gh, setGh] = useState<GithubCredits | null>(null)
+
+  useEffect(() => {
+    window.tangos.githubCredits().then(setGh).catch(() => {})
+  }, [])
+
+  // data-file author key -> canonical GitHub login (dedups bmanus2 vs bmanus2-dotcom, etc.)
+  const keyToLogin = useMemo(() => new Map(Object.entries(gh?.keyToLogin ?? {})), [gh])
+  const loginFor = (f: AtlasFunction): string => (f.author ? keyToLogin.get(f.author) ?? f.author : '')
+
+  // matched-function count per canonical login, seeded with everyone who has a PR/commit
+  const loginCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    if (db) for (const f of db.functions) if (f.matched && f.author) {
+      const login = keyToLogin.get(f.author) ?? f.author
+      if (/\[bot\]$/i.test(login)) continue
+      m.set(login, (m.get(login) ?? 0) + 1)
+    }
+    for (const l of gh?.logins ?? []) if (!m.has(l.login)) m.set(l.login, 0)
+    for (const p of gh?.prAuthors ?? []) if (!m.has(p)) m.set(p, 0)
+    return m
+  }, [db, gh, keyToLogin])
+
+  const authorColors = useMemo(() => {
+    const out = new Map<string, string>()
+    ;[...loginCounts.entries()].sort((a, b) => b[1] - a[1]).forEach(([name], i) => out.set(name, PALETTE[i % PALETTE.length]))
+    return out
+  }, [loginCounts])
+
+  async function load(src: 'local' | 'live', force = false): Promise<void> {
+    setLoading(true)
+    try {
+      setDb(src === 'live' ? await window.tangos.atlasLoadLive(force) : await window.tangos.atlasLoad())
+      setSource(src)
+    } catch (e) {
+      alert(String((e as Error).message ?? e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function refreshClaims(): Promise<void> {
+    if (!claimsEnabled) return
+    const r = await window.tangos.claimsList()
+    setClaims(r.claims)
+    setWhoami(r.whoami)
+  }
+
+  useEffect(() => {
+    ;(async () => {
+      if (liveEnabled) {
+        setLoading(true)
+        try {
+          setDb(await window.tangos.atlasLoadLive())
+          setSource('live')
+          setLoading(false)
+          refreshClaims()
+          return
+        } catch {
+          /* offline — fall through */
+        }
+      }
+      await load('local')
+      refreshClaims()
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  async function generate(): Promise<void> {
+    setGenerating(true)
+    try {
+      setDb(await window.tangos.atlasGenerate())
+      setSource('local')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const contributors = useMemo(
+    () => [...loginCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
+    [loginCounts]
+  )
+
+  const claimIndex = useMemo(() => {
+    const m = new Map<string, { s: number; e: number; handle: string; id: string; note?: string }[]>()
+    for (const c of claims) {
+      const arr = m.get(c.module) ?? []
+      // claim addrs arrive as "0x..." strings — Number() parses those (parseInt(,16) would stop at 'x')
+      arr.push({ s: Number(c.start), e: Number(c.end), handle: c.handle, id: c.id, note: c.note })
+      m.set(c.module, arr)
+    }
+    return m
+  }, [claims])
+
+  function claimFor(f: AtlasFunction): { handle: string; id: string; note?: string } | null {
+    const arr = claimIndex.get(f.module)
+    if (!arr) return null
+    const a = f.addr
+    const b = f.addr + f.size
+    return arr.find((c) => a < c.e && b > c.s) ?? null
+  }
+
+  const filtered = useMemo(() => {
+    if (!db) return []
+    const q = search.trim().toLowerCase()
+    return db.functions.filter((f) => {
+      if (filter === 'matched' && !f.matched) return false
+      if (filter === 'unmatched' && f.matched) return false
+      if (moduleFilter && f.module !== moduleFilter) return false
+      if (authorFilter && loginFor(f) !== authorFilter) return false
+      if (q && !f.name.toLowerCase().includes(q) && !f.module.toLowerCase().includes(q) && !f.id.includes(q)) return false
+      return true
+    })
+  }, [db, search, filter, moduleFilter, authorFilter, keyToLogin])
+
+  const shown = useMemo(() => sortFns(filtered, sort).slice(0, 500), [filtered, sort])
+
+  if (loading) return <div className="atlas center"><p className="hint">Loading Atlas…</p></div>
+
+  if (!db) {
+    return (
+      <div className="atlas center">
+        <div className="landing aero-panel" style={{ width: 'min(560px,100%)' }}>
+          <Database size={34} color="var(--aero-primary)" />
+          <h1 style={{ fontSize: 22 }}>No Atlas data yet</h1>
+          <p className="tagline">Generate this repo&apos;s data locally, or pull the team&apos;s live published data.</p>
+          <div className="actions" style={{ justifyContent: 'center' }}>
+            <button className="aero-button" onClick={generate} disabled={generating}>
+              <HardDrive size={15} style={{ verticalAlign: -3, marginRight: 6 }} />
+              {generating ? 'Generating…' : 'Generate local data'}
+            </button>
+            {liveEnabled && (
+              <button className="aero-button ghost" onClick={() => load('live')}>
+                <Cloud size={15} style={{ verticalAlign: -3, marginRight: 6 }} /> Pull live data
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const s = db.stats
+  return (
+    <div className="atlas">
+      <div className="atlas-head aero-panel">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <h2 style={{ margin: 0 }}>Atlas</h2>
+          {liveEnabled && (
+            <div className="seg" title="Live = the whole team's published progress (recommended). Local = your generated data.">
+              <button className={source === 'live' ? 'on' : ''} onClick={() => load('live', true)}><Cloud size={12} /> Live</button>
+              <button className={source === 'local' ? 'on' : ''} onClick={() => load('local')}><HardDrive size={12} /> Local</button>
+            </div>
+          )}
+          <span className="hint" style={{ margin: 0 }}>
+            {source === 'live' ? 'live · everyone’s progress' : 'local'}{db.generatedAt ? ` · ${db.generatedAt}` : ''}
+          </span>
+          <div style={{ flex: 1 }} />
+          {claimsEnabled && (
+            <button className="mini-btn" onClick={refreshClaims} title={whoami.handle ? `you: ${whoami.handle}` : 'refresh claims'}>
+              <Lock size={12} style={{ verticalAlign: -2, marginRight: 4 }} />
+              {claims.length} claims
+            </button>
+          )}
+          {source === 'live' && (
+            <button className="mini-btn" onClick={() => load('live', true)} disabled={loading} title="re-fetch the team's latest published progress (bypasses cache)">
+              <RefreshCw size={12} className={loading ? 'spin' : ''} style={{ verticalAlign: -2, marginRight: 4 }} />
+              Refresh
+            </button>
+          )}
+          {source === 'local' && (
+            <button className="mini-btn" onClick={generate} disabled={generating}>
+              <RefreshCw size={12} className={generating ? 'spin' : ''} style={{ verticalAlign: -2, marginRight: 4 }} />
+              {generating ? 'Generating…' : 'Regenerate'}
+            </button>
+          )}
+        </div>
+
+        <div className="atlas-stats">
+          <div className="stat-bar">
+            <div className="stat-label">Functions <b>{pct(s.matchedFunctions, s.totalFunctions)}</b> · {s.matchedFunctions.toLocaleString()} / {s.totalFunctions.toLocaleString()}</div>
+            <div className="bar"><div className="fill" style={{ width: pct(s.matchedFunctions, s.totalFunctions) }} /></div>
+          </div>
+          <div className="stat-bar">
+            <div className="stat-label">Code <b>{pct(s.matchedBytes, s.totalBytes)}</b> · {s.matchedBytes.toLocaleString()} / {s.totalBytes.toLocaleString()} b</div>
+            <div className="bar"><div className="fill" style={{ width: pct(s.matchedBytes, s.totalBytes) }} /></div>
+          </div>
+        </div>
+
+        {contributors.length > 0 && (
+          <div className="contributors aero-scroll">
+            <Users size={13} style={{ verticalAlign: -2, marginRight: 4, color: 'var(--aero-muted)', flex: 'none' }} />
+            {contributors.map(([name, n]) => (
+              <button
+                key={name}
+                className={`contrib${authorFilter === name ? ' sel' : ''}`}
+                onClick={() => setAuthorFilter(authorFilter === name ? null : name)}
+                title={authorFilter === name ? 'show everyone' : n > 0 ? `show only ${name}` : `${name} — active claim, not yet merged`}
+              >
+                <span className="cdot" style={{ background: authorColors.get(name) ?? '#8896a5' }} />
+                {name} {n > 0 ? <b>{n.toLocaleString()}</b> : <Lock size={9} style={{ marginLeft: 2, opacity: 0.6 }} />}
+              </button>
+            ))}
+            {authorFilter && (
+              <button className="mini-btn" style={{ flex: 'none' }} onClick={() => setAuthorFilter(null)}>clear</button>
+            )}
+          </div>
+        )}
+        {liveEnabled && source === 'local' && (
+          <p className="notice" style={{ marginTop: 8 }}>Working with others? Switch to <b>Live</b> for everyone&apos;s latest progress and claims.</p>
+        )}
+      </div>
+
+      <Treemap
+        db={db}
+        moduleFilter={moduleFilter}
+        onModule={setModuleFilter}
+        onFunction={(f) => {
+          if (selectedFn?.id === f.id) {
+            setSelectedFn(null)
+            setModuleFilter(null)
+          } else {
+            setSelectedFn(f)
+            setModuleFilter(f.module)
+          }
+        }}
+        selectedId={selectedFn?.id}
+        colorBy={colorBy}
+        authorColors={authorColors}
+        authorResolve={keyToLogin}
+        authorFilter={authorFilter}
+        showNearMiss={showNearMiss}
+        fill
+      />
+
+      <div className="treemap-legend">
+        <div className="seg">
+          <button className={colorBy === 'status' ? 'on' : ''} onClick={() => setColorBy('status')}>Status</button>
+          <button className={colorBy === 'author' ? 'on' : ''} onClick={() => setColorBy('author')}>Contributor</button>
+        </div>
+        {colorBy === 'status' ? (
+          <>
+            <span><i className="lg" style={{ background: '#3fc45f' }} /> matched</span>
+            {showNearMiss && <span><i className="lg" style={{ background: '#eab308' }} /> near-miss</span>}
+            <span><i className="lg" style={{ background: '#b9cadb' }} /> unmatched</span>
+            <label className="tm-check">
+              <input type="checkbox" checked={showNearMiss} onChange={(e) => setShowNearMiss(e.target.checked)} />
+              near-misses
+            </label>
+          </>
+        ) : (
+          <span className="hint" style={{ margin: 0 }}>each matched function colored by its author</span>
+        )}
+        <span className="hint" style={{ margin: 0 }}>· click a function to select</span>
+        <div style={{ flex: 1 }} />
+        {moduleFilter && (
+          <button className="mini-btn" onClick={() => window.tangos.openModulePopout(moduleFilter)} title={`open ${moduleFilter} in its own window`}>
+            <ExternalLink size={12} style={{ verticalAlign: -2, marginRight: 4 }} /> pop out {moduleFilter}
+          </button>
+        )}
+      </div>
+
+      <div className="atlas-toolbar aero-panel">
+        <div className="atlas-search">
+          <Search size={14} />
+          <input placeholder="Search function or module…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          {search && <button className="run-icon" onClick={() => setSearch('')}><X size={13} /></button>}
+        </div>
+        <select className="theme-select" value={filter} onChange={(e) => setFilter(e.target.value as 'all')}>
+          <option value="all">all</option>
+          <option value="unmatched">unmatched</option>
+          <option value="matched">matched</option>
+        </select>
+        <select className="theme-select" value={sort} onChange={(e) => setSort(e.target.value as SortKey)} title="Sort by">
+          {(Object.keys(SORT_LABELS) as SortKey[]).map((k) => (
+            <option key={k} value={k}>sort: {SORT_LABELS[k]}</option>
+          ))}
+        </select>
+        {moduleFilter && <button className="mini-btn" onClick={() => setModuleFilter(null)}>{moduleFilter} <X size={11} style={{ verticalAlign: -1 }} /></button>}
+        <span className="hint" style={{ margin: 0 }}>showing {shown.length.toLocaleString()} of {filtered.length.toLocaleString()}</span>
+      </div>
+
+      <div className="atlas-list aero-panel aero-scroll">
+        {shown.map((f) => {
+          const c = claimFor(f)
+          const claimedByOther = !!c && c.handle !== whoami.handle
+          return (
+            <div className="fn-row" key={f.id}>
+              <span className={`status-dot ${f.matched ? 'ok' : ''}`} style={f.matched ? {} : { background: 'var(--aero-unmatched)' }} />
+              <span className="fn-name mono">{f.name}</span>
+              <span className="fn-mod">{f.module}</span>
+              <span className="fn-author" title="author">{f.author ?? ''}</span>
+              <span className="fn-size">{f.size}b</span>
+              <span className="fn-claim">
+                {c && (
+                  <span className={`claim-chip ${c.handle === whoami.handle ? 'mine' : 'other'}`} title={`claimed by ${c.handle}${c.note ? ` — ${c.note}` : ''}`}>
+                    <Lock size={11} /> {c.handle === whoami.handle ? 'you' : c.handle}
+                  </span>
+                )}
+              </span>
+              <span className="fn-add">
+                {!f.matched && (
+                  <button
+                    className="bubble-btn"
+                    disabled={claimedByOther}
+                    title={claimedByOther ? `claimed by ${c!.handle} — the AI will handle claiming` : 'Add to batch'}
+                    onClick={() => { if (!claimedByOther) onAdd({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module }) }}
+                  >
+                    <Plus size={14} strokeWidth={2.5} />
+                  </button>
+                )}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}

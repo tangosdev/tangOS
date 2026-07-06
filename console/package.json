@@ -1,0 +1,67 @@
+{
+  "name": "console",
+  "version": "0.1.0",
+  "description": "tangOS Console — exposes a decomp repo's tools as an MCP server an AI connects to, with a live viewer.",
+  "main": "./out/main/index.js",
+  "author": "Brennen (Tango)",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "dist": "electron-vite build && electron-builder --win",
+    "pack": "electron-vite build && electron-builder --win --dir"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@tangos/ui": "*",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.17.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/ws": "^8.5.13",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "express": "^4.21.2",
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsx": "^4.23.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "build": {
+    "appId": "com.tangos.console",
+    "productName": "tangOS Console",
+    "electronVersion": "33.4.11",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "tangOS Console"
+    }
+  }
+}

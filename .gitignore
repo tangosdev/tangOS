@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+release/
+*.log
+.DS_Store
+.env
+.env.local
+# electron-builder output
+console/release/
+console/out/

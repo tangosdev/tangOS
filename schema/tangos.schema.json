@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tangos.dev/schema/tangos.schema.json",
+  "title": "tangos.json",
+  "description": "tangOS repo descriptor. One file per decomp repo that normalizes it into a single vocabulary read by every tangOS app (Console, Docs, Atlas). A repo's own tools are declared in `tools[]`; tangOS turns each entry into an MCP tool generically.",
+  "type": "object",
+  "required": ["tangosVersion", "project", "tools"],
+  "additionalProperties": false,
+  "properties": {
+    "tangosVersion": {
+      "description": "Descriptor schema version. Current: \"1\".",
+      "type": "string",
+      "enum": ["1"]
+    },
+    "project": {
+      "type": "object",
+      "description": "Human-facing identity + matching guidance. Superset of Chaos Viewer's project.config.json.",
+      "required": ["name", "title"],
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string", "description": "Machine name / repo slug, e.g. \"sm64ds-decomp\"." },
+        "title": { "type": "string", "description": "Display name, e.g. \"Super Mario 64 DS\"." },
+        "tagline": { "type": "string" },
+        "github": { "type": "string", "description": "Repo URL." },
+        "language": { "type": "string", "description": "Primary source language, e.g. \"C\", \"C++\"." },
+        "platform": { "type": "string", "description": "Console/arch hint, e.g. \"nds\", \"gc\", \"n64\", \"gba\", \"ps2\"." },
+        "compiler": { "type": "string", "description": "Compiler + flags, free text." },
+        "cppNote": { "type": "string" },
+        "discord": { "type": "string" },
+        "setup": { "type": "string", "description": "How a contributor gets the repo runnable." },
+        "verifyCommand": { "type": "string", "description": "Template command that verifies one function matches (placeholders like {name} {addrHex} {sizeHex})." },
+        "readFirst": { "type": "string" },
+        "rules": { "type": "string", "description": "Legal / contribution rules (ROM ownership, what may be committed)." },
+        "nearMissNote": { "type": "string" }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "description": "How tangOS executes this repo's tools.",
+      "additionalProperties": false,
+      "properties": {
+        "cwd": { "type": "string", "description": "Working directory for tool commands, relative to the repo root. Default \".\".", "default": "." },
+        "python": { "type": "string", "description": "Python interpreter to use, e.g. \"python\", \"python3\", or a venv path. Default \"python\".", "default": "python" },
+        "shell": { "type": "boolean", "description": "Run commands through a shell (enables pipes/redirection). Default false (argv spawn).", "default": false },
+        "envKeys": {
+          "type": "array",
+          "description": "Names of environment variables some tools need (e.g. API keys). Values are NEVER stored here; tangOS reads them from the user's environment or prompts.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "description": "What the repo needs locally to actually run its tools. Surfaced to the user as a preflight checklist. tangOS does NOT ship any of these.",
+      "additionalProperties": true,
+      "properties": {
+        "rom": { "type": "boolean", "description": "Requires a user-supplied extracted ROM / game dump." },
+        "compiler": { "type": "string", "description": "Name of a required external compiler the user must install, e.g. \"mwccarm\"." },
+        "pythonPackages": { "type": "array", "items": { "type": "string" } },
+        "notes": { "type": "string" }
+      }
+    },
+    "data": {
+      "type": "object",
+      "description": "How tangOS Atlas obtains normalized progress/function data for this repo.",
+      "additionalProperties": false,
+      "properties": {
+        "generate": { "type": "string", "description": "Command that (re)generates the normalized data file. May use {out}." },
+        "dbPath": { "type": "string", "description": "Repo-relative path the generate command writes to." },
+        "committedDbUrl": { "type": "string", "description": "URL of a committed/published data file (e.g. a raw GitHub URL on a data branch). Lets tangOS pull the whole team's live progress/contributions. Highly recommended for collaborative projects." },
+        "claimsApi": { "type": "string", "description": "Base URL of a claims/coordination service (e.g. https://belongto.us/api/claims) with a read-only GET /check?module=&start=&end= endpoint. Lets tangOS show who is working where." }
+      }
+    },
+    "categories": {
+      "type": "array",
+      "description": "Optional display metadata for tool categories (order + label). Categories referenced by tools but absent here still render with defaults.",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "order": { "type": "number" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "description": "The repo's tool registry. Each entry becomes one MCP tool in Console and one card in Docs.",
+      "items": { "$ref": "#/$defs/tool" }
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "required": ["id", "command", "readOnly"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "Unique, MCP-tool-safe id (snake_case). Becomes the exposed tool name.", "pattern": "^[a-z0-9_]+$" },
+        "label": { "type": "string", "description": "Short human label." },
+        "category": { "type": "string", "description": "Grouping key (see categories[])." },
+        "description": { "type": "string", "description": "What the tool does — shown to the AI and in Docs." },
+        "docs": { "type": "string", "description": "Longer usage notes / examples (markdown allowed)." },
+        "readOnly": { "type": "boolean", "description": "True if the tool only reads/reports and never mutates repo state (writes src/, commits, appends ledgers, hits mutating APIs). Drives the safety UI." },
+        "command": {
+          "type": "string",
+          "description": "Command template. Supported placeholders: {python} (runtime.python), {flags} (rendered args), and {argName} for any declared arg. Example: \"{python} tools/progress.py {flags}\"."
+        },
+        "apply": {
+          "type": "string",
+          "description": "For mutating tools that support a dry run: the flag that turns the dry run into a real mutation (e.g. \"--apply\"). tangOS defaults these tools to dry-run and requires explicit confirmation to pass this flag."
+        },
+        "longRunning": { "type": "boolean", "description": "Hint that this tool streams for a long time (orchestrators, batch runs). Default false.", "default": false },
+        "needs": {
+          "type": "array",
+          "description": "Preflight capabilities this tool requires: \"rom\", \"compiler\", \"network\", or \"env:VAR_NAME\".",
+          "items": { "type": "string" }
+        },
+        "args": {
+          "type": "array",
+          "description": "Declared arguments. Rendered into {flags} in declaration order; also individually addressable as {argName}.",
+          "items": { "$ref": "#/$defs/arg" }
+        }
+      }
+    },
+    "arg": {
+      "type": "object",
+      "required": ["name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "description": "Arg name (snake_case). Also the MCP parameter name.", "pattern": "^[a-zA-Z0-9_]+$" },
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "number", "boolean", "enum"],
+          "description": "Value type. \"boolean\" renders the flag with no value when true; \"enum\" constrains to `choices`."
+        },
+        "flag": { "type": "string", "description": "CLI flag this arg renders as, e.g. \"--module\". Omit for a positional argument." },
+        "positional": { "type": "boolean", "description": "Render as a bare positional value (no flag). Default false.", "default": false },
+        "required": { "type": "boolean", "default": false },
+        "default": { "description": "Default value when the arg is omitted." },
+        "choices": { "type": "array", "description": "Allowed values when type is \"enum\".", "items": {} },
+        "description": { "type": "string" }
+      }
+    }
+  }
+}

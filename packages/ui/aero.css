@@ -1,0 +1,188 @@
+/* tangOS aero — the shared Frutiger-Aero glass theme, lifted from Chaos Viewer.
+   Self-contained (no Tailwind required): CSS custom properties + glass component
+   classes. Every color token exists twice: an rgb TRIPLET (for rgb(var()/alpha)
+   composition) and a hex convenience var (for inline SVG/styles). Set the theme
+   with `data-theme` on <html> (default: aero). */
+
+:root, html[data-theme='aero'] {
+  --aero-bg-rgb: 124 196 242;         --aero-bg: #7cc4f2;
+  --aero-primary-rgb: 0 153 224;      --aero-primary: #0099e0;
+  --aero-accent-rgb: 127 196 0;       --aero-accent: #7FC400;
+  --aero-gloss-rgb: 255 255 255;      --aero-gloss: #ffffff;
+  --aero-text-rgb: 13 58 92;          --aero-text: #0d3a5c;
+  --aero-muted-rgb: 72 116 156;       --aero-muted: #48749c;
+  --aero-matched-rgb: 63 196 95;      --aero-matched: #3fc45f;
+  --aero-unmatched-rgb: 169 191 210;  --aero-unmatched: #a9bfd2;
+  --aero-danger-rgb: 220 76 70;       --aero-danger: #dc4c46;
+  --aero-panel: rgba(255, 255, 255, 0.62);
+  --aero-border: rgba(255, 255, 255, 0.85);
+  --aero-glass: rgba(255, 255, 255, 0.45);
+  --body-bg:
+    radial-gradient(ellipse 900px 420px at 78% -8%, rgba(255,255,255,0.85), transparent 60%),
+    radial-gradient(ellipse 700px 300px at 15% 4%, rgba(255,255,255,0.5), transparent 65%),
+    linear-gradient(180deg, #8fd0f8 0%, #5cb2ec 34%, #7ec8f0 58%, #b7e372 84%, #8ec841 100%);
+  color-scheme: light;
+}
+
+html[data-theme='sunset'] {
+  --aero-bg-rgb: 255 178 128;         --aero-bg: #ffb280;
+  --aero-primary-rgb: 235 94 91;      --aero-primary: #eb5e5b;
+  --aero-accent-rgb: 255 179 71;      --aero-accent: #ffb347;
+  --aero-text-rgb: 74 30 58;          --aero-text: #4a1e3a;
+  --aero-muted-rgb: 150 84 110;       --aero-muted: #96546e;
+  --aero-matched-rgb: 61 186 122;     --aero-matched: #3dba7a;
+  --aero-unmatched-rgb: 222 189 189;  --aero-unmatched: #debdbd;
+  --aero-danger-rgb: 200 50 60;       --aero-danger: #c8323c;
+  --body-bg:
+    radial-gradient(ellipse 800px 380px at 75% -5%, rgba(255,240,200,0.9), transparent 60%),
+    linear-gradient(180deg, #ffd9a0 0%, #ffab7b 40%, #f3808f 72%, #a86bc9 100%);
+  color-scheme: light;
+}
+
+html[data-theme='deepsea'] {
+  --aero-bg-rgb: 8 42 64;             --aero-bg: #082a40;
+  --aero-primary-rgb: 36 211 238;     --aero-primary: #24d3ee;
+  --aero-accent-rgb: 45 224 138;      --aero-accent: #2de08a;
+  --aero-text-rgb: 217 242 255;       --aero-text: #d9f2ff;
+  --aero-muted-rgb: 122 168 196;      --aero-muted: #7aa8c4;
+  --aero-matched-rgb: 45 224 138;     --aero-matched: #2de08a;
+  --aero-unmatched-rgb: 61 86 107;    --aero-unmatched: #3d566b;
+  --aero-danger-rgb: 255 91 91;       --aero-danger: #ff5b5b;
+  --aero-panel: rgba(10, 36, 54, 0.66);
+  --aero-border: rgba(140, 220, 255, 0.28);
+  --aero-glass: rgba(20, 50, 72, 0.5);
+  --body-bg:
+    radial-gradient(ellipse 900px 400px at 70% -10%, rgba(60,160,220,0.35), transparent 60%),
+    linear-gradient(180deg, #0b3350 0%, #082a40 45%, #06202f 100%);
+  color-scheme: dark;
+}
+
+html[data-theme='bubblegum'] {
+  --aero-bg-rgb: 255 179 217;         --aero-bg: #ffb3d9;
+  --aero-primary-rgb: 236 72 153;     --aero-primary: #ec4899;
+  --aero-accent-rgb: 129 140 248;     --aero-accent: #818cf8;
+  --aero-text-rgb: 80 22 66;          --aero-text: #501642;
+  --aero-muted-rgb: 165 88 140;       --aero-muted: #a5588c;
+  --aero-matched-rgb: 52 199 123;     --aero-matched: #34c77b;
+  --aero-unmatched-rgb: 226 197 219;  --aero-unmatched: #e2c5db;
+  --aero-danger-rgb: 220 60 90;       --aero-danger: #dc3c5a;
+  --body-bg:
+    radial-gradient(ellipse 800px 380px at 20% -5%, rgba(255,255,255,0.8), transparent 60%),
+    linear-gradient(180deg, #ffd6ec 0%, #ffaed9 45%, #c3b1f7 100%);
+  color-scheme: light;
+}
+
+html[data-theme='mint'] {
+  --aero-bg-rgb: 197 240 224;         --aero-bg: #c5f0e0;
+  --aero-primary-rgb: 16 163 127;     --aero-primary: #10a37f;
+  --aero-accent-rgb: 56 189 248;      --aero-accent: #38bdf8;
+  --aero-text-rgb: 15 62 51;          --aero-text: #0f3e33;
+  --aero-muted-rgb: 74 128 112;       --aero-muted: #4a8070;
+  --aero-matched-rgb: 16 185 129;     --aero-matched: #10b981;
+  --aero-unmatched-rgb: 186 211 202;  --aero-unmatched: #bad3ca;
+  --aero-danger-rgb: 220 76 70;       --aero-danger: #dc4c46;
+  --body-bg:
+    radial-gradient(ellipse 900px 400px at 80% -8%, rgba(255,255,255,0.95), transparent 60%),
+    linear-gradient(180deg, #eafff6 0%, #bdeeda 55%, #8fd9c2 100%);
+  color-scheme: light;
+}
+
+html[data-theme='hal'] {
+  --aero-bg-rgb: 10 6 7;              --aero-bg: #0a0607;
+  --aero-primary-rgb: 255 47 36;      --aero-primary: #ff2f24;
+  --aero-accent-rgb: 255 149 66;      --aero-accent: #ff9542;
+  --aero-text-rgb: 245 230 227;       --aero-text: #f5e6e3;
+  --aero-muted-rgb: 172 128 122;      --aero-muted: #ac807a;
+  --aero-matched-rgb: 255 59 47;      --aero-matched: #ff3b2f;
+  --aero-unmatched-rgb: 58 56 60;     --aero-unmatched: #3a383c;
+  --aero-danger-rgb: 255 47 36;       --aero-danger: #ff2f24;
+  --aero-panel: rgba(22, 10, 10, 0.72);
+  --aero-border: rgba(255, 80, 60, 0.28);
+  --aero-glass: rgba(34, 12, 10, 0.55);
+  --body-bg: #000000;
+  color-scheme: dark;
+}
+
+/* ---- base ------------------------------------------------------------- */
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  font-family: 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', sans-serif;
+  color: var(--aero-text);
+  background: var(--body-bg) fixed;
+  background-attachment: fixed;
+}
+code, pre, .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* ---- glass components -------------------------------------------------- */
+.aero-panel {
+  background:
+    linear-gradient(180deg, rgba(var(--aero-gloss-rgb, 255 255 255) / 0.55) 0%,
+                    rgba(var(--aero-gloss-rgb, 255 255 255) / 0.06) 42%,
+                    var(--aero-panel) 100%);
+  border: 1px solid var(--aero-border);
+  border-radius: 18px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.6);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+}
+
+.aero-glass {
+  background: var(--aero-glass);
+  border: 1px solid var(--aero-border);
+  border-radius: 14px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.aero-button {
+  appearance: none;
+  cursor: pointer;
+  border: 1px solid rgba(var(--aero-primary-rgb) / 0.5);
+  border-radius: 12px;
+  padding: 8px 16px;
+  font: inherit;
+  font-weight: 600;
+  color: #fff;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.45) 0%, rgba(255,255,255,0.05) 48%, transparent 49%),
+    linear-gradient(180deg, rgb(var(--aero-primary-rgb)) 0%, rgb(var(--aero-primary-rgb) / 0.82) 100%);
+  box-shadow: 0 3px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7);
+  transition: transform 0.08s ease, filter 0.15s ease;
+}
+.aero-button:hover { filter: brightness(1.07); }
+.aero-button:active { transform: translateY(1px); }
+.aero-button:disabled { opacity: 0.5; cursor: default; filter: grayscale(0.4); }
+
+.aero-button.ghost {
+  color: var(--aero-text);
+  background: rgba(255,255,255,0.32);
+  border-color: var(--aero-border);
+}
+.aero-button.danger {
+  border-color: rgba(var(--aero-danger-rgb) / 0.6);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.05) 48%, transparent 49%),
+    linear-gradient(180deg, rgb(var(--aero-danger-rgb)) 0%, rgb(var(--aero-danger-rgb) / 0.82) 100%);
+}
+
+.aero-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
+  padding: 2px 8px; border-radius: 999px;
+  background: rgba(var(--aero-primary-rgb) / 0.16);
+  color: rgb(var(--aero-primary-rgb));
+  border: 1px solid rgba(var(--aero-primary-rgb) / 0.35);
+}
+.aero-badge.ro { background: rgba(var(--aero-matched-rgb) / 0.16); color: rgb(var(--aero-matched-rgb)); border-color: rgba(var(--aero-matched-rgb) / 0.4); }
+.aero-badge.mutating { background: rgba(var(--aero-danger-rgb) / 0.16); color: rgb(var(--aero-danger-rgb)); border-color: rgba(var(--aero-danger-rgb) / 0.4); }
+
+.aero-scroll::-webkit-scrollbar { width: 9px; height: 9px; }
+.aero-scroll::-webkit-scrollbar-thumb {
+  background: rgba(var(--aero-primary-rgb) / 0.45); border-radius: 8px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+/* inset so the track stays inside the panel's rounded corners */
+.aero-scroll::-webkit-scrollbar-track { background: transparent; margin: 10px 0; }

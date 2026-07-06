@@ -1,0 +1,10 @@
+{
+  "name": "@tangos/ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared tangOS aero theme tokens + glass component classes.",
+  "exports": {
+    "./aero.css": "./aero.css"
+  },
+  "license": "MIT"
+}

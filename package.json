@@ -1,0 +1,16 @@
+{
+  "name": "tangos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "tangOS — a unified brand for a decomp toolchain: Console (MCP + live viewer .exe), Docs (tool catalog), Atlas (progress viewer). Every app reads one per-repo descriptor: tangos.json.",
+  "workspaces": [
+    "packages/*",
+    "console"
+  ],
+  "scripts": {
+    "console": "npm run dev -w console",
+    "console:build": "npm run build -w console",
+    "console:dist": "npm run dist -w console"
+  },
+  "license": "MIT"
+}
