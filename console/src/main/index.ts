@@ -909,7 +909,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
         name: string; module?: string; addr?: string; size?: string; target_hex?: string
         coddog_sim?: number; siblings?: { name: string; sim: number }[]
       }
-      if (taken.has(r.name)) continue // already assigned elsewhere
+      if (taken.has(r.name)) continue // already assigned elsewhere, or a same-name sibling above
       const sib = r.siblings?.[0]
       const sim = Math.round((r.coddog_sim ?? sib?.sim ?? 0) * 100)
       items.push({
@@ -921,6 +921,10 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
         targetHex: r.target_hex,
         label: sib ? `${sim}% like ${sib.name}` : undefined
       })
+      // Sibling thunks (e.g. _ZThn80_*D0Ev) share a mangled name across addresses; one source
+      // matches them all, so never put the same name in a batch twice — it just looks like the
+      // scheduler handed out the same target repeatedly.
+      taken.add(r.name)
     } catch {
       /* skip malformed rows */
     }

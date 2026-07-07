@@ -31,9 +31,12 @@ interface Current {
   progress?: { done: number; total: number }
 }
 
-/** True if a `match`/driver run's output reports a real byte match. */
+/** True if a `match`/driver run's output reports a REAL byte match. The tool prints
+ *  "MATCHING VERSIONS: 1.2/sp2p3" on a hit but "MATCHING VERSIONS: none" on a miss — so a
+ *  bare "MATCHING VERSIONS" test counts misses as matches (100%-hit inflation). Require a
+ *  real version token after the colon, and never accept "none". */
 export function outputIsMatch(output: string): boolean {
-  return /MATCHING VERSIONS/i.test(output)
+  return /MATCHING VERSIONS:\s*(?!none\b)\S/i.test(output)
 }
 
 class AiStatsStore {
