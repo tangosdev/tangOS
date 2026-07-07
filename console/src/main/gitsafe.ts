@@ -96,12 +96,26 @@ export async function commitMatchedWork(repo: string, message: string): Promise<
   return res.code === 0
 }
 
-/** owner/repo parsed from the origin remote URL (https or ssh), or null if there's no origin. */
+/** owner/repo parsed from a GitHub remote URL (https or ssh). Prefers "origin", then the
+ *  current branch's push remote, then the first remote — so a fork named "fork" still works. */
 export async function remoteSlug(repo: string): Promise<{ owner: string; repo: string } | null> {
-  const r = await git(repo, ['remote', 'get-url', 'origin'])
-  if (r.code !== 0) return null
-  const m = /github\.com[:/]([^/]+)\/([^/.]+?)(?:\.git)?\s*$/i.exec(r.out.trim())
-  return m ? { owner: m[1], repo: m[2] } : null
+  const parse = (url: string): { owner: string; repo: string } | null => {
+    const m = /github\.com[:/]([^/]+)\/([^/.]+?)(?:\.git)?\s*$/i.exec(url.trim())
+    return m ? { owner: m[1], repo: m[2] } : null
+  }
+  const names: string[] = []
+  const origin = await git(repo, ['remote', 'get-url', 'origin'])
+  if (origin.code === 0) return parse(origin.out)
+  const list = await git(repo, ['remote'])
+  for (const n of list.out.split(/\s+/).filter(Boolean)) names.push(n)
+  for (const n of names) {
+    const u = await git(repo, ['remote', 'get-url', n])
+    if (u.code === 0) {
+      const slug = parse(u.out)
+      if (slug) return slug
+    }
+  }
+  return null
 }
 
 /** The remote's default branch (what a PR should target), falling back to 'main'. */
