@@ -110,6 +110,35 @@ class AiStatsStore {
     return this.current.get(name)?.batchId
   }
 
+  /** Fold stats keys through a canonicalizer (e.g. "Opus" -> "Claude"), summing tallies, so
+   *  stats logged under old per-model/per-session names consolidate into one family box. */
+  remapKeys(canon: (name: string) => string): void {
+    const merged = new Map<string, Persisted>()
+    for (const [name, s] of this.store) {
+      const key = canon(name)
+      const t = merged.get(key)
+      if (!t) {
+        merged.set(key, { ...s, bySize: s.bySize ? { ...s.bySize } : undefined })
+        continue
+      }
+      t.totalMatches += s.totalMatches
+      t.matchAttempts += s.matchAttempts
+      const ti = (t.tokensIn ?? 0) + (s.tokensIn ?? 0)
+      const to = (t.tokensOut ?? 0) + (s.tokensOut ?? 0)
+      if (ti) t.tokensIn = ti
+      if (to) t.tokensOut = to
+      if (s.bySize) {
+        t.bySize ??= {}
+        for (const [b, v] of Object.entries(s.bySize)) {
+          const tv = (t.bySize[b] ??= { attempts: 0, matches: 0 })
+          tv.attempts += v.attempts
+          tv.matches += v.matches
+        }
+      }
+    }
+    this.store = merged
+  }
+
   serialize(): Record<string, Persisted> {
     return Object.fromEntries(this.store)
   }

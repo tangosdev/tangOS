@@ -33,15 +33,20 @@ export interface McpContext {
 }
 
 /** Normalize an MCP client name to a friendly AI label. */
-function normalizeName(raw?: string): string {
+// Collapse a client's reported name down to its MODEL FAMILY, so every session of the same
+// model lands in ONE box (and its stats accumulate under one key) instead of a new box per
+// session name. Model names (opus/sonnet/haiku, o1/o3, ...) map to their family, not a literal
+// "Opus" box separate from "Claude".
+export function normalizeName(raw?: string): string {
   if (!raw) return 'AI'
   const n = raw.toLowerCase()
-  if (n.includes('claude')) return 'Claude'
+  if (n.includes('claude') || n.includes('opus') || n.includes('sonnet') || n.includes('haiku')) return 'Claude'
   if (n.includes('grok')) return 'Grok'
   if (n.includes('deepseek')) return 'DeepSeek'
   if (n.includes('glm') || n.includes('zhipu') || n.includes('z.ai')) return 'GLM'
   if (n.includes('gemini')) return 'Gemini'
-  if (n.includes('gpt') || n.includes('openai') || n.includes('codex')) return 'GPT'
+  if (n.includes('gpt') || n.includes('openai') || n.includes('codex') || n.includes('chatgpt') || /\bo[1345]\b/.test(n))
+    return 'GPT'
   if (n.includes('cursor')) return 'Cursor'
   if (n.includes('cline')) return 'Cline'
   return raw.replace(/[-_]/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase())

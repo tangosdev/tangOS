@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, watch, existsSync, unlinkSync, mkdirSync, type FSWatcher } from 'node:fs'
 import { activityBus } from './activityBus'
-import { McpManager } from './mcpServer'
+import { McpManager, normalizeName } from './mcpServer'
 import { loadDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
 import { registerAll, cliCommand } from './connect'
@@ -1535,6 +1535,7 @@ app.whenReady().then(() => {
     Object.entries(saved.agentRoles ?? {}).map(([k, v]) => [k, (Array.isArray(v) ? v : [v]).filter((r) => r && r !== 'Unassigned')])
   )
   aiStats.hydrate(saved.agentStats)
+  aiStats.remapKeys(normalizeName) // fold old per-model/per-session stat keys into one family box
   state.reportsEnabled = saved.reportsEnabled ?? false
   state.tourSeen = saved.tourSeen ?? false
   state.useAgents = saved.useAgents ?? false
