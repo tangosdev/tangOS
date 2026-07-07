@@ -1,6 +1,6 @@
 {
   "name": "console",
-  "version": "0.1.0",
+  "version": "2.1.1",
   "description": "tangOS Console — exposes a decomp repo's tools as an MCP server an AI connects to, with a live viewer.",
   "main": "./out/main/index.js",
   "author": "Brennen (Tango)",
@@ -46,16 +46,17 @@
     },
     "files": [
       "out/**/*",
+      "build/icon.png",
       "package.json"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
           "arch": ["x64"]
         }
-      ],
-      "signAndEditExecutable": false
+      ]
     },
     "nsis": {
       "oneClick": false,
