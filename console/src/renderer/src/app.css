@@ -864,6 +864,7 @@ html, body, #root { background: transparent !important; }
 }
 .aib-kind.loop { color: rgb(var(--aero-matched-rgb)); background: rgba(var(--aero-matched-rgb) / 0.16); border-color: rgba(var(--aero-matched-rgb) / 0.35); }
 .aib-live { font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--aero-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aib-live.done { opacity: 0.5; }
 .mini-btn.go { color: #fff; background: rgb(var(--aero-primary-rgb)); border-color: rgb(var(--aero-primary-rgb)); }
 
 /* controller footer: writes/review centered (bottom-middle) + github bottom-right */
@@ -976,7 +977,8 @@ html, body, #root { background: transparent !important; }
 .aid-bysize { display: flex; flex-direction: column; gap: 5px; }
 .aid-size-row { display: grid; grid-template-columns: 84px 1fr 48px; align-items: center; gap: 8px; font-size: 11px; }
 .aid-size-row .aib-bar { height: 8px; }
-.aid-runs { max-height: 220px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.aid-runs { max-height: 260px; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 7px; padding: 2px; }
+.aid-runs .mini-run { background: rgba(255,255,255,0.6); box-shadow: 0 1px 3px rgba(20,50,80,0.06); }
 .aid-live {
   max-height: 200px; overflow: auto; margin: 0; padding: 10px 12px; border-radius: 10px;
   font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;

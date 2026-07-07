@@ -112,7 +112,10 @@ export function runTool(opts: RunOptions): Promise<RunResult> {
       opts.onOutput?.(chunk, stream)
     }
 
-    const env = opts.extraEnv ? { ...process.env, ...opts.extraEnv } : process.env
+    // PYTHONUNBUFFERED forces the child's stdout/stderr to stream line-by-line instead of
+    // block-buffering over the pipe (Python buffers when stdout isn't a TTY), so the live
+    // viewer fills in as the tool runs rather than dumping everything at process exit.
+    const env = { ...process.env, PYTHONUNBUFFERED: '1', ...opts.extraEnv }
     let child
     try {
       if (runtime.shell) {

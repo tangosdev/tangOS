@@ -76,6 +76,18 @@ export default function Controller({
   const [busy, setBusy] = useState<Record<string, string>>({}) // name -> loading label
   const [sizes, setSizes] = useState<Record<string, number>>({}) // name -> batch size (-1 = infinite)
 
+  // Latest run per agent in a single pass (instead of filter+sort over all runs per agent on
+  // every output chunk — that was quadratic during a long scan and made the view lag/drop).
+  const latestByName = useMemo(() => {
+    const m = new Map<string, ActivityRun>()
+    for (const r of runs) {
+      const n = runName(r)
+      const cur = m.get(n)
+      if (!cur || r.startedAt >= cur.startedAt) m.set(n, r)
+    }
+    return m
+  }, [runs])
+
   const views = useMemo<AgentView[]>(() => {
     return agents.map((agent) => {
       // the agent's most recent batch (any status) so a finished one still shows its result
@@ -85,15 +97,15 @@ export default function Controller({
       const done = batch ? batch.items.filter((i) => i.done).length : 0
       const total = batch ? batch.items.length : 0
       const batchDone = batch?.status === 'done'
-      const latest = runs
-        .filter((r) => runName(r) === agent.name)
-        .sort((a, b) => b.startedAt - a.startedAt)[0]
+      const latest = latestByName.get(agent.name)
       const live = !!latest && latest.status === 'running'
-      const task = agent.stats.currentTask ?? batch?.title ?? (live ? latest.label : undefined)
-      const liveLine = live && latest.output ? lastLine(latest.output) : ''
+      const task = agent.stats.currentTask ?? batch?.title ?? latest?.label
+      // Keep the last line up between functions (don't blank when a run finishes) so the box
+      // doesn't visibly reset after every function during a scan.
+      const liveLine = latest?.output ? lastLine(latest.output) : ''
       return { agent, batch, done, total, task, live, batchDone, liveLine }
     })
-  }, [agents, runs, batches])
+  }, [agents, latestByName, batches])
 
   async function assign(name: string, role: string | undefined): Promise<void> {
     const size = sizes[name] ?? 16
@@ -202,7 +214,7 @@ export default function Controller({
                           {done}/{total} matched · {pct}%
                         </span>
                       )}
-                      {live && liveLine && <span className="aib-live mono">▸ {liveLine}</span>}
+                      {liveLine && <span className={`aib-live mono${live ? '' : ' done'}`}>▸ {liveLine}</span>}
                     </>
                   ) : (
                     <span className="aib-idle">{available ? 'idle — ready to assign' : 'offline'}</span>

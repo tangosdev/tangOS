@@ -21,6 +21,7 @@ import WindowControls from './components/WindowControls'
 
 const THEMES = ['aero', 'sunset', 'deepsea', 'bubblegum', 'mint', 'hal']
 const APP_LABEL: Record<AppView, string> = { console: 'Chaos Controller', atlas: 'Chaos Viewer' }
+const MAX_RUNS = 200 // cap the live run history the renderer holds (bus keeps its own 300)
 
 export default function App(): JSX.Element {
   const [repo, setRepo] = useState<RepoState | null>(null)
@@ -74,7 +75,7 @@ export default function App(): JSX.Element {
       setAutoLand(s.autoLand)
       setLooping(s.looping)
       setTourSeen(s.tourSeen)
-      setRuns(await window.tangos.activitySnapshot())
+      setRuns((await window.tangos.activitySnapshot()).slice(-MAX_RUNS))
       unsubActivity = window.tangos.onActivity(applyActivity)
       unsubState = window.tangos.onState((st) => {
         setRepo(st.repo)
@@ -138,7 +139,12 @@ export default function App(): JSX.Element {
 
   function applyActivity(ev: ActivityEvent): void {
     setRuns((prev) => {
-      if (ev.kind === 'run-started') return [...prev, ev.run]
+      if (ev.kind === 'run-started') {
+        // Keep the list bounded — a long scan is hundreds of runs, and every output chunk
+        // maps this array, so an unbounded list turns each chunk into quadratic work.
+        const next = prev.length >= MAX_RUNS ? prev.slice(prev.length - MAX_RUNS + 1) : prev
+        return [...next, ev.run]
+      }
       if (ev.kind === 'run-output')
         return prev.map((r) => (r.runId === ev.runId ? { ...r, output: r.output + ev.chunk } : r))
       if (ev.kind === 'run-finished')
