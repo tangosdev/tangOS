@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Settings2, FolderOpen, RefreshCw } from 'lucide-react'
+import { Settings2, FolderOpen, RefreshCw, AlertTriangle } from 'lucide-react'
 import type {
   RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchItem, Review, AiAgent
 } from '../../shared/types'
@@ -44,6 +44,13 @@ export default function App(): JSX.Element {
   const [reportsEnabled, setReportsEnabled] = useState(false)
   const [useAgents, setUseAgents] = useState(false)
   const [autoLand, setAutoLand] = useState(true)
+  const [autoPush, setAutoPush] = useState<{
+    on: boolean
+    state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'
+    message?: string
+    prUrl?: string
+    at?: number
+  }>({ on: false, state: 'idle' })
   const [looping, setLooping] = useState<string[]>([])
   const [tourSeen, setTourSeen] = useState(true) // assume seen until state loads, to avoid a flash
   const [detailName, setDetailName] = useState<string | null>(null)
@@ -73,6 +80,7 @@ export default function App(): JSX.Element {
       setReportsEnabled(s.reportsEnabled)
       setUseAgents(s.useAgents)
       setAutoLand(s.autoLand)
+      setAutoPush(s.autoPush)
       setLooping(s.looping)
       setTourSeen(s.tourSeen)
       setRuns((await window.tangos.activitySnapshot()).slice(-MAX_RUNS))
@@ -90,6 +98,7 @@ export default function App(): JSX.Element {
         setReportsEnabled(st.reportsEnabled)
         setUseAgents(st.useAgents)
         setAutoLand(st.autoLand)
+        setAutoPush(st.autoPush)
         setLooping(st.looping)
         setTourSeen(st.tourSeen)
       })
@@ -233,6 +242,7 @@ export default function App(): JSX.Element {
         onOpenViewer={() => switchApp('atlas')}
         allowMutations={allowMutations}
         safeMode={safeMode}
+        autoPush={autoPush}
         onToggleWrites={toggleMutations}
         onToggleReview={toggleSafeMode}
         onOpenDetail={setDetailName}
@@ -310,6 +320,16 @@ export default function App(): JSX.Element {
           <WindowControls />
         </div>
       </div>
+
+      {repo?.path && repo.isGit === false && (
+        <div className="repo-warn">
+          <AlertTriangle size={14} />
+          <span>
+            This folder isn&apos;t a git checkout — looks like a <b>Download ZIP</b>. You can&apos;t commit or push from
+            here, and the tooling may be out of date. Use <code>git clone</code> for a working setup.
+          </span>
+        </div>
+      )}
 
       {body}
 

@@ -20,6 +20,7 @@ type FullState = {
   tourSeen: boolean
   useAgents: boolean
   autoLand: boolean
+  autoPush: { on: boolean; state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'; message?: string; prUrl?: string; at?: number }
   looping: string[]
 }
 

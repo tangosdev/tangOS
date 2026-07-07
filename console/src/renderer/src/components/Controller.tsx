@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Sparkles, Play, Square, ShoppingCart, ShieldCheck, AlertTriangle, GitBranch } from 'lucide-react'
+import { Sparkles, Play, Square, ShoppingCart, ShieldCheck, AlertTriangle, GitBranch, GitPullRequest } from 'lucide-react'
 import type { AiAgent, ActivityRun, Batch } from '../../../shared/types'
 import { ROLE_NAMES, ROLE_PRESETS } from '../../../shared/types'
 import { aiColor } from '../aiColor'
@@ -53,6 +53,7 @@ export default function Controller({
   onOpenViewer,
   allowMutations,
   safeMode,
+  autoPush,
   onToggleWrites,
   onToggleReview,
   onOpenDetail,
@@ -68,6 +69,7 @@ export default function Controller({
   onOpenViewer: () => void
   allowMutations: boolean
   safeMode: boolean
+  autoPush: { on: boolean; state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'; message?: string; prUrl?: string }
   onToggleWrites: () => void
   onToggleReview: () => void
   onOpenDetail: (name: string) => void
@@ -316,11 +318,34 @@ export default function Controller({
           <button
             className={`tb-btn ${safeMode ? 'active' : ''}`}
             onClick={onToggleReview}
-            title={safeMode ? 'Mutations run on tangos/work for review' : 'Mutations write straight to your branch'}
+            title={
+              safeMode
+                ? 'Mutations run on tangos/work for review. With Writes ON, matched work auto-pushes as a rolling PR.'
+                : 'Mutations write straight to your branch'
+            }
           >
             <GitBranch size={14} />
             Review: {safeMode ? 'ON' : 'OFF'}
           </button>
+          {autoPush.on && (
+            <span
+              className={`autopush-chip ${autoPush.state}`}
+              title={autoPush.message ?? 'Matched work auto-pushes as a rolling PR'}
+              onClick={() => autoPush.prUrl && window.tangos.openExternal(autoPush.prUrl)}
+              style={{ cursor: autoPush.prUrl ? 'pointer' : 'default' }}
+            >
+              <GitPullRequest size={12} />
+              {autoPush.state === 'pushing'
+                ? 'pushing…'
+                : autoPush.state === 'ok'
+                  ? 'PR updated'
+                  : autoPush.state === 'error'
+                    ? 'push failed'
+                    : autoPush.state === 'skipped'
+                      ? 'auto-PR blocked'
+                      : 'auto-PR on'}
+            </span>
+          )}
         </div>
         <div className="ctl-foot-side right">
           <GithubSignIn />

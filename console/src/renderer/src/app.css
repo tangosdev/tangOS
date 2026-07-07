@@ -936,6 +936,24 @@ html, body, #root { background: transparent !important; }
 .gh-err { font-size: 11px; color: var(--aero-danger); }
 .gh-done { display: inline-flex; align-items: center; font-size: 12px; font-weight: 700; color: rgb(var(--aero-matched-rgb)); }
 
+/* not-a-git-repo warning (ZIP download): can't commit/push, likely stale tooling */
+.repo-warn {
+  display: flex; align-items: center; gap: 8px; margin: 8px 14px 0; padding: 8px 12px;
+  border-radius: 10px; font-size: 12.5px; color: #7a3b00;
+  background: rgba(234,179,8,0.16); border: 1px solid rgba(234,179,8,0.5);
+}
+.repo-warn code { background: rgba(0,0,0,0.06); padding: 0 4px; border-radius: 4px; }
+/* auto-push (rolling PR) status chip next to the Review toggle */
+.autopush-chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700;
+  padding: 3px 8px; border-radius: 999px; border: 1px solid var(--aero-border); color: var(--aero-muted);
+  background: rgba(255,255,255,0.5);
+}
+.autopush-chip.ok { color: rgb(var(--aero-matched-rgb)); border-color: rgba(var(--aero-matched-rgb),0.5); }
+.autopush-chip.pushing { color: rgb(var(--aero-primary-rgb)); border-color: rgba(var(--aero-primary-rgb),0.5); }
+.autopush-chip.error { color: #b91c1c; border-color: rgba(185,28,28,0.5); background: rgba(185,28,28,0.08); }
+.autopush-chip.skipped { color: #7a3b00; border-color: rgba(234,179,8,0.5); background: rgba(234,179,8,0.12); }
+
 /* settings panel (gear popover) — scroll internally so long content never runs off-screen */
 .settings-panel { max-height: calc(100vh - 90px); width: 320px; overflow-y: auto; overflow-x: hidden; }
 .settings-repo { width: 100%; }

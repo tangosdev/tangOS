@@ -84,6 +84,50 @@ export async function commitFiles(repo: string, files: ChangedFile[], message: s
   await git(repo, ['commit', '-m', message])
 }
 
+/** Stage matched work (new/modified sources under src/, plus any tracked-file edits like
+ *  ledgers/README) and commit it on the current branch. Returns true if a commit was made.
+ *  Deliberately scoped: `git add src` + `git add -u` never grabs stray untracked scratch files. */
+export async function commitMatchedWork(repo: string, message: string): Promise<boolean> {
+  await git(repo, ['add', '--', 'src'])
+  await git(repo, ['add', '-u'])
+  const staged = await git(repo, ['diff', '--cached', '--name-only'])
+  if (!staged.out.trim()) return false
+  const res = await git(repo, ['commit', '-m', message])
+  return res.code === 0
+}
+
+/** owner/repo parsed from the origin remote URL (https or ssh), or null if there's no origin. */
+export async function remoteSlug(repo: string): Promise<{ owner: string; repo: string } | null> {
+  const r = await git(repo, ['remote', 'get-url', 'origin'])
+  if (r.code !== 0) return null
+  const m = /github\.com[:/]([^/]+)\/([^/.]+?)(?:\.git)?\s*$/i.exec(r.out.trim())
+  return m ? { owner: m[1], repo: m[2] } : null
+}
+
+/** The remote's default branch (what a PR should target), falling back to 'main'. */
+export async function defaultBranch(repo: string): Promise<string> {
+  const r = await git(repo, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'])
+  const m = /origin\/(.+)\s*$/.exec(r.out.trim())
+  if (m) return m[1]
+  for (const b of ['main', 'master']) {
+    if ((await git(repo, ['rev-parse', '--verify', `origin/${b}`])).code === 0) return b
+  }
+  return 'main'
+}
+
+/** Push the current branch to origin/<remoteBranch> using a token-authenticated URL (the token
+ *  is never persisted to git config). force-with-lease keeps it safe on a session-owned branch. */
+export async function pushToBranch(
+  repo: string,
+  remoteBranch: string,
+  slug: { owner: string; repo: string },
+  token: string
+): Promise<{ ok: boolean; err: string }> {
+  const url = `https://x-access-token:${token}@github.com/${slug.owner}/${slug.repo}.git`
+  const r = await git(repo, ['push', '--force-with-lease', url, `HEAD:refs/heads/${remoteBranch}`])
+  return { ok: r.code === 0, err: (r.err || r.out).trim() }
+}
+
 /** Merge the work branch into base (no-ff) and delete it. Leaves you on base. */
 export async function mergeWorkBranch(repo: string, base: string): Promise<void> {
   const co = await git(repo, ['checkout', base])

@@ -125,6 +125,7 @@ export interface RepoState {
   descriptorPath: string | null
   hasDescriptor: boolean
   validationErrors: string[]
+  isGit: boolean // false = not a git checkout (e.g. a "Download ZIP" snapshot): can't commit, tooling may be stale
 }
 
 export interface McpState {

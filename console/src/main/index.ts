@@ -20,8 +20,10 @@ import { record as report, setReportsEnabled, reportsDir } from './reports'
 import { ensureTips, readTips, openTips } from './tips'
 import {
   isGitRepo, ensureWorkBranch, statusMap, changedSince, diffForFile, commitFiles,
-  mergeWorkBranch, discardWorkBranch, WORK_BRANCH
+  mergeWorkBranch, discardWorkBranch, WORK_BRANCH,
+  commitMatchedWork, remoteSlug, defaultBranch, pushToBranch
 } from './gitsafe'
+import { ensurePullRequest } from './pullRequests'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
   Review, RunResult, AtlasDb, SecretsInfo, AiAgent, ConnectedClient
@@ -80,6 +82,77 @@ function serializeGen<T>(fn: () => Promise<T>): Promise<T> {
   const run = genChain.then(fn, fn) // run after the previous settles (success OR failure)
   genChain = run.catch(() => {}) // a failed generation must not wedge the queue
   return run
+}
+
+// Auto-push: when Writes AND Review are both on, matched work is committed to the work branch,
+// pushed to a per-session remote branch, and surfaced as ONE rolling PR (the repo's PR rules /
+// CI gate the merge — this never touches the base branch directly). Gated on a real git
+// checkout + a GitHub origin remote + a stored GITHUB_TOKEN; otherwise it no-ops with a note.
+const SESSION_TAG = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13) // YYYYMMDD-hhmm
+type AutoPushStatus = {
+  state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'
+  message?: string
+  prUrl?: string
+  at?: number
+}
+let autoPushTimer: ReturnType<typeof setTimeout> | null = null
+let autoPushRunning = false
+let autoPushStatus: AutoPushStatus = { state: 'idle' }
+
+function autoPushActive(): boolean {
+  return state.allowMutations && state.safeMode
+}
+
+/** Debounced: coalesce a burst of matches into one push ~20s after the last one. */
+function scheduleAutoPush(reason: string): void {
+  if (!autoPushActive()) return
+  if (autoPushTimer) clearTimeout(autoPushTimer)
+  autoPushTimer = setTimeout(() => void runAutoPush(reason), 20_000)
+}
+
+async function runAutoPush(reason: string): Promise<void> {
+  if (autoPushTimer) {
+    clearTimeout(autoPushTimer)
+    autoPushTimer = null
+  }
+  if (autoPushRunning || !autoPushActive() || !state.repoPath) return
+  autoPushRunning = true
+  const set = (s: AutoPushStatus): void => {
+    autoPushStatus = { ...s, at: Date.now() }
+    pushState()
+  }
+  try {
+    if (!(await isGitRepo(state.repoPath))) return set({ state: 'skipped', message: 'not a git checkout — clone the repo to enable pushing' })
+    const slug = await remoteSlug(state.repoPath)
+    if (!slug) return set({ state: 'skipped', message: 'no GitHub "origin" remote to push to' })
+    const token = secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN
+    if (!token) return set({ state: 'skipped', message: 'no GITHUB_TOKEN — sign into GitHub in Settings' })
+
+    set({ state: 'pushing' })
+    // Move any matched work onto the work branch and commit it (the base branch stays clean).
+    await ensureWorkBranch(state.repoPath)
+    await commitMatchedWork(state.repoPath, `tangos: matched work (${reason})`)
+    const remoteBranch = `tangos/matches-${SESSION_TAG}`
+    const pushed = await pushToBranch(state.repoPath, remoteBranch, slug, token)
+    if (!pushed.ok) return set({ state: 'error', message: `push failed: ${pushed.err.slice(-200)}` })
+    const base = await defaultBranch(state.repoPath)
+    const pr = await ensurePullRequest({
+      owner: slug.owner,
+      repo: slug.repo,
+      head: remoteBranch,
+      base,
+      token,
+      title: `tangos: matched functions (${SESSION_TAG})`,
+      body: 'Automated rolling PR from tangOS Console — matched functions from this session. Your PR review / CI gates the merge.'
+    })
+    if (!pr.ok) return set({ state: 'error', message: `pushed, but PR failed: ${pr.error}`, prUrl: undefined })
+    set({ state: 'ok', message: pr.created ? 'opened PR' : 'updated PR', prUrl: pr.url })
+    report('autopush', { reason, branch: remoteBranch, base, prUrl: pr.url, created: pr.created })
+  } catch (e) {
+    set({ state: 'error', message: String((e as Error).message ?? e).slice(-200) })
+  } finally {
+    autoPushRunning = false
+  }
 }
 
 /**
@@ -177,6 +250,9 @@ function afterRun(
   const ok = res.status === 'ok' && outputIsMatch(res.output)
   aiStats.recordMatch(client?.name, ok, parseHexish(values.size))
   if (ok && typeof values.func === 'string') markItemDone(values.func)
+  // A verified match means the agent (MCP or driven) wrote a matching source; when Writes +
+  // Review are on, roll it into the auto-push PR (debounced so a burst becomes one push).
+  if (ok) scheduleAutoPush('match')
 }
 
 /** Flag a target done across any batch that lists it (drives batch % complete). */
@@ -319,7 +395,10 @@ function repoState(): RepoState {
     descriptor: state.descriptor,
     descriptorPath: state.descriptorPath,
     hasDescriptor: !!state.descriptor,
-    validationErrors: state.validationErrors
+    validationErrors: state.validationErrors,
+    // A ".git" entry (dir or file) means a real checkout. A "Download ZIP" snapshot has none:
+    // it can't commit/push and its tooling is likely stale — the renderer warns on this.
+    isGit: !!state.repoPath && existsSync(join(state.repoPath, '.git'))
   }
 }
 
@@ -456,6 +535,7 @@ function fullState() {
     tourSeen: state.tourSeen,
     useAgents: state.useAgents,
     autoLand: state.autoLand,
+    autoPush: { on: autoPushActive(), ...autoPushStatus },
     looping: [...agentLoop]
   }
 }
@@ -1172,6 +1252,7 @@ async function driveBatch(agentName: string): Promise<void> {
         wrongBanks: wrong ? Number(wrong[1]) : 0,
         outputTail: (landRes.output || '').slice(-4000)
       })
+      scheduleAutoPush('drive') // roll the just-landed matches into the auto-push PR
     }
   } finally {
     apiDriving.delete(agentName)
