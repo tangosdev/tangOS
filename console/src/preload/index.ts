@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
-  Batch, BatchDraft, BatchItem, AtlasDb, Review, ClaimsResult, ClaimsList, GithubCredits, ConnectedClient, SecretsInfo
+  Batch, BatchDraft, BatchItem, AtlasDb, Review, ClaimsResult, ClaimsList, GithubCredits, ConnectedClient, SecretsInfo,
+  AiAgent
 } from '../shared/types'
 
 type FullState = {
@@ -14,6 +15,12 @@ type FullState = {
   baseBranch: string | null
   reviews: Review[]
   clients: ConnectedClient[]
+  agents: AiAgent[]
+  reportsEnabled: boolean
+  tourSeen: boolean
+  useAgents: boolean
+  autoLand: boolean
+  looping: string[]
 }
 
 const api = {
@@ -58,6 +65,14 @@ const api = {
     ipcRenderer.invoke('secrets:set', { name, value }),
   deleteSecret: (name: string): Promise<SecretsInfo> => ipcRenderer.invoke('secrets:delete', name),
 
+  githubSignin: (): Promise<{ userCode: string; verificationUri: string }> =>
+    ipcRenderer.invoke('github:signin'),
+  onGithubSignedin: (cb: (r: { ok: boolean; error?: string }) => void): (() => void) => {
+    const l = (_e: unknown, r: { ok: boolean; error?: string }): void => cb(r)
+    ipcRenderer.on('github:signedin', l)
+    return () => ipcRenderer.removeListener('github:signedin', l)
+  },
+
   startMcp: (): Promise<McpState> => ipcRenderer.invoke('mcp:start'),
   stopMcp: (): Promise<McpState> => ipcRenderer.invoke('mcp:stop'),
   connect: (): Promise<{ outcomes: unknown[]; cli: string }> => ipcRenderer.invoke('mcp:connect'),
@@ -66,13 +81,27 @@ const api = {
   setMutations: (allow: boolean): Promise<boolean> => ipcRenderer.invoke('policy:setMutations', allow),
   setEnabledTools: (ids: string[]): Promise<string[]> => ipcRenderer.invoke('policy:setEnabledTools', ids),
   setSafeMode: (on: boolean): Promise<boolean> => ipcRenderer.invoke('policy:setSafeMode', on),
+  setReports: (on: boolean): Promise<boolean> => ipcRenderer.invoke('policy:setReports', on),
+  openReports: (): Promise<string> => ipcRenderer.invoke('reports:open'),
+  getTips: (): Promise<{ title: string; body: string }[]> => ipcRenderer.invoke('tips:get'),
+  openTips: (): Promise<boolean> => ipcRenderer.invoke('tips:open'),
+  markTourSeen: (): Promise<boolean> => ipcRenderer.invoke('tour:seen'),
+  replayTour: (): Promise<boolean> => ipcRenderer.invoke('tour:replay'),
   mergeReview: (): Promise<boolean> => ipcRenderer.invoke('review:merge'),
   discardReview: (): Promise<boolean> => ipcRenderer.invoke('review:discard'),
-  setClientRole: (id: string, role: string): Promise<ConnectedClient[]> =>
-    ipcRenderer.invoke('clients:setRole', { id, role }),
+  setClientRoles: (name: string, roles: string[]): Promise<AiAgent[]> =>
+    ipcRenderer.invoke('clients:setRoles', { name, roles }),
 
   generateBatch: (count?: number): Promise<BatchDraft> => ipcRenderer.invoke('batch:generate', count),
   enqueueBatch: (draft: BatchDraft): Promise<Batch[]> => ipcRenderer.invoke('batch:enqueue', draft),
+  assignBatch: (draft: BatchDraft, agentName: string): Promise<Batch[]> =>
+    ipcRenderer.invoke('batch:assign', { draft, agentName }),
+  driveAi: (agentName: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('ai:drive', agentName),
+  assignAi: (p: { agent: string; role?: string; count: number; loop?: boolean }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('ai:assign', p),
+  stopAi: (agent: string): Promise<boolean> => ipcRenderer.invoke('ai:stop', agent),
+  setUseAgents: (on: boolean): Promise<boolean> => ipcRenderer.invoke('policy:setUseAgents', on),
+  setAutoLand: (on: boolean): Promise<boolean> => ipcRenderer.invoke('policy:setAutoLand', on),
   removeBatch: (id: string): Promise<Batch[]> => ipcRenderer.invoke('batch:remove', id),
   reorderBatch: (id: string, dir: 'up' | 'down'): Promise<Batch[]> =>
     ipcRenderer.invoke('batch:reorder', { id, dir }),
@@ -97,6 +126,7 @@ const api = {
 
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
   openPath: (p: string): Promise<string> => ipcRenderer.invoke('shell:openPath', p),
+  revealPath: (p: string): Promise<string> => ipcRenderer.invoke('shell:revealPath', p),
   copy: (text: string): Promise<boolean> => ipcRenderer.invoke('clipboard:write', text),
 
   onActivity: (cb: (ev: ActivityEvent) => void): (() => void) => {

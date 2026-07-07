@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
-  Batch, BatchDraft, BatchItem, AtlasDb, Review, ClaimsResult, ClaimsList, GithubCredits, ConnectedClient, SecretsInfo
+  Batch, BatchDraft, BatchItem, AtlasDb, Review, ClaimsResult, ClaimsList, GithubCredits, ConnectedClient, SecretsInfo,
+  AiAgent
 } from '../../shared/types'
 
 type FullState = {
@@ -14,6 +15,12 @@ type FullState = {
   baseBranch: string | null
   reviews: Review[]
   clients: ConnectedClient[]
+  agents: AiAgent[]
+  reportsEnabled: boolean
+  tourSeen: boolean
+  useAgents: boolean
+  autoLand: boolean
+  looping: string[]
 }
 
 interface RegisterOutcome {
@@ -39,6 +46,8 @@ export interface TangosApi {
   addDraftItem(item: BatchItem): Promise<void>
   onDraftAdd(cb: (item: BatchItem) => void): () => void
   githubCredits(): Promise<GithubCredits>
+  githubSignin(): Promise<{ userCode: string; verificationUri: string }>
+  onGithubSignedin(cb: (r: { ok: boolean; error?: string }) => void): () => void
   pickRepo(): Promise<RepoState>
   setRepo(path: string): Promise<RepoState>
   generatePreview(path?: string): Promise<GenerateReport>
@@ -55,11 +64,23 @@ export interface TangosApi {
   setMutations(allow: boolean): Promise<boolean>
   setEnabledTools(ids: string[]): Promise<string[]>
   setSafeMode(on: boolean): Promise<boolean>
+  setReports(on: boolean): Promise<boolean>
+  openReports(): Promise<string>
+  getTips(): Promise<{ title: string; body: string }[]>
+  openTips(): Promise<boolean>
+  markTourSeen(): Promise<boolean>
+  replayTour(): Promise<boolean>
   mergeReview(): Promise<boolean>
   discardReview(): Promise<boolean>
-  setClientRole(id: string, role: string): Promise<ConnectedClient[]>
+  setClientRoles(name: string, roles: string[]): Promise<AiAgent[]>
   generateBatch(count?: number): Promise<BatchDraft>
   enqueueBatch(draft: BatchDraft): Promise<Batch[]>
+  assignBatch(draft: BatchDraft, agentName: string): Promise<Batch[]>
+  driveAi(agentName: string): Promise<{ ok: boolean }>
+  assignAi(p: { agent: string; role?: string; count: number; loop?: boolean }): Promise<{ ok: boolean }>
+  stopAi(agent: string): Promise<boolean>
+  setUseAgents(on: boolean): Promise<boolean>
+  setAutoLand(on: boolean): Promise<boolean>
   removeBatch(id: string): Promise<Batch[]>
   reorderBatch(id: string, dir: 'up' | 'down'): Promise<Batch[]>
   clearDoneBatches(): Promise<Batch[]>
@@ -73,6 +94,7 @@ export interface TangosApi {
   onMaximizeChange(cb: (v: boolean) => void): () => void
   openExternal(url: string): Promise<void>
   openPath(p: string): Promise<string>
+  revealPath(p: string): Promise<string>
   copy(text: string): Promise<boolean>
   onActivity(cb: (ev: ActivityEvent) => void): () => void
   onState(cb: (s: FullState) => void): () => void

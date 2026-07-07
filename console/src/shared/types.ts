@@ -38,6 +38,7 @@ export interface TangosProject {
   title: string
   tagline?: string
   github?: string
+  githubClientId?: string // optional OAuth app client_id for the "Sign into GitHub" device flow
   language?: string
   platform?: string
   compiler?: string
@@ -149,6 +150,7 @@ export interface ActivityRun {
   commandPreview: string
   source: 'ai' | 'user'
   client?: { name: string; role?: string } // which connected AI made this call
+  batchId?: string // the batch this run belongs to, when driven from an assigned batch
   startedAt: number
   finishedAt?: number
   status: RunStatus
@@ -162,7 +164,7 @@ export interface ActivityRun {
 export interface ConnectedClient {
   id: string
   name: string
-  role: string
+  roles: string[] // an AI can hold several roles at once (e.g. main matcher + verifier)
   connectedAt: number
   emptyPolls?: number // consecutive empty next_batch polls, for the idle stop signal
 }
@@ -228,6 +230,8 @@ export interface BatchItem {
   addr?: number
   size?: number
   srcPath?: string
+  targetHex?: string // ROM target bytes (from the scheduler) so a console-driven worklist is complete
+  done?: boolean // set true once this target byte-matches (drives batch % complete)
 }
 
 export type BatchStatus = 'queued' | 'active' | 'done'
@@ -239,6 +243,7 @@ export interface Batch {
   items: BatchItem[]
   status: BatchStatus
   createdAt: number
+  targetAgent?: string // addressed to one AI by name; only that AI's next_batch/drive gets it
 }
 
 /** A batch draft composed in the UI before it is enqueued. */
@@ -250,6 +255,39 @@ export interface BatchDraft {
 
 /** Soft cap: past this many targets, one batch's prompt is likely too big for a turn. */
 export const BATCH_SOFT_CAP = 16
+
+// ---- AI controller (the per-AI boxes in the Chaos Controller) ---------------
+
+export type AiKind = 'mcp' | 'api'
+
+/** Operator-facing stats for one AI. Derived from tool activity (matches, hit rate)
+ *  and, for console-driven API AIs, the driver's reported token usage. */
+export interface AiStats {
+  totalMatches: number
+  matchAttempts: number
+  hitRate: number // 0..1 = totalMatches / matchAttempts
+  tokensIn?: number // API-driven AIs only; undefined for external MCP AIs
+  tokensOut?: number
+  tokensPerMatch?: number
+  currentTask?: string // label of the current run / assigned batch
+  progress?: { done: number; total: number } // completion on the current batch
+  // size-bucket -> tallies, for the "good at" recommendation (e.g. "<=0x40", "0x40-0x200", ">0x800")
+  bySize?: Record<string, { attempts: number; matches: number }>
+}
+
+/** A persistent AI in the controller: either an MCP client that connected, or a
+ *  provider we hold an API key for. Boxes stay on screen (grayed) after disconnect. */
+export interface AiAgent {
+  name: string
+  kind: AiKind
+  provider?: string // api AIs: 'Claude' | 'GLM' | 'DeepSeek'
+  roles: string[] // zero or more assigned roles
+  connected: boolean // mcp: a live session exists; api: currently driving a batch
+  sessions?: number // mcp: number of live sessions collapsed under this name
+  currentBatchId?: string
+  lastSeen?: number
+  stats: AiStats
+}
 
 // ---- Atlas (Chaos Viewer) data ---------------------------------------------
 

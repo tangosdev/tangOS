@@ -1,8 +1,8 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog, shell, clipboard } from 'electron'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { readFileSync, writeFileSync, watch, existsSync, unlinkSync, type FSWatcher } from 'node:fs'
+import { readFileSync, writeFileSync, watch, existsSync, unlinkSync, mkdirSync, type FSWatcher } from 'node:fs'
 import { activityBus } from './activityBus'
 import { McpManager } from './mcpServer'
 import { loadDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
@@ -13,14 +13,18 @@ import { preflight } from './preflight'
 import { readAtlas } from './atlas'
 import { listClaims, tryLock, releaseClaim, hasKey, handle as claimsHandle } from './claims'
 import { githubCredits } from './github'
+import { startDeviceFlow, pollForToken } from './githubAuth'
 import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
+import { aiStats, outputIsMatch } from './aiStats'
+import { record as report, setReportsEnabled, reportsDir } from './reports'
+import { ensureTips, readTips, openTips } from './tips'
 import {
   isGitRepo, ensureWorkBranch, statusMap, changedSince, diffForFile, commitFiles,
   mergeWorkBranch, discardWorkBranch, WORK_BRANCH
 } from './gitsafe'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
-  Review, RunResult, AtlasDb, SecretsInfo
+  Review, RunResult, AtlasDb, SecretsInfo, AiAgent, ConnectedClient
 } from '../shared/types'
 
 const DEFAULT_PORT = 4808
@@ -36,6 +40,10 @@ interface AppState {
   safeMode: boolean
   baseBranch: string | null
   reviews: Review[]
+  reportsEnabled: boolean
+  tourSeen: boolean
+  useAgents: boolean // run drivers with parallel workers (and allow concurrent drives)
+  autoLand: boolean // after a drive, bank + verify (crackloop land) the matches into the repo
 }
 
 const state: AppState = {
@@ -48,8 +56,19 @@ const state: AppState = {
   batches: [],
   safeMode: true,
   baseBranch: null,
-  reviews: []
+  reviews: [],
+  reportsEnabled: false,
+  tourSeen: false,
+  useAgents: false,
+  autoLand: true
 }
+
+// AIs set to run continuously (the "infinite" batch size): when their batch finishes we
+// generate + assign (and, for API AIs, drive) the next one.
+const agentLoop = new Set<string>()
+// Kill switches for in-flight API drivers, keyed by agent name, so the red Stop button can
+// end a drive early. Whatever the driver already landed is kept (matches are recorded live).
+const driveKills = new Map<string, () => void>()
 
 /**
  * Run a tool, wrapping mutating runs in safe-mode git handling when enabled:
@@ -74,25 +93,34 @@ async function runToolSafely(
     extraEnv: secretsEnv()
   }
   const mutating = !tool.readOnly
-  if (!mutating || !state.safeMode) return runTool(base)
-  if (!(await isGitRepo(state.repoPath))) return runTool(base) // no git -> run normally
+  let res: RunResult
+  if (!mutating || !state.safeMode || !(await isGitRepo(state.repoPath))) {
+    res = await runTool(base) // read-only, or write with safe-mode off / no git -> run directly
+  } else {
+    res = await runSafeMode(base)
+  }
+  afterRun(tool, values, client, res)
+  return res
+}
 
+/** Mutating run under safe mode: isolate on the work branch, commit what changed, record a review. */
+async function runSafeMode(base: Parameters<typeof runTool>[0]): Promise<RunResult> {
+  const tool = base.tool
   try {
-    const { base: from } = await ensureWorkBranch(state.repoPath)
+    const { base: from } = await ensureWorkBranch(state.repoPath!)
     if (from !== WORK_BRANCH) state.baseBranch = from
   } catch {
     return runTool(base) // couldn't isolate (e.g. dirty conflict) -> run normally
   }
-
-  const before = await statusMap(state.repoPath)
+  const before = await statusMap(state.repoPath!)
   const res = await runTool(base)
-  const after = await statusMap(state.repoPath)
+  const after = await statusMap(state.repoPath!)
   const changed = changedSince(before, after)
   if (changed.length) {
     try {
       const files = []
-      for (const f of changed) files.push({ path: f.path, status: f.status, diff: await diffForFile(state.repoPath, f) })
-      await commitFiles(state.repoPath, changed, `tangos: ${tool.id}`)
+      for (const f of changed) files.push({ path: f.path, status: f.status, diff: await diffForFile(state.repoPath!, f) })
+      await commitFiles(state.repoPath!, changed, `tangos: ${tool.id}`)
       state.reviews.push({
         id: randomUUID(),
         toolId: tool.id,
@@ -109,14 +137,82 @@ async function runToolSafely(
   return res
 }
 
-/** Pull the next queued batch for an AI: mark it active, retire the previous active one. */
-function pullNextBatch(): Batch | null {
-  const idx = state.batches.findIndex((b) => b.status === 'queued')
-  if (idx === -1) return null
-  for (const b of state.batches) if (b.status === 'active') b.status = 'done'
-  state.batches[idx].status = 'active'
+function parseHexish(v: unknown): number | undefined {
+  if (typeof v === 'number') return v
+  if (typeof v === 'string') {
+    const n = parseInt(v, v.trim().toLowerCase().startsWith('0x') ? 16 : 10)
+    return Number.isNaN(n) ? undefined : n
+  }
+  return undefined
+}
+
+/** Post-run bookkeeping: derive per-AI match stats + mark batch items done from `match` runs. */
+function afterRun(
+  tool: TangosTool,
+  values: Record<string, unknown>,
+  client: { name: string; role?: string } | undefined,
+  res: RunResult
+): void {
+  report('run', {
+    agent: client?.name ?? 'user',
+    tool: tool.id,
+    status: res.status,
+    exitCode: res.exitCode,
+    args: values,
+    outputTail: (res.output || '').slice(-4000)
+  })
+  if (tool.id !== 'match') return
+  const ok = res.status === 'ok' && outputIsMatch(res.output)
+  aiStats.recordMatch(client?.name, ok, parseHexish(values.size))
+  if (ok && typeof values.func === 'string') markItemDone(values.func)
+}
+
+/** Flag a target done across any batch that lists it (drives batch % complete). */
+function markItemDone(func: string): void {
+  let changed = false
+  for (const b of state.batches)
+    for (const it of b.items)
+      if (it.ref === func && !it.done) {
+        it.done = true
+        changed = true
+      }
+  if (!changed) return
   pushState()
-  return state.batches[idx]
+  // Continuous mode (MCP agents): when a targeted batch is fully matched, queue the next.
+  for (const b of state.batches) {
+    if (
+      b.targetAgent &&
+      b.status !== 'done' &&
+      b.items.length &&
+      b.items.every((i) => i.done) &&
+      agentLoop.has(b.targetAgent)
+    ) {
+      b.status = 'done'
+      const role = agentRoles[b.targetAgent]?.[0]
+      void assignToAgent(b.targetAgent, role ?? 'Unassigned', roleBatchSize(role), true).catch(() => {})
+    }
+  }
+}
+
+/** Pull the next queued batch addressed to this agent (or unaddressed): mark it active,
+ *  retire this agent's previous active batch, and record it as the agent's current task. */
+function pullNextBatch(agentName?: string): Batch | null {
+  const mine = (b: Batch): boolean => !b.targetAgent || b.targetAgent === agentName
+  const idx = state.batches.findIndex((b) => b.status === 'queued' && mine(b))
+  if (idx === -1) return null
+  for (const b of state.batches) if (b.status === 'active' && mine(b)) b.status = 'done'
+  const batch = state.batches[idx]
+  batch.status = 'active'
+  if (agentName) {
+    const done = batch.items.filter((i) => i.done).length
+    aiStats.setCurrent(agentName, {
+      task: batch.title || 'batch',
+      batchId: batch.id,
+      progress: { done, total: batch.items.length }
+    })
+  }
+  pushState()
+  return batch
 }
 
 function currentRuntime(): TangosRuntime {
@@ -124,18 +220,37 @@ function currentRuntime(): TangosRuntime {
 }
 
 // Remember the last-opened repo + each agent's assigned role across sessions.
-let agentRoles: Record<string, string> = {}
+let agentRoles: Record<string, string[]> = {}
 function settingsFile(): string {
   return join(app.getPath('userData'), 'tangos-settings.json')
 }
 function saveSettings(): void {
   try {
-    writeFileSync(settingsFile(), JSON.stringify({ lastRepo: state.repoPath, agentRoles }))
+    writeFileSync(
+      settingsFile(),
+      JSON.stringify({
+        lastRepo: state.repoPath,
+        agentRoles,
+        agentStats: aiStats.serialize(),
+        reportsEnabled: state.reportsEnabled,
+        tourSeen: state.tourSeen,
+        useAgents: state.useAgents,
+        autoLand: state.autoLand
+      })
+    )
   } catch {
     /* ignore */
   }
 }
-function loadSettings(): { lastRepo?: string; agentRoles?: Record<string, string> } {
+function loadSettings(): {
+  lastRepo?: string
+  agentRoles?: Record<string, string | string[]> // string = legacy single-role format
+  agentStats?: Record<string, { totalMatches: number; matchAttempts: number }>
+  reportsEnabled?: boolean
+  tourSeen?: boolean
+  useAgents?: boolean
+  autoLand?: boolean
+} {
   try {
     return JSON.parse(readFileSync(settingsFile(), 'utf8'))
   } catch {
@@ -164,10 +279,20 @@ mcp.onTraffic = () => {
   }, 2000)
 }
 mcp.roleForName = (name) => agentRoles[name]
-mcp.onRoleAssigned = (name, role) => {
-  if (role && role !== 'Unassigned') agentRoles[name] = role
+mcp.onRolesAssigned = (name, roles) => {
+  if (roles.length) agentRoles[name] = roles
   else delete agentRoles[name]
   saveSettings()
+}
+// Per-AI stats changed: refresh the UI now, persist (debounced) so lifetime totals survive.
+let statsTimer: NodeJS.Timeout | null = null
+aiStats.onChange = () => {
+  pushState()
+  if (statsTimer) return
+  statsTimer = setTimeout(() => {
+    statsTimer = null
+    saveSettings()
+  }, 3000)
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -232,6 +357,77 @@ function agentPrompt(): string {
   return lines.filter((l) => l !== null).join('\n').trim()
 }
 
+// Stored API keys that surface a provider as an AI in the controller, mapped to its name.
+// Claude + GLM are console-drivable (glm_refine driver); the rest appear as available AIs.
+const LLM_KEYS: Record<string, string> = {
+  ANTHROPIC_API_KEY: 'Claude',
+  GLM_API_KEY: 'GLM',
+  DEEPSEEK_API_KEY: 'DeepSeek',
+  GROK_API_KEY: 'Grok',
+  OPENAI_API_KEY: 'ChatGPT'
+}
+// Providers currently being driven by the console (Phase D populates this).
+const apiDriving = new Set<string>()
+
+/** The controller roster: one AiAgent per name, merging live MCP sessions, keyed API
+ *  providers, and previously-seen names (whose boxes persist grayed-out). */
+function agentsSnapshot(): AiAgent[] {
+  const byName = new Map<string, AiAgent>()
+
+  // 1. live MCP clients, collapsed by name (a reconnecting agent is one box).
+  const grouped = new Map<string, ConnectedClient[]>()
+  for (const c of mcp.getClients()) {
+    const arr = grouped.get(c.name)
+    if (arr) arr.push(c)
+    else grouped.set(c.name, [c])
+  }
+  for (const [name, list] of grouped) {
+    byName.set(name, {
+      name,
+      kind: 'mcp',
+      roles: list.find((c) => c.roles.length)?.roles ?? agentRoles[name] ?? [],
+      connected: true,
+      sessions: list.length,
+      currentBatchId: aiStats.currentBatchId(name),
+      stats: aiStats.statsFor(name)
+    })
+  }
+
+  // 2. keyed API providers (drivable). If already live via MCP, just tag the provider.
+  for (const s of listSecrets()) {
+    const provider = LLM_KEYS[s.name]
+    if (!provider) continue
+    const existing = byName.get(provider)
+    if (existing) {
+      existing.provider = provider
+      continue
+    }
+    byName.set(provider, {
+      name: provider,
+      kind: 'api',
+      provider,
+      roles: agentRoles[provider] ?? [],
+      connected: apiDriving.has(provider),
+      currentBatchId: aiStats.currentBatchId(provider),
+      stats: aiStats.statsFor(provider)
+    })
+  }
+
+  // 3. previously-seen names with lifetime stats but no live session -> grayed box.
+  for (const name of aiStats.names()) {
+    if (byName.has(name)) continue
+    byName.set(name, {
+      name,
+      kind: 'mcp',
+      roles: agentRoles[name] ?? [],
+      connected: false,
+      stats: aiStats.statsFor(name)
+    })
+  }
+
+  return [...byName.values()]
+}
+
 function fullState() {
   return {
     repo: repoState(),
@@ -242,7 +438,13 @@ function fullState() {
     safeMode: state.safeMode,
     baseBranch: state.baseBranch,
     reviews: state.reviews,
-    clients: mcp.getClients()
+    clients: mcp.getClients(),
+    agents: agentsSnapshot(),
+    reportsEnabled: state.reportsEnabled,
+    tourSeen: state.tourSeen,
+    useAgents: state.useAgents,
+    autoLand: state.autoLand,
+    looping: [...agentLoop]
   }
 }
 
@@ -400,6 +602,24 @@ ipcMain.handle('github:credits', async () => {
   return githubCredits(state.descriptor?.project?.github ?? '', secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN)
 })
 
+// GitHub device-flow sign-in: return the user code + verification URL to show, open the
+// browser, and poll in the background; on approval store the token and notify the UI.
+ipcMain.handle('github:signin', async () => {
+  const clientId = state.descriptor?.project?.githubClientId
+  const dc = await startDeviceFlow(clientId)
+  await shell.openExternal(dc.verificationUri).catch(() => {})
+  pollForToken(dc, clientId)
+    .then((token) => {
+      setSecret('GITHUB_TOKEN', token)
+      mainWindow?.webContents.send('github:signedin', { ok: true })
+      pushState()
+    })
+    .catch((e: unknown) => {
+      mainWindow?.webContents.send('github:signedin', { ok: false, error: String((e as Error).message ?? e) })
+    })
+  return { userCode: dc.userCode, verificationUri: dc.verificationUri }
+})
+
 ipcMain.handle('atlas:current', () => {
   // Whatever's already loaded (live preferred), else local — never fetches. For popouts.
   if (atlasCache.repo === state.repoPath) {
@@ -491,14 +711,41 @@ ipcMain.handle('atlas:generate', async () => {
   return db
 })
 
-// Generate a batch of N functions scheduled by opcode similarity to already-matched
-// code (sm64ds: coddog). Each target carries its closest matched sibling as a label so
-// the agent has scaffolding. Fills the composer; the human reviews before sending.
-ipcMain.handle('batch:generate', async (_e, count = 16) => {
+// A role shapes BOTH what the scheduler picks and the default batch size:
+//  - Long sweep      -> large functions, fewer per batch
+//  - Explorer        -> spread across modules/address space, more per batch
+//  - Draft checker   -> the near-miss refine pile
+//  - Main matcher/etc-> plain similarity scheduler
+function genPlanFor(role: string | undefined, count: number): { schedId: string; values: Record<string, unknown> } {
+  switch (role) {
+    case 'Long sweep':
+      return { schedId: 'coddog', values: { limit: count, min: '0x200' } }
+    case 'Explorer':
+      return { schedId: 'coddog', values: { limit: count, spread: true } }
+    case 'Draft checker':
+      return { schedId: 'refine_wl', values: { limit: count } }
+    default:
+      return { schedId: 'coddog', values: { limit: count } }
+  }
+}
+/** Sensible default batch size per role (Long sweep is heavy -> fewer; Explorer -> more). */
+export const roleBatchSize = (role?: string): number =>
+  role === 'Long sweep' ? 8 : role === 'Explorer' ? 24 : 16
+
+// Generate a batch scheduled for this AI's role (similarity, large-function sweep, spread
+// survey, or near-miss refine). Each target carries scaffolding metadata for the agent.
+async function genDraft(role: string | undefined, count: number): Promise<BatchDraft> {
   if (!state.repoPath || !state.descriptor) throw new Error('no repo loaded')
-  // A read-only scheduler that writes a worklist JSONL: coddog, or any tool exposing
-  // both `limit` and `out` args so this stays repo-agnostic.
+  // Functions already handed out (in a still-open batch) — never generate these again so
+  // two AIs don't grind the same target and repeated Assigns don't return the same list.
+  const taken = new Set(
+    state.batches.filter((b) => b.status !== 'done').flatMap((b) => b.items.map((i) => i.ref))
+  )
+  // Ask the scheduler for extra so we still have `count` after dropping the taken ones.
+  const plan = genPlanFor(role, count + taken.size)
+  // The planned scheduler, falling back to coddog, then any read-only limit+out tool.
   const sched =
+    state.descriptor.tools.find((t) => t.id === plan.schedId) ??
     state.descriptor.tools.find((t) => t.id === 'coddog') ??
     state.descriptor.tools.find(
       (t) => t.readOnly && t.args?.some((a) => a.name === 'out') && t.args?.some((a) => a.name === 'limit')
@@ -508,10 +755,10 @@ ipcMain.handle('batch:generate', async (_e, count = 16) => {
   const outPath = join(app.getPath('temp'), `tangos-batch-${randomUUID()}.jsonl`)
   await runTool({
     tool: sched,
-    values: { limit: count, out: outPath },
+    values: { ...plan.values, out: outPath },
     runtime: currentRuntime(),
-    repoPath: state.repoPath,
     source: 'user',
+    repoPath: state.repoPath,
     allowMutations: false,
     extraEnv: secretsEnv()
   })
@@ -523,12 +770,14 @@ ipcMain.handle('batch:generate', async (_e, count = 16) => {
     throw new Error('scheduler produced no worklist (see the live viewer for its output)')
   }
   const items: BatchItem[] = []
-  for (const line of lines.slice(0, count)) {
+  for (const line of lines) {
+    if (items.length >= count) break
     try {
       const r = JSON.parse(line) as {
-        name: string; module?: string; addr?: string; size?: string
+        name: string; module?: string; addr?: string; size?: string; target_hex?: string
         coddog_sim?: number; siblings?: { name: string; sim: number }[]
       }
+      if (taken.has(r.name)) continue // already assigned elsewhere
       const sib = r.siblings?.[0]
       const sim = Math.round((r.coddog_sim ?? sib?.sim ?? 0) * 100)
       items.push({
@@ -537,6 +786,7 @@ ipcMain.handle('batch:generate', async (_e, count = 16) => {
         module: r.module,
         addr: r.addr ? parseInt(r.addr, 16) : undefined,
         size: r.size ? parseInt(r.size, 16) : undefined,
+        targetHex: r.target_hex,
         label: sib ? `${sim}% like ${sib.name}` : undefined
       })
     } catch {
@@ -552,7 +802,14 @@ ipcMain.handle('batch:generate', async (_e, count = 16) => {
   const prompt =
     'Match these targets. Each was picked by opcode similarity to an already-matched sibling ' +
     '(shown per target) — lean on that sibling as scaffolding. Run `match` on each; use `fdiff` on near-misses.'
-  return { title: `Similarity batch (${items.length})`, prompt, items } satisfies BatchDraft
+  const label = role && role !== 'Unassigned' ? role : 'Similarity'
+  return { title: `${label} batch (${items.length})`, prompt, items } satisfies BatchDraft
+}
+
+ipcMain.handle('batch:generate', async (_e, arg: number | { count?: number; role?: string } = 16) => {
+  const role = typeof arg === 'object' ? arg.role : undefined
+  const count = (typeof arg === 'object' ? arg.count : arg) ?? roleBatchSize(role)
+  return genDraft(role, count)
 })
 
 ipcMain.handle('repo:pick', async () => {
@@ -641,18 +898,268 @@ ipcMain.handle('policy:setMutations', (_e, allow: boolean) => {
   return state.allowMutations
 })
 
-ipcMain.handle('batch:enqueue', (_e, draft: BatchDraft) => {
+function addBatch(draft: BatchDraft, targetAgent?: string): Batch[] {
   const b: Batch = {
     id: randomUUID(),
     title: (draft.title ?? '').trim() || `Batch ${state.batches.length + 1}`,
     prompt: draft.prompt ?? '',
     items: draft.items ?? [],
     status: 'queued',
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    targetAgent: targetAgent || undefined
   }
   state.batches.push(b)
+  report('batch', {
+    event: 'created',
+    batchId: b.id,
+    title: b.title,
+    targetAgent: b.targetAgent ?? null,
+    targets: b.items.length,
+    items: b.items.map((i) => i.ref)
+  })
   pushState()
   return state.batches
+}
+
+ipcMain.handle('batch:enqueue', (_e, draft: BatchDraft) => addBatch(draft))
+
+// Address a batch to one AI by name: only that agent's next_batch (or console-driven run) gets it.
+ipcMain.handle('batch:assign', (_e, payload: { draft: BatchDraft; agentName: string }) =>
+  addBatch(payload.draft, payload.agentName)
+)
+
+/** Generate a role-aware batch and address it to one AI, setting/clearing its loop flag. */
+async function assignToAgent(agentName: string, role: string, count: number, loop: boolean): Promise<void> {
+  if (loop) agentLoop.add(agentName)
+  else agentLoop.delete(agentName)
+  const draft = await genDraft(role && role !== 'Unassigned' ? role : undefined, count)
+  addBatch(draft, agentName)
+}
+
+ipcMain.handle('ai:assign', async (_e, p: { agent: string; role?: string; count: number; loop?: boolean }) => {
+  await assignToAgent(p.agent, p.role ?? 'Unassigned', p.count, !!p.loop)
+  return { ok: true }
+})
+// Stop an AI's continuous loop (it finishes its current batch, then no more are queued).
+ipcMain.handle('ai:stop', (_e, agentName: string) => {
+  agentLoop.delete(agentName) // stop any continuous loop from re-assigning
+  driveKills.get(agentName)?.() // kill an in-flight driver early; matches found so far are kept
+  pushState()
+  return true
+})
+
+// Console-drive a keyed API provider on its assigned batch: write a worklist and run the
+// model driver (glm_refine, Anthropic-dialect) tagged as that AI, then fold the reported
+// landed matches + token usage into its stats.
+async function driveBatch(agentName: string): Promise<void> {
+  if (!state.repoPath) throw new Error('no repo selected')
+  const env = secretsEnv()
+  const driverEnv: Record<string, string> = {}
+  if (agentName === 'GLM') {
+    if (!env.GLM_API_KEY) throw new Error('no GLM_API_KEY stored — add it in Settings')
+  } else if (agentName === 'Claude') {
+    if (!env.ANTHROPIC_API_KEY) throw new Error('no ANTHROPIC_API_KEY stored — add it in Settings')
+    driverEnv.GLM_API_KEY = env.ANTHROPIC_API_KEY // the driver reads GLM_API_KEY; point it at Anthropic
+    driverEnv.GLM_BASE_URL = 'https://api.anthropic.com'
+    driverEnv.GLM_MODEL = 'claude-sonnet-4-5'
+  } else {
+    throw new Error(`${agentName} has no console driver yet (idle-only)`)
+  }
+  const batch = state.batches.find((b) => b.targetAgent === agentName && b.status !== 'done')
+  if (!batch) throw new Error(`no batch assigned to ${agentName} — assign one first`)
+  const rows = batch.items
+    .filter((i) => i.addr != null && i.size != null && i.module && i.targetHex)
+    .map((i) =>
+      JSON.stringify({
+        name: i.ref,
+        addr: '0x' + i.addr!.toString(16).padStart(8, '0'),
+        size: '0x' + i.size!.toString(16),
+        module: i.module,
+        target_hex: i.targetHex
+      })
+    )
+  if (!rows.length) throw new Error('this batch has no drivable targets (need addr/size/module/target bytes)')
+
+  // Stable, discoverable location (not a random temp name) so the run's "open folder" link
+  // always resolves to real files. One worklist + output per agent; the next drive overwrites.
+  const driveDir = join(app.getPath('temp'), 'tangos-drives')
+  mkdirSync(driveDir, { recursive: true })
+  const slug = agentName.replace(/[^a-z0-9]/gi, '_')
+  const wl = join(driveDir, `${slug}.worklist.jsonl`)
+  const outPath = join(driveDir, `${slug}.results.output`)
+  writeFileSync(wl, rows.join('\n'))
+  const tool: TangosTool = {
+    id: 'glm_refine',
+    label: `Drive ${agentName}`,
+    category: 'matching',
+    readOnly: false,
+    command: '{python} tools/glm_refine.py --wl {wl} --out {out} --jobs {jobs}'
+  }
+  const jobs = state.useAgents ? 6 : 1 // "Use agents" -> parallel workers
+  batch.status = 'active'
+  apiDriving.add(agentName)
+  aiStats.setCurrent(agentName, {
+    task: batch.title,
+    batchId: batch.id,
+    progress: { done: batch.items.filter((i) => i.done).length, total: batch.items.length }
+  })
+  pushState()
+  // Live progress: the driver prints a result-first header per finished target, e.g.
+  //   "(3/64) func_ov062_02114f98: MATCH"  or  "(4/64) func_...: div=7"
+  // (its per-attempt lines follow, indented). Parse the headers as they stream so the bar
+  // climbs the instant a match lands (and a Stop mid-run still leaves every completed target
+  // counted). recorded[] avoids double-counting against the final .output reconciliation below.
+  const recorded = new Set<string>()
+  const DONE_RE = /^\((\d+)\/(\d+)\)\s+(\S+):\s+(MATCH|div=\d+)/
+  let lineBuf = ''
+  const onOutput = (chunk: string, stream: 'stdout' | 'stderr'): void => {
+    if (stream !== 'stdout') return
+    lineBuf += chunk
+    let nl: number
+    while ((nl = lineBuf.indexOf('\n')) >= 0) {
+      const line = lineBuf.slice(0, nl)
+      lineBuf = lineBuf.slice(nl + 1)
+      const m = DONE_RE.exec(line.trim())
+      if (!m) continue
+      const name = m[3]
+      const ok = m[4] === 'MATCH'
+      if (recorded.has(name)) continue
+      recorded.add(name)
+      const item = batch.items.find((i) => i.ref === name)
+      aiStats.recordMatch(agentName, ok, item?.size)
+      if (ok && item) item.done = true
+      aiStats.setCurrent(agentName, {
+        task: batch.title,
+        batchId: batch.id,
+        progress: { done: batch.items.filter((i) => i.done).length, total: batch.items.length }
+      })
+      pushState() // climb the bar mid-run
+    }
+  }
+  try {
+    const res = await runTool({
+      tool,
+      values: { wl, out: outPath, jobs },
+      runtime: currentRuntime(),
+      repoPath: state.repoPath,
+      source: 'ai',
+      client: { name: agentName },
+      allowMutations: true,
+      extraEnv: { ...env, ...driverEnv },
+      onOutput,
+      onSpawn: ({ kill }) => driveKills.set(agentName, kill)
+    })
+    let landed: string[] = []
+    let tin = 0
+    let tout = 0
+    let rawOut = ''
+    try {
+      rawOut = readFileSync(outPath, 'utf8')
+      const out = JSON.parse(rawOut) as {
+        landed?: Array<string | { name?: string }>
+        landedNames?: string[]
+        matches?: Array<string | { name?: string }>
+        results?: Array<{ name?: string; matched?: boolean }>
+        tokensIn?: number
+        tokensOut?: number
+        inputTokens?: number
+        outputTokens?: number
+        tokensPerLanded?: number
+      }
+      const landedRaw = out.landedNames ?? out.landed ?? out.matches ?? []
+      landed = (landedRaw as Array<string | { name?: string }>)
+        .map((x) => (typeof x === 'string' ? x : x?.name))
+        .filter((x): x is string => !!x)
+      // Reconcile with the stream via the driver's authoritative results[] (every target it
+      // reached, matched or not). Anything the live parse missed gets recorded here; targets
+      // that never ran (e.g. an early Stop) aren't in results[], so a partial run doesn't
+      // tank hit rate with un-attempted functions.
+      for (const r of out.results ?? []) {
+        if (!r.name || recorded.has(r.name)) continue
+        recorded.add(r.name)
+        const item = batch.items.find((i) => i.ref === r.name)
+        aiStats.recordMatch(agentName, !!r.matched, item?.size)
+        if (r.matched && item) item.done = true
+      }
+      tin = out.tokensIn ?? out.inputTokens ?? 0
+      tout = out.tokensOut ?? out.outputTokens ?? (out.tokensPerLanded ? out.tokensPerLanded * landed.length : 0)
+      if (tin || tout) aiStats.recordTokens(agentName, tin, tout)
+    } catch {
+      /* no parseable driver output */
+    }
+    report('drive', {
+      agent: agentName,
+      batchId: batch.id,
+      title: batch.title,
+      targets: batch.items.length,
+      status: res.status,
+      landed: landed.length,
+      landedNames: landed,
+      tokensIn: tin,
+      tokensOut: tout,
+      driverOutputTail: (res.output || '').slice(-3000),
+      resultFileTail: rawOut.slice(-3000)
+    })
+
+    // Land the matches into the repo. The driver only WRITES matching sources to a scratch
+    // dir + the results file; without this step they never reach src/, the ledger, or git.
+    // `crackloop land` banks the sources, runs the free-tier clone/paramclone post-pass, and
+    // linkcheck-gates everything banked. We deliberately stop BEFORE git commit/push — that
+    // stays a manual, reviewable step (the console never pushes to the public repo on its own).
+    if (state.autoLand && landed.length) {
+      const landTool: TangosTool = {
+        id: 'crackloop_land',
+        label: `Land ${agentName} matches`,
+        category: 'matching',
+        readOnly: false,
+        command: '{python} tools/crackloop.py land --output {out} --wl {wl} --no-claims'
+      }
+      const landRes = await runTool({
+        tool: landTool,
+        values: { out: outPath, wl },
+        runtime: currentRuntime(),
+        repoPath: state.repoPath,
+        source: 'ai',
+        client: { name: agentName },
+        allowMutations: true,
+        extraEnv: env
+      })
+      const wrong = /LINK GATE: (\d+) WRONG/.exec(landRes.output || '')
+      report('land', {
+        agent: agentName,
+        batchId: batch.id,
+        landed: landed.length,
+        landedNames: landed,
+        status: landRes.status,
+        wrongBanks: wrong ? Number(wrong[1]) : 0,
+        outputTail: (landRes.output || '').slice(-4000)
+      })
+    }
+  } finally {
+    apiDriving.delete(agentName)
+    driveKills.delete(agentName)
+    aiStats.clearCurrent(agentName)
+    batch.status = 'done'
+    // Leave wl + outPath on disk so the run's "open folder" link stays useful after it ends;
+    // the next drive for this agent overwrites them.
+    pushState()
+  }
+}
+
+ipcMain.handle('ai:drive', async (_e, agentName: string) => {
+  try {
+    // Loop while this AI is in continuous mode: drive, then generate + assign the next.
+    do {
+      await driveBatch(agentName)
+      if (!agentLoop.has(agentName)) break
+      const primary = agentRoles[agentName]?.[0]
+      await assignToAgent(agentName, primary ?? 'Unassigned', roleBatchSize(primary), true)
+    } while (agentLoop.has(agentName))
+  } catch (e) {
+    agentLoop.delete(agentName) // stop the loop on any error
+    throw e
+  }
+  return { ok: true }
 })
 
 ipcMain.handle('batch:remove', (_e, id: string) => {
@@ -694,15 +1201,69 @@ ipcMain.handle('tool:run', async (_e, payload: { toolId: string; values: Record<
   return runToolSafely(tool, payload.values ?? {}, 'user')
 })
 
-ipcMain.handle('clients:setRole', (_e, p: { id: string; role: string }) => {
-  mcp.setRole(p.id, p.role)
-  return mcp.getClients()
+// Assign roles by AI name (works for live MCP sessions, keyed API providers, and
+// offline-but-seen agents alike). Applies to any live sessions and persists by name.
+// An AI can hold several roles at once (e.g. main matcher + verifier).
+ipcMain.handle('clients:setRoles', (_e, p: { name: string; roles: string[] }) => {
+  const roles = (p.roles ?? []).filter((r) => r && r !== 'Unassigned')
+  const live = mcp.getClients().find((c) => c.name === p.name)
+  if (live) {
+    mcp.setRoles(live.id, roles) // applies to all same-name sessions + persists via onRolesAssigned
+  } else {
+    if (roles.length) agentRoles[p.name] = roles
+    else delete agentRoles[p.name]
+    saveSettings()
+  }
+  pushState()
+  return agentsSnapshot()
 })
 
 ipcMain.handle('policy:setSafeMode', (_e, on: boolean) => {
   state.safeMode = !!on
   pushState()
   return state.safeMode
+})
+
+ipcMain.handle('policy:setUseAgents', (_e, on: boolean) => {
+  state.useAgents = !!on
+  saveSettings()
+  pushState()
+  return state.useAgents
+})
+ipcMain.handle('policy:setAutoLand', (_e, on: boolean) => {
+  state.autoLand = !!on
+  saveSettings()
+  pushState()
+  return state.autoLand
+})
+ipcMain.handle('policy:setReports', (_e, on: boolean) => {
+  state.reportsEnabled = !!on
+  setReportsEnabled(state.reportsEnabled)
+  saveSettings()
+  pushState()
+  return state.reportsEnabled
+})
+ipcMain.handle('reports:open', async () => {
+  await shell.openPath(reportsDir())
+  return reportsDir()
+})
+
+ipcMain.handle('tips:get', () => readTips())
+ipcMain.handle('tips:open', () => {
+  openTips()
+  return true
+})
+ipcMain.handle('tour:seen', () => {
+  state.tourSeen = true
+  saveSettings()
+  pushState()
+  return true
+})
+ipcMain.handle('tour:replay', () => {
+  state.tourSeen = false
+  saveSettings()
+  pushState()
+  return true
 })
 
 ipcMain.handle('review:merge', async () => {
@@ -805,6 +1366,17 @@ ipcMain.handle('atlas:popout', (_e, module: string) => {
 
 ipcMain.handle('shell:openExternal', (_e, url: string) => shell.openExternal(url))
 ipcMain.handle('shell:openPath', (_e, p: string) => shell.openPath(p))
+// Reveal a path in the OS file manager: if the file/dir still exists, open its folder with
+// it selected; otherwise (a temp file that a finished run already cleaned up) open the
+// containing folder so it's never a dead click.
+ipcMain.handle('shell:revealPath', (_e, p: string) => {
+  if (existsSync(p)) {
+    shell.showItemInFolder(p)
+    return ''
+  }
+  const dir = dirname(p)
+  return existsSync(dir) ? shell.openPath(dir) : shell.openPath(p)
+})
 ipcMain.handle('clipboard:write', (_e, text: string) => {
   clipboard.writeText(text)
   return true
@@ -815,7 +1387,17 @@ ipcMain.handle('clipboard:write', (_e, text: string) => {
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null) // no native File/Edit/View menu — we use our own chrome
   const saved = loadSettings()
-  agentRoles = saved.agentRoles ?? {}
+  // migrate legacy single-role (string) entries to the multi-role (string[]) format
+  agentRoles = Object.fromEntries(
+    Object.entries(saved.agentRoles ?? {}).map(([k, v]) => [k, (Array.isArray(v) ? v : [v]).filter((r) => r && r !== 'Unassigned')])
+  )
+  aiStats.hydrate(saved.agentStats)
+  state.reportsEnabled = saved.reportsEnabled ?? false
+  state.tourSeen = saved.tourSeen ?? false
+  state.useAgents = saved.useAgents ?? false
+  state.autoLand = saved.autoLand ?? true
+  setReportsEnabled(state.reportsEnabled)
+  ensureTips()
   if (saved.lastRepo && looksLikeRepo(saved.lastRepo)) setRepo(saved.lastRepo)
   createWindow()
   app.on('activate', () => {

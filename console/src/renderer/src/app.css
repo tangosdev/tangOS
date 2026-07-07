@@ -519,16 +519,21 @@ html, body, #root { background: transparent !important; }
 }
 .sb.blur { filter: blur(2px); opacity: 0.7; }
 @keyframes rise { from { transform: translateY(0); opacity: 0; } 15% { opacity: 0.9; } to { transform: translateY(-112vh); opacity: 0; } }
-.splash-center { position: relative; text-align: center; animation: whoosh 1750ms cubic-bezier(.2,1.4,.3,1) forwards; }
+.splash-center {
+  position: relative; display: flex; align-items: center; justify-content: center; gap: 30px;
+  animation: whoosh 1750ms cubic-bezier(.2,1.4,.3,1) forwards;
+}
+.splash-text { text-align: center; }
 @keyframes whoosh {
   0% { transform: translateY(26px) scale(0.8); opacity: 0; }
   25% { opacity: 1; }
   70% { transform: translateY(0) scale(1); opacity: 1; }
   100% { transform: scale(1.06); opacity: 0.85; }
 }
-.splash-word { font-size: 64px; font-weight: 800; letter-spacing: -0.03em; color: #0d3a5c; text-shadow: 0 2px 12px rgba(255,255,255,0.55); }
+.splash-word { font-size: 78px; font-weight: 800; letter-spacing: -0.03em; color: #0d3a5c; text-shadow: 0 2px 12px rgba(255,255,255,0.55); }
 .splash-word .os { color: #0099e0; }
-.splash-sub { margin-top: 4px; font-size: 18px; font-weight: 600; color: rgba(13,58,92,0.7); }
+.splash-sub { margin-top: 6px; font-size: 22px; font-weight: 600; color: rgba(13,58,92,0.7); }
+.splash-tango { height: 188px; width: auto; user-select: none; -webkit-user-drag: none; filter: drop-shadow(0 10px 24px rgba(10,50,20,0.28)); }
 
 /* ---- atlas ---- */
 .atlas { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 14px 14px 58px; overflow: hidden; min-height: 0; }
@@ -693,6 +698,20 @@ html, body, #root { background: transparent !important; }
 .mini-head { display: flex; align-items: center; gap: 8px; padding: 6px 9px; cursor: pointer; }
 .mini-label { flex: none; font-weight: 600; font-size: 12.5px; }
 .mini-cmd { flex: 1; min-width: 0; font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--aero-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* file paths inside a command line -> click to open their folder */
+.path-link {
+  display: inline; padding: 0; border: none; background: none; font: inherit;
+  color: rgb(var(--aero-primary-rgb)); cursor: pointer; text-decoration: underline;
+  text-decoration-color: rgba(var(--aero-primary-rgb), 0.4); text-underline-offset: 2px;
+}
+.path-link:hover { text-decoration-color: rgb(var(--aero-primary-rgb)); }
+/* always-visible folder button (the command truncates, this never does) */
+.mini-folder {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 20px; padding: 0; border: 1px solid var(--aero-border); border-radius: 6px;
+  background: rgba(255,255,255,0.5); color: var(--aero-muted); cursor: pointer;
+}
+.mini-folder:hover { color: rgb(var(--aero-primary-rgb)); border-color: rgb(var(--aero-primary-rgb)); background: #fff; }
 .mini-dur { flex: none; font-size: 10.5px; color: var(--aero-muted); }
 
 /* unassigned connected agent -> amber nudge to assign a role */
@@ -720,3 +739,314 @@ html, body, #root { background: transparent !important; }
 .atlas-detail { display: flex; align-items: center; gap: 12px; padding: 9px 14px; flex-wrap: wrap; }
 .atlas-detail .ad-name { font-weight: 700; font-size: 14px; overflow: hidden; text-overflow: ellipsis; }
 .atlas-detail .ad-meta { font-size: 12px; color: var(--aero-muted); }
+
+/* ============ Chaos Controller redesign ============ */
+
+/* three-zone top bar: brand left, segmented toggle centered, settings/window right */
+.tb-left { flex: 1; display: flex; align-items: center; min-width: 0; }
+.tb-center { flex: none; display: flex; align-items: center; }
+.tb-right { flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
+
+/* segmented slide toggle (Chaos Controller | Chaos Viewer) */
+.app-seg {
+  position: relative; display: inline-flex; padding: 3px; border-radius: 999px;
+  border: 1px solid var(--aero-border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.4), rgba(255,255,255,0.08));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+}
+.app-seg-thumb {
+  position: absolute; top: 3px; left: 3px; bottom: 3px; width: calc((100% - 6px) / 2);
+  border-radius: 999px; background: rgb(var(--aero-primary-rgb));
+  box-shadow: 0 2px 8px rgba(var(--aero-primary-rgb) / 0.5);
+  transform: translateX(calc(var(--i, 0) * 100%));
+  transition: transform 280ms cubic-bezier(.3, 1.35, .4, 1);
+}
+.app-seg button {
+  position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 134px; border: none; background: transparent; font: inherit; font-size: 12.5px; font-weight: 700;
+  padding: 6px 14px; cursor: pointer; color: var(--aero-muted); transition: color 180ms ease; white-space: nowrap;
+}
+.app-seg button.on { color: #fff; }
+
+/* workspace: controller (big) left, tools + requirements rail right */
+.ctl-workspace { grid-template-columns: 1fr 340px; padding: 14px; }
+.right-rail { display: flex; flex-direction: column; gap: 14px; overflow: auto; min-height: 0; }
+
+/* the controller panel */
+.controller { display: flex; flex-direction: column; min-height: 0; }
+.ctl-grid {
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 2px;
+  /* exactly 3 per row: two AIs fill 2/3 of the row, as designed */
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;
+  align-content: start; align-items: stretch;
+}
+
+/* one AI box (click to pop out detail) — uniform size: equal column width + stretched height */
+.ai-box {
+  position: relative; min-height: 196px;
+  border: 1.5px solid var(--aero-border); border-radius: 14px; padding: 11px 12px 10px; cursor: pointer;
+  background: linear-gradient(180deg, rgba(255,255,255,0.5), rgba(255,255,255,0.14));
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.6);
+  display: flex; flex-direction: column; gap: 8px; transition: transform 0.1s ease, box-shadow 0.15s ease; min-width: 0;
+}
+/* loading overlay while coddog generates a batch (or a driver runs) */
+.ai-box.busy { pointer-events: none; }
+.aib-loading {
+  position: absolute; inset: 0; z-index: 5; border-radius: 14px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  background: rgba(236,243,250,0.86); backdrop-filter: blur(1.5px);
+}
+.aib-loadtext { font-size: 12px; font-weight: 700; color: var(--aero-muted); }
+.aib-loadbar { position: relative; width: 62%; height: 6px; border-radius: 999px; background: rgba(0,0,0,0.1); overflow: hidden; }
+.aib-loadbar::before {
+  content: ''; position: absolute; top: 0; height: 100%; width: 38%; border-radius: 999px;
+  background: rgb(var(--aero-primary-rgb)); animation: loadslide 1.1s ease-in-out infinite;
+}
+@keyframes loadslide { 0% { left: -38%; } 100% { left: 100%; } }
+.ai-box:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.13); }
+.ai-box.off { opacity: 0.5; filter: grayscale(0.6); }
+.aib-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.aib-name { font-weight: 800; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aib-kind {
+  font-size: 9px; font-weight: 800; letter-spacing: 0.05em; padding: 1px 6px; border-radius: 999px; flex: none;
+  color: rgb(var(--aero-primary-rgb)); background: rgba(var(--aero-primary-rgb) / 0.14); border: 1px solid rgba(var(--aero-primary-rgb) / 0.3);
+}
+.aib-matches { margin-left: auto; flex: none; font-weight: 800; font-size: 16px; color: rgb(var(--aero-matched-rgb)); }
+.aib-matches small { font-size: 10px; font-weight: 600; color: var(--aero-muted); }
+.aib-task {
+  flex: 1 1 auto; border-radius: 10px; padding: 8px 10px; min-height: 40px; background: rgba(255,255,255,0.4);
+  border: 1px solid var(--aero-border); display: flex; flex-direction: column; gap: 6px; justify-content: center;
+}
+.aib-task-label { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aib-idle { font-size: 12px; color: var(--aero-muted); font-style: italic; }
+.aib-prog { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--aero-muted); font-weight: 700; }
+.aib-bar { flex: 1; height: 6px; border-radius: 999px; background: rgba(0,0,0,0.1); overflow: hidden; }
+.aib-bar > span { display: block; height: 100%; border-radius: 999px; transition: width 300ms ease; }
+.aib-stats { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; font-weight: 700; color: var(--aero-text); }
+.aib-stats .muted { color: var(--aero-muted); font-weight: 500; }
+.aib-actions { display: flex; flex-direction: column; gap: 7px; }
+.aib-actions .agent-role { width: 100%; }
+/* Multi-role chips: an AI can hold several roles at once. */
+.aib-roles { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.role-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 11px; font-weight: 700; line-height: 1;
+  padding: 3px 4px 3px 8px; border-radius: 999px;
+  background: rgba(59,130,246,0.14); border: 1px solid rgba(59,130,246,0.4); color: var(--aero-text);
+}
+.role-x {
+  border: none; background: transparent; cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 0 2px; color: var(--aero-muted); border-radius: 999px;
+}
+.role-x:hover { color: #ef4444; background: rgba(239,68,68,0.14); }
+.aib-roles .agent-role.add { width: auto; flex: 1 1 auto; min-width: 92px; font-size: 11px; padding: 3px 6px; }
+.aib-btns { display: flex; gap: 7px; align-items: stretch; }
+.aib-btns .mini-btn { flex: 1 1 0; justify-content: center; }
+.aib-size {
+  font: inherit; font-size: 11px; font-weight: 800; padding: 3px 4px; border-radius: 8px; cursor: pointer; flex: none;
+  border: 1px solid var(--aero-border); background: rgba(255,255,255,0.65); color: var(--aero-text);
+}
+.mini-btn.stop { color: #fff; background: #ef5350; border-color: #ef5350; }
+.mini-btn.custom {
+  width: 100%; justify-content: center; margin-top: 2px;
+  color: rgb(var(--aero-primary-rgb)); border-color: rgba(var(--aero-primary-rgb) / 0.4); background: rgba(var(--aero-primary-rgb) / 0.1);
+}
+.ctl-cart {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; flex: none;
+  color: rgb(var(--aero-primary-rgb)); background: rgba(var(--aero-primary-rgb) / 0.12);
+  border: 1px solid rgba(var(--aero-primary-rgb) / 0.3); border-radius: 999px; padding: 3px 10px;
+}
+.ctl-cart button {
+  background: none; border: none; color: var(--aero-muted); cursor: pointer; font: inherit; font-size: 11px;
+  text-decoration: underline; padding: 0;
+}
+.aib-kind.loop { color: rgb(var(--aero-matched-rgb)); background: rgba(var(--aero-matched-rgb) / 0.16); border-color: rgba(var(--aero-matched-rgb) / 0.35); }
+.aib-live { font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; color: var(--aero-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mini-btn.go { color: #fff; background: rgb(var(--aero-primary-rgb)); border-color: rgb(var(--aero-primary-rgb)); }
+
+/* controller footer: writes/review centered (bottom-middle) + github bottom-right */
+.ctl-footer {
+  flex: none; display: flex; align-items: center; gap: 10px; padding: 16px 6px 14px; margin-top: 8px;
+  min-height: 56px; border-top: 1px solid var(--aero-border);
+}
+.ctl-foot-side { flex: 1; display: flex; align-items: center; min-width: 0; }
+.ctl-foot-side.right { justify-content: flex-end; }
+.ctl-foot-mid { display: flex; align-items: center; gap: 10px; flex: none; }
+.ctl-footer .tb-btn { font-size: 12px; }
+/* Writes/Review must read as solid, not glassy, over the panel gradient */
+.ctl-foot-mid .tb-btn { background: linear-gradient(180deg, #ffffff, #eef3f8); }
+.ctl-foot-mid .tb-btn.warn { background: linear-gradient(180deg, #fdf6e3, #f7e6b8); border-color: rgba(234, 179, 8, 0.6); }
+.ctl-foot-mid .tb-btn.active { background: linear-gradient(180deg, #eaf2ff, #c9defb); border-color: rgba(var(--aero-primary-rgb) / 0.6); }
+
+/* controller header must not wrap (MCP pill + Clear stay on the title row) */
+.controller > .head { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; margin-bottom: 10px; }
+.controller > .head h2 { flex: none; margin: 0; }
+.controller > .head .aero-badge { flex: none; }
+
+/* keep the wordmark off the window corner + never boxed */
+.tb-left { padding-left: 6px; }
+.tb-left .brand { border: none; background: none; }
+
+/* first-run coach-mark tour */
+.tour-scrim { position: fixed; inset: 0; z-index: 300; pointer-events: auto; -webkit-app-region: no-drag; }
+.tour-dim { position: absolute; inset: 0; background: rgba(10,20,30,0.55); }
+.tour-spot {
+  position: fixed; border-radius: 12px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(10,20,30,0.55), 0 0 0 3px rgba(255,255,255,0.9), 0 0 22px 4px rgba(94,194,46,0.6);
+  transition: top 0.28s ease, left 0.28s ease, width 0.28s ease, height 0.28s ease;
+}
+.tour-skip {
+  position: fixed; top: 16px; right: 18px; display: inline-flex; align-items: center; gap: 4px;
+  padding: 6px 12px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700;
+  color: #fff; background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.35);
+}
+.tour-skip:hover { background: rgba(255,255,255,0.3); }
+.tour-pop {
+  position: fixed; z-index: 2; display: flex; align-items: flex-end; gap: 6px; width: 448px; max-width: calc(100vw - 28px);
+  animation: tourPop 320ms cubic-bezier(.2, 1.4, .35, 1) both;
+}
+@keyframes tourPop { from { transform: translateY(14px) scale(0.96); opacity: 0; } to { transform: translateY(0) scale(1); opacity: 1; } }
+.tour-tango { width: 158px; height: auto; flex: none; filter: drop-shadow(0 8px 10px rgba(0,0,0,0.45)); }
+.tour-box {
+  flex: 1; min-width: 0; background: #fbfff6; border: 2px solid #5ec22e; border-radius: 14px; padding: 12px 14px;
+  box-shadow: 0 14px 40px rgba(10,30,10,0.45);
+}
+.tour-box-title { font-size: 15px; font-weight: 800; color: #1f3d10; margin-bottom: 5px; }
+.tour-box-body { margin: 0 0 10px; font-size: 12.5px; line-height: 1.5; color: #2c3d22; }
+.tour-nav { display: flex; align-items: center; gap: 8px; }
+.tour-nav .aero-button { padding: 5px 14px; font-size: 12.5px; }
+
+/* settings checkbox row (debug reports) */
+.settings-check { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--aero-text); cursor: pointer; }
+.settings-check input { width: 15px; height: 15px; cursor: pointer; accent-color: rgb(var(--aero-primary-rgb)); flex: none; }
+.aib-done { color: rgb(var(--aero-matched-rgb)); font-weight: 800; font-size: 11px; }
+
+/* key vault inside the settings panel (settings provides the padding) */
+.vault { display: flex; flex-direction: column; }
+.vault .aero-button.ghost.active {
+  background: rgba(var(--aero-primary-rgb) / 0.18); border-color: rgba(var(--aero-primary-rgb) / 0.5);
+}
+
+/* github sign-in */
+.gh-signin { display: inline-flex; align-items: center; gap: 8px; }
+.gh-hint { font-size: 11px; color: var(--aero-muted); }
+.gh-err { font-size: 11px; color: var(--aero-danger); }
+.gh-done { display: inline-flex; align-items: center; font-size: 12px; font-weight: 700; color: rgb(var(--aero-matched-rgb)); }
+
+/* settings panel (gear popover) — scroll internally so long content never runs off-screen */
+.settings-panel { max-height: calc(100vh - 90px); width: 320px; overflow-y: auto; overflow-x: hidden; }
+.settings-repo { width: 100%; }
+.settings-repo .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* AI detail modal */
+.ai-detail-scrim {
+  position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.32); backdrop-filter: blur(3px); -webkit-app-region: no-drag;
+}
+.ai-detail {
+  width: min(560px, 92vw); max-height: 84vh; overflow: auto; padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 8px;
+  /* opaque so the text is readable, not glassy over the blue backdrop */
+  background:
+    linear-gradient(180deg, rgba(var(--aero-gloss-rgb) / 0.6) 0%, rgba(var(--aero-gloss-rgb) / 0.05) 44%, var(--aero-panel) 100%),
+    var(--aero-bg);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
+  color: var(--aero-text);
+}
+.ai-detail .head { display: flex; align-items: center; gap: 9px; }
+.ai-detail .head h2 { margin: 0; font-size: 18px; }
+.ai-detail .section-title { color: var(--aero-text); opacity: 0.72; }
+/* recommendation banner at the top */
+.aid-rec {
+  display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; padding: 9px 12px; border-radius: 11px; margin: 2px 0 4px;
+  background: rgba(var(--aero-primary-rgb) / 0.14); border: 1px solid rgba(var(--aero-primary-rgb) / 0.34);
+}
+.aid-rec-label { font-size: 10px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: rgb(var(--aero-primary-rgb)); }
+.aid-rec b { font-size: 15px; font-weight: 800; color: var(--aero-text); }
+.aid-rec-why { font-size: 12px; color: var(--aero-muted); }
+.aid-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 4px 0 4px; }
+.aid-stat {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 6px; border-radius: 12px;
+  background: rgba(255,255,255,0.72); border: 1px solid var(--aero-border);
+}
+.aid-stat b { font-size: 20px; font-weight: 800; color: var(--aero-text); }
+.aid-stat span { font-size: 10.5px; color: var(--aero-muted); text-align: center; }
+.aid-bysize { display: flex; flex-direction: column; gap: 5px; }
+.aid-size-row { display: grid; grid-template-columns: 84px 1fr 48px; align-items: center; gap: 8px; font-size: 11px; }
+.aid-size-row .aib-bar { height: 8px; }
+.aid-runs { max-height: 220px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.aid-live {
+  max-height: 200px; overflow: auto; margin: 0; padding: 10px 12px; border-radius: 10px;
+  font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+  background: #10241a; color: #b7f0c0; border: 1px solid rgba(94,194,46,0.35);
+}
+
+/* Tango helper: bottom-right mascot holding a floating tips panel */
+.tango-helper {
+  /* sit higher off the bottom, and BELOW the topbar's stacking context (z-index 100) so the
+     Settings / MCP popovers open in front of Tango instead of him covering them */
+  position: fixed; right: 96px; bottom: 52px; z-index: 90; pointer-events: none;
+  /* rise up with a single overshoot: quick bounce up, settle down, then stationary */
+  animation: tangoRise 720ms cubic-bezier(.2, 1.5, .4, 1) both;
+}
+@keyframes tangoRise { from { transform: translateY(130%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+/* mascot is the anchor; the box floats ABOVE it (absolute) so opening never moves him */
+.tango-float { position: relative; display: flex; flex-direction: column; align-items: center; }
+
+/* only the box drifts, and gently (mascot stays still until a future state change) */
+.tango-tips {
+  pointer-events: auto; width: 292px; z-index: 2;
+  /* sit fully above the mascot's head (small gap) instead of overlapping it */
+  position: absolute; bottom: calc(100% + 6px); left: 50%; margin-left: -146px;
+  border-radius: 15px; overflow: hidden; background: #fbfff6; border: 2px solid #5ec22e;
+  box-shadow: 0 12px 34px rgba(30,70,20,0.3);
+  animation: tangoBoxFloat 5s ease-in-out infinite;
+}
+/* Tango's colors: green header + yellow accents */
+.tt-head {
+  display: flex; align-items: center; gap: 6px; padding: 8px 11px; font-size: 12.5px; font-weight: 800; color: #14340a;
+  background: linear-gradient(180deg, #86e05a 0%, #5ec22e 100%);
+  text-shadow: 0 1px 0 rgba(255,255,255,0.35);
+}
+.tt-head .tt-count { margin-left: auto; font-size: 11px; opacity: 0.85; font-weight: 800; }
+.tt-x {
+  display: inline-flex; padding: 2px; border: none; border-radius: 6px; cursor: pointer; color: #14340a;
+  background: rgba(255,255,255,0.35);
+}
+.tt-x:hover { background: rgba(255,255,255,0.6); }
+.tt-body { padding: 12px 14px; color: #2c3d22; }
+.tt-body b { display: block; font-size: 14px; margin-bottom: 4px; color: #1f3d10; }
+.tt-body p { margin: 0; font-size: 12.5px; line-height: 1.5; }
+.tt-nav { display: flex; align-items: center; gap: 8px; padding: 4px 10px 10px; }
+.tt-nav button {
+  display: inline-flex; padding: 3px 6px; border-radius: 8px; cursor: pointer; color: #4fae2e;
+  background: #eef7e6; border: 1px solid rgba(94,194,46,0.35);
+}
+.tt-nav button:hover { background: #dff0d0; }
+.tt-dots { display: flex; gap: 5px; margin: 0 auto; }
+.tt-dots span { width: 6px; height: 6px; border-radius: 50%; background: rgba(0,0,0,0.16); transition: background 0.2s ease; }
+.tt-dots span.on { background: #5ec22e; }
+
+.tango-mascot-wrap { position: relative; pointer-events: auto; cursor: pointer; line-height: 0; z-index: 1; }
+.tango-mascot-wrap.bounce { animation: tangoClickBounce 0.45s ease; }
+@keyframes tangoClickBounce {
+  0% { transform: translateY(0) scale(1, 1); }
+  30% { transform: translateY(-12px) scale(1.04, 0.96); }
+  55% { transform: translateY(0) scale(0.97, 1.03); }
+  78% { transform: translateY(-4px) scale(1.01, 0.99); }
+  100% { transform: translateY(0) scale(1, 1); }
+}
+.tango-mascot {
+  width: 148px; height: auto; display: block; -webkit-user-drag: none; user-select: none;
+  /* layered shadow: a tight contact shadow + a soft cast one so he pops off the bg */
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,0.3)) drop-shadow(0 14px 16px rgba(0,0,0,0.32));
+}
+.tango-mascot-wrap:hover .tango-mascot {
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,0.35)) drop-shadow(0 16px 20px rgba(0,0,0,0.4)) brightness(1.03);
+}
+.tango-badge {
+  position: absolute; top: 4px; right: 30px; width: 15px; height: 15px; border-radius: 50%; z-index: 3;
+  background: #ff4d4f; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+  animation: tangoBadge 1.4s ease-in-out infinite;
+}
+@keyframes tangoBadge { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.22); } }

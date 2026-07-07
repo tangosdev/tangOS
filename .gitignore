@@ -9,3 +9,5 @@ release/
 # electron-builder output
 console/release/
 console/out/
+# TypeScript incremental build cache (regenerated every build)
+*.tsbuildinfo

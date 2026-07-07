@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, TerminalSquare, LayoutGrid } from 'lucide-react'
+import type { CSSProperties } from 'react'
 
 export type AppView = 'console' | 'atlas'
 
-const APPS: { id: AppView; name: string; icon: JSX.Element }[] = [
-  { id: 'console', name: 'Chaos Tools', icon: <TerminalSquare size={15} /> },
-  { id: 'atlas', name: 'Chaos Viewer', icon: <LayoutGrid size={15} /> }
+const APPS: { id: AppView; name: string }[] = [
+  { id: 'console', name: 'Chaos Controller' },
+  { id: 'atlas', name: 'Chaos Viewer' }
 ]
 
+/** Top-middle segmented slide toggle: the thumb slides to the active app; clicking a
+ *  segment switches (App.tsx runs the splash). */
 export default function AppSwitcher({
   view,
   onSwitch
@@ -15,44 +16,15 @@ export default function AppSwitcher({
   view: AppView
   onSwitch: (v: AppView) => void
 }): JSX.Element {
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  const current = APPS.find((a) => a.id === view) ?? APPS[0]
-
-  useEffect(() => {
-    if (!open) return
-    function onDown(e: MouseEvent): void {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
-
+  const idx = Math.max(0, APPS.findIndex((a) => a.id === view))
   return (
-    <div className="brand">
-      <span>tang<span className="os">OS</span></span>
-      <div className="pop-wrap" ref={ref}>
-        <button className="app-switch-btn" onClick={() => setOpen((o) => !o)}>
-          {current.icon}
-          {current.name}
-          <ChevronDown size={14} style={{ opacity: 0.6 }} />
+    <div className="app-seg" data-tour="toggle" style={{ '--i': idx } as CSSProperties}>
+      <span className="app-seg-thumb" />
+      {APPS.map((a) => (
+        <button key={a.id} className={a.id === view ? 'on' : ''} onClick={() => onSwitch(a.id)}>
+          {a.name}
         </button>
-        <div className={`app-menu aero-panel${open ? ' open' : ''}`}>
-          {APPS.map((a) => (
-            <button
-              key={a.id}
-              className={`app-menu-item${a.id === view ? ' sel' : ''}`}
-              onClick={() => {
-                setOpen(false)
-                onSwitch(a.id)
-              }}
-            >
-              {a.icon}
-              {a.name}
-            </button>
-          ))}
-        </div>
-      </div>
+      ))}
     </div>
   )
 }

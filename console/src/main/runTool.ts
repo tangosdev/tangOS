@@ -13,6 +13,8 @@ export interface RunOptions {
   client?: { name: string; role?: string }
   allowMutations: boolean
   extraEnv?: Record<string, string> // decrypted vault keys merged into the child env
+  onOutput?: (chunk: string, stream: 'stdout' | 'stderr') => void // live stream tap (progress parsing)
+  onSpawn?: (handle: { runId: string; kill: () => void }) => void // fired once the child is live (for early-stop)
 }
 
 /** Render the argv for a tool from its declared args + supplied values. */
@@ -107,6 +109,7 @@ export function runTool(opts: RunOptions): Promise<RunResult> {
     const push = (chunk: string, stream: 'stdout' | 'stderr') => {
       acc += chunk
       activityBus.publish({ kind: 'run-output', runId, chunk, stream })
+      opts.onOutput?.(chunk, stream)
     }
 
     const env = opts.extraEnv ? { ...process.env, ...opts.extraEnv } : process.env
@@ -125,6 +128,10 @@ export function runTool(opts: RunOptions): Promise<RunResult> {
       resolve({ runId, status: 'error', exitCode: null, output: acc })
       return
     }
+
+    // Hand the caller a kill switch so a running drive can be stopped early
+    // (partial results already streamed out survive via onOutput / the driver's partial .output).
+    opts.onSpawn?.({ runId, kill: () => { try { child.kill() } catch { /* already gone */ } } })
 
     child.stdout?.on('data', (d) => push(d.toString(), 'stdout'))
     child.stderr?.on('data', (d) => push(d.toString(), 'stderr'))

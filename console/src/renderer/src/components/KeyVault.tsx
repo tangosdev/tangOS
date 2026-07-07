@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
-import { KeyRound, Trash2, Plus, ShieldCheck, ShieldAlert } from 'lucide-react'
+import { KeyRound, Trash2, Plus, ShieldCheck, ShieldAlert, Check, X } from 'lucide-react'
 import type { SecretsInfo } from '../../../shared/types'
 
-/** Manage the secure API-key vault: keys stored encrypted (OS DPAPI) and injected
- *  into every tool run as env vars — for repos whose tools call an HTTP API. */
+/** The secure API-key vault: keys stored encrypted (OS DPAPI) and injected into every
+ *  tool run as env vars. Add a key by clicking its provider chip and pasting the value;
+ *  to change one, delete it and add again. */
 export default function KeyVault(): JSX.Element {
   const [info, setInfo] = useState<SecretsInfo | null>(null)
-  const [name, setName] = useState('')
+  const [adding, setAdding] = useState<string | null>(null) // which declared key is being entered
   const [value, setValue] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
@@ -18,44 +19,41 @@ export default function KeyVault(): JSX.Element {
   const stored = new Set((info?.secrets ?? []).map((s) => s.name))
   const missing = (info?.declared ?? []).filter((d) => !stored.has(d))
   const available = info?.available ?? false
-  const activeHelp = info?.help?.[name.trim()]
+  const help = adding ? info?.help?.[adding] : undefined
 
-  async function save(preset?: string): Promise<void> {
-    const key = (preset ?? name).trim()
-    if (!key) {
-      setErr('Enter a key name')
-      return
-    }
+  function begin(name: string): void {
+    setAdding(name)
+    setValue('')
+    setErr('')
+  }
+  function cancel(): void {
+    setAdding(null)
+    setValue('')
+    setErr('')
+  }
+  async function save(): Promise<void> {
+    if (!adding) return
     if (!value.trim()) {
-      setErr('Enter a value')
+      setErr('Paste a value')
       return
     }
     setBusy(true)
     setErr('')
     try {
-      setInfo(await window.tangos.setSecret(key, value))
-      setName('')
-      setValue('')
+      setInfo(await window.tangos.setSecret(adding, value.trim()))
+      cancel()
     } catch (e) {
       setErr(String((e as Error).message ?? e))
     } finally {
       setBusy(false)
     }
   }
-
   async function remove(n: string): Promise<void> {
     setInfo(await window.tangos.deleteSecret(n))
   }
 
   return (
-    <div className="inner-pad">
-      <h2 style={{ margin: '0 0 4px', fontSize: 15 }}>API keys</h2>
-      <p className="hint" style={{ marginBottom: 10 }}>
-        For tools that reach a service over HTTP instead of MCP. Stored encrypted by your OS keychain
-        (Windows DPAPI) and passed to each tool run as an environment variable. Values never leave this
-        machine and are never shown back in full.
-      </p>
-
+    <div className="vault">
       {info && !available && (
         <p className="notice" style={{ color: 'var(--aero-danger)' }}>
           <ShieldAlert size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
@@ -91,14 +89,14 @@ export default function KeyVault(): JSX.Element {
       {missing.length > 0 && (
         <>
           <div className="section-title">This repo&apos;s tools expect</div>
-          <div className="pill-row" style={{ marginBottom: 8, flexWrap: 'wrap', gap: 6 }}>
+          <div className="pill-row" style={{ flexWrap: 'wrap', gap: 6 }}>
             {missing.map((d) => (
               <button
                 key={d}
-                className="aero-button ghost"
+                className={`aero-button ghost${adding === d ? ' active' : ''}`}
                 style={{ fontSize: 12, padding: '5px 10px' }}
-                title={`Fill in ${d}`}
-                onClick={() => setName(d)}
+                title={`Add ${d}`}
+                onClick={() => begin(d)}
               >
                 <Plus size={12} style={{ verticalAlign: -2, marginRight: 3 }} />
                 {d}
@@ -108,49 +106,52 @@ export default function KeyVault(): JSX.Element {
         </>
       )}
 
-      <div className="section-title">Add / update a key</div>
-      <input
-        className="vault-input mono"
-        placeholder="ENV_VAR_NAME"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        disabled={!available}
-      />
-      {activeHelp && (
-        <p className="hint" style={{ margin: '5px 2px 0', fontSize: 11.5, lineHeight: 1.45 }}>
-          {activeHelp.note}{' '}
-          {activeHelp.url && (
-            <a
-              style={{ cursor: 'pointer', color: 'var(--aero-primary)', fontWeight: 600, whiteSpace: 'nowrap' }}
-              onClick={() => window.tangos.openExternal(activeHelp.url!)}
-            >
-              Create one ↗
-            </a>
+      {adding && (
+        <div className="vault-add">
+          <div className="section-title" style={{ marginTop: 10 }}>{adding}</div>
+          {help && (
+            <p className="hint" style={{ margin: '2px 0 6px', fontSize: 11.5, lineHeight: 1.45 }}>
+              {help.note}{' '}
+              {help.url && (
+                <a
+                  style={{ cursor: 'pointer', color: 'var(--aero-primary)', fontWeight: 600, whiteSpace: 'nowrap' }}
+                  onClick={() => window.tangos.openExternal(help.url!)}
+                >
+                  Create one ↗
+                </a>
+              )}
+            </p>
           )}
-        </p>
+          <input
+            className="vault-input mono"
+            type="password"
+            placeholder="paste your key"
+            value={value}
+            autoFocus
+            disabled={!available}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') save()
+              if (e.key === 'Escape') cancel()
+            }}
+          />
+          {err && (
+            <p className="notice" style={{ color: 'var(--aero-danger)', marginTop: 6 }}>
+              {err}
+            </p>
+          )}
+          <div className="pill-row" style={{ marginTop: 8 }}>
+            <button className="aero-button" onClick={save} disabled={busy || !available}>
+              <Check size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
+              Save
+            </button>
+            <button className="aero-button ghost" onClick={cancel}>
+              <X size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
-      <input
-        className="vault-input mono"
-        type="password"
-        placeholder="value — paste your key"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        disabled={!available}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') save()
-        }}
-      />
-      {err && (
-        <p className="notice" style={{ color: 'var(--aero-danger)', marginTop: 6 }}>
-          {err}
-        </p>
-      )}
-      <div className="pill-row" style={{ marginTop: 8 }}>
-        <button className="aero-button" onClick={() => save()} disabled={busy || !available}>
-          <Plus size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
-          Save key
-        </button>
-      </div>
     </div>
   )
 }

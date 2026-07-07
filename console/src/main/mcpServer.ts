@@ -12,7 +12,7 @@ import { ROLE_PRESETS } from '../shared/types'
 export { activityBus } from './activityBus'
 
 export interface BatchApi {
-  next: () => Batch | null
+  next: (agentName?: string) => Batch | null
   list: () => Batch[]
 }
 
@@ -147,7 +147,7 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
     if (!enabled.has(tool.id)) continue
     server.tool(tool.id, describeTool(tool), zodForArg(tool), async (input: Record<string, unknown>) => {
       const c = getClient()
-      const res = await getCtx().run(tool, input ?? {}, 'ai', c ? { name: c.name, role: c.role } : undefined)
+      const res = await getCtx().run(tool, input ?? {}, 'ai', c ? { name: c.name, role: c.roles[0] } : undefined)
       const header = `[tangos] ${tool.id} -> ${res.status}${res.exitCode != null ? ` (exit ${res.exitCode})` : ''}`
       const text = `${header}\n\n${capOutput(res.output || '(no output)')}`
       return { content: [{ type: 'text' as const, text }], isError: res.status !== 'ok' }
@@ -161,8 +161,8 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
       'Pull the next queued batch of work from the tangOS Console. Returns your role instructions (if designated) plus the batch prompt and its target functions, and marks it active. Call repeatedly in a loop to drain the queue; stop when it reports the queue is empty.',
       {},
       async () => {
-        const b = api.next()
         const idle = getClient()
+        const b = api.next(idle?.name) // only batches addressed to this agent (or unaddressed)
         if (!b) {
           // No batch assigned: WAIT. The only allowed action while idle is to re-poll
           // next_batch. This is deliberately the whole message — do not let an idle agent
@@ -183,8 +183,10 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
         if (idle) idle.emptyPolls = 0
         const c = getClient()
         const desc = getCtx().descriptor
-        const rolePrompt = c && c.role && c.role !== 'Unassigned' ? ROLE_PRESETS[c.role] : undefined
-        const prefix = rolePrompt ? `[You are the "${c!.role}" agent.] ${rolePrompt}\n\n` : ''
+        const roles = (c?.roles ?? []).filter((r) => r && r !== 'Unassigned' && ROLE_PRESETS[r])
+        const prefix = roles.length
+          ? `[You are the ${roles.map((r) => `"${r}"`).join(' + ')} agent.] ${roles.map((r) => ROLE_PRESETS[r]).join(' ')}\n\n`
+          : ''
         const hasMatch = !!desc.tools?.find((t) => t.id === 'match')
 
         const targets = b.items.length
@@ -260,10 +262,10 @@ export class McpManager {
   // Fired on raw endpoint traffic (throttled by the consumer) so the UI can show
   // "N requests seen" even when no MCP session ever forms.
   onTraffic?: () => void
-  // Persistent per-agent roles: look up a remembered role by agent name on connect,
+  // Persistent per-agent roles: look up remembered roles by agent name on connect,
   // and report assignments so main can save them across sessions.
-  roleForName?: (name: string) => string | undefined
-  onRoleAssigned?: (name: string, role: string) => void
+  roleForName?: (name: string) => string[] | undefined
+  onRolesAssigned?: (name: string, roles: string[]) => void
 
   constructor(getCtx: () => McpContext) {
     this.getCtx = getCtx
@@ -290,13 +292,13 @@ export class McpManager {
   getClients(): ConnectedClient[] {
     return [...this.clients.values()]
   }
-  setRole(id: string, role: string): void {
+  setRoles(id: string, roles: string[]): void {
     const c = this.clients.get(id)
     if (!c) return
-    c.role = role
+    c.roles = roles
     // apply to any other live sessions of the same agent, and remember it for next time
-    for (const other of this.clients.values()) if (other.name === c.name) other.role = role
-    this.onRoleAssigned?.(c.name, role)
+    for (const other of this.clients.values()) if (other.name === c.name) other.roles = roles
+    this.onRolesAssigned?.(c.name, roles)
     this.onClientsChange?.()
   }
 
@@ -358,7 +360,7 @@ export class McpManager {
             this.clients.set(id, {
               id,
               name: initName,
-              role: remembered ?? 'Unassigned',
+              roles: remembered ?? [],
               connectedAt: Date.now()
             })
             this.lastSeen.set(id, Date.now())
@@ -381,7 +383,7 @@ export class McpManager {
             if (c) {
               c.name = normalizeName(info?.name)
               const remembered = this.roleForName?.(c.name)
-              if (remembered) c.role = remembered // restore the role this agent had before
+              if (remembered) c.roles = remembered // restore the roles this agent had before
               this.onClientsChange?.()
             }
           }

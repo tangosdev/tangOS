@@ -1,8 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Power, PowerOff, Copy, Plug, Users, Check, Sparkles } from 'lucide-react'
-import type { McpState, ConnectedClient } from '../../../shared/types'
-import { ROLE_NAMES } from '../../../shared/types'
-import { aiColor } from '../aiColor'
+import type { McpState } from '../../../shared/types'
 
 interface RegisterOutcome {
   target: string
@@ -20,12 +18,10 @@ function ago(ts: number): string {
 
 export default function McpBubble({
   mcp,
-  onMcp,
-  clients
+  onMcp
 }: {
   mcp: McpState | null
   onMcp: (m: McpState) => void
-  clients: ConnectedClient[]
 }): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [outcomes, setOutcomes] = useState<RegisterOutcome[] | null>(null)
@@ -33,23 +29,6 @@ export default function McpBubble({
   const [prompt, setPrompt] = useState('')
   const [copied, setCopied] = useState(false)
   const running = mcp?.running ?? false
-
-  // One row per AGENT (by name) — multiple live sessions of the same AI collapse
-  // into a single entry so a reconnecting Grok isn't three rows.
-  const agents = useMemo(() => {
-    const m = new Map<string, ConnectedClient[]>()
-    for (const c of clients) {
-      const arr = m.get(c.name)
-      if (arr) arr.push(c)
-      else m.set(c.name, [c])
-    }
-    return [...m.entries()].map(([name, list]) => ({
-      name,
-      id: list[0].id,
-      role: list.find((c) => c.role !== 'Unassigned')?.role ?? list[0].role,
-      sessions: list.length
-    }))
-  }, [clients])
 
   useEffect(() => {
     window.tangos.agentPrompt().then(setPrompt).catch(() => setPrompt(''))
@@ -178,32 +157,9 @@ export default function McpBubble({
         {copied ? 'Copied' : 'Copy prompt'}
       </button>
 
-      <div className="section-title" style={{ marginTop: 14 }}>Connected agents · {agents.length}</div>
-      {agents.length === 0 ? (
-        <p className="notice" style={{ marginTop: 0 }}>No AI connected yet. Add the URL to your AI and it&apos;ll appear here — assign each one a role to give it standing instructions via next_batch (remembered across sessions).</p>
-      ) : (
-        <div className="agent-list">
-          {agents.map((a) => (
-            <div className="agent-row" key={a.name}>
-              <span className="agent-dot" style={{ background: aiColor(a.name) }} />
-              <span className="agent-name">
-                {a.name}
-                {a.sessions > 1 && <span className="agent-sessions"> · {a.sessions} sessions</span>}
-              </span>
-              <select
-                className={`agent-role${a.role === 'Unassigned' ? ' needs' : ''}`}
-                value={a.role}
-                onChange={(e) => window.tangos.setClientRole(a.id, e.target.value)}
-                title="Assign this agent's role — sets standing instructions injected into its next_batch. Remembered for this agent across sessions."
-              >
-                {ROLE_NAMES.map((r) => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
-              </select>
-            </div>
-          ))}
-        </div>
-      )}
+      <p className="notice" style={{ marginTop: 12 }}>
+        Connected agents appear as boxes in the controller, where you assign each a role and its work.
+      </p>
     </div>
   )
 }

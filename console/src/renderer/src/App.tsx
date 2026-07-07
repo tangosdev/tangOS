@@ -1,22 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
-import { ShieldCheck, AlertTriangle, GitBranch, FolderOpen, KeyRound, RefreshCw } from 'lucide-react'
-import type { RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchDraft, BatchItem, Review, ConnectedClient } from '../../shared/types'
+import { Settings2, FolderOpen, RefreshCw } from 'lucide-react'
+import type {
+  RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchItem, Review, AiAgent
+} from '../../shared/types'
 import RepoPicker from './components/RepoPicker'
 import DescriptorGate from './components/DescriptorGate'
 import ToolPalette from './components/ToolPalette'
 import McpBubble from './components/McpBubble'
-import KeyVault from './components/KeyVault'
 import Requirements from './components/Requirements'
-import LiveViewer from './components/LiveViewer'
-import PromptComposer from './components/PromptComposer'
+import Controller from './components/Controller'
+import AiDetail from './components/AiDetail'
+import SettingsPanel from './components/Settings'
 import AtlasView from './components/AtlasView'
+import TangoHelper from './components/TangoHelper'
+import TangoTour from './components/TangoTour'
 import AppSwitcher, { type AppView } from './components/AppSwitcher'
 import Splash from './components/Splash'
 import ReviewPanel from './components/ReviewPanel'
 import WindowControls from './components/WindowControls'
 
 const THEMES = ['aero', 'sunset', 'deepsea', 'bubblegum', 'mint', 'hal']
-const APP_LABEL: Record<AppView, string> = { console: 'Chaos Tools', atlas: 'Chaos Viewer' }
+const APP_LABEL: Record<AppView, string> = { console: 'Chaos Controller', atlas: 'Chaos Viewer' }
 
 export default function App(): JSX.Element {
   const [repo, setRepo] = useState<RepoState | null>(null)
@@ -24,7 +28,6 @@ export default function App(): JSX.Element {
   const [allowMutations, setAllowMutations] = useState(true)
   const [enabledIds, setEnabledIds] = useState<string[]>([])
   const [batches, setBatches] = useState<Batch[]>([])
-  const [draft, setDraft] = useState<BatchDraft>({ title: '', prompt: '', items: [] })
   const [theme, setTheme] = useState('aero')
   const [runs, setRuns] = useState<ActivityRun[]>([])
   const [mcpOpen, setMcpOpen] = useState(false)
@@ -34,18 +37,22 @@ export default function App(): JSX.Element {
   const [safeMode, setSafeMode] = useState(false)
   const [reviews, setReviews] = useState<Review[]>([])
   const [baseBranch, setBaseBranch] = useState<string | null>(null)
-  const [clients, setClients] = useState<ConnectedClient[]>([])
-  const [keysOpen, setKeysOpen] = useState(false)
+  const [agents, setAgents] = useState<AiAgent[]>([])
+  const [cart, setCart] = useState<BatchItem[]>([]) // functions picked in the Viewer, to assign as a custom batch
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [reportsEnabled, setReportsEnabled] = useState(false)
+  const [useAgents, setUseAgents] = useState(false)
+  const [autoLand, setAutoLand] = useState(true)
+  const [looping, setLooping] = useState<string[]>([])
+  const [tourSeen, setTourSeen] = useState(true) // assume seen until state loads, to avoid a flash
+  const [detailName, setDetailName] = useState<string | null>(null)
   const [reloadNote, setReloadNote] = useState<string | null>(null)
   const popRef = useRef<HTMLDivElement>(null)
-  const keysRef = useRef<HTMLDivElement>(null)
+  const settingsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    let unsubActivity = () => {}
-    let unsubState = () => {}
-    const unsubDraftAdd = window.tangos.onDraftAdd((item) => {
-      setDraft((d) => (d.items.some((i) => i.ref === item.ref) ? d : { ...d, items: [...d.items, item] }))
-    })
+    let unsubActivity = (): void => {}
+    let unsubState = (): void => {}
     const unsubReload = window.tangos.onDescriptorReloaded((info) => {
       const errs = info.errors ? ` · ${info.errors} error(s)` : ''
       setReloadNote(`Descriptor reloaded · ${info.toolCount} tools${errs}`)
@@ -61,7 +68,12 @@ export default function App(): JSX.Element {
       setSafeMode(s.safeMode)
       setReviews(s.reviews)
       setBaseBranch(s.baseBranch)
-      setClients(s.clients)
+      setAgents(s.agents)
+      setReportsEnabled(s.reportsEnabled)
+      setUseAgents(s.useAgents)
+      setAutoLand(s.autoLand)
+      setLooping(s.looping)
+      setTourSeen(s.tourSeen)
       setRuns(await window.tangos.activitySnapshot())
       unsubActivity = window.tangos.onActivity(applyActivity)
       unsubState = window.tangos.onState((st) => {
@@ -73,13 +85,17 @@ export default function App(): JSX.Element {
         setSafeMode(st.safeMode)
         setReviews(st.reviews)
         setBaseBranch(st.baseBranch)
-        setClients(st.clients)
+        setAgents(st.agents)
+        setReportsEnabled(st.reportsEnabled)
+        setUseAgents(st.useAgents)
+        setAutoLand(st.autoLand)
+        setLooping(st.looping)
+        setTourSeen(st.tourSeen)
       })
     })()
     return () => {
       unsubActivity()
       unsubState()
-      unsubDraftAdd()
       unsubReload()
     }
   }, [])
@@ -105,12 +121,12 @@ export default function App(): JSX.Element {
   }, [mcpOpen])
 
   useEffect(() => {
-    if (!keysOpen) return
+    if (!settingsOpen) return
     function onDown(e: MouseEvent): void {
-      if (keysRef.current && !keysRef.current.contains(e.target as Node)) setKeysOpen(false)
+      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) setSettingsOpen(false)
     }
     function onKey(e: KeyboardEvent): void {
-      if (e.key === 'Escape') setKeysOpen(false)
+      if (e.key === 'Escape') setSettingsOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
@@ -118,7 +134,7 @@ export default function App(): JSX.Element {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [keysOpen])
+  }, [settingsOpen])
 
   function applyActivity(ev: ActivityEvent): void {
     setRuns((prev) => {
@@ -143,16 +159,12 @@ export default function App(): JSX.Element {
     setEnabledIds(ids)
     await window.tangos.setEnabledTools(ids)
   }
-  function addToBatch(item: BatchItem): void {
-    setDraft((d) => (d.items.some((i) => i.ref === item.ref) ? d : { ...d, items: [...d.items, item] }))
-  }
-  function removeFromBatch(ref: string): void {
-    setDraft((d) => ({ ...d, items: d.items.filter((i) => i.ref !== ref) }))
-  }
   function switchApp(target: AppView): void {
     if (target === view) return
     setSplash(APP_LABEL[target])
-    setView(target)
+    // Swap the view only once the splash has fully faded in to cover the screen
+    // (splashSeq is opaque from ~350ms), so the destination never flashes underneath.
+    window.setTimeout(() => setView(target), 450)
     window.setTimeout(() => setSplash(null), 1750)
   }
   async function changeRepo(): Promise<void> {
@@ -165,31 +177,58 @@ export default function App(): JSX.Element {
   async function reloadDescriptor(): Promise<void> {
     setRepo(await window.tangos.reloadDescriptor())
   }
+  function addToCart(item: BatchItem): void {
+    setCart((c) => (c.some((i) => i.ref === item.ref) ? c : [...c, item]))
+  }
+  function removeFromCart(ref: string): void {
+    setCart((c) => c.filter((i) => i.ref !== ref))
+  }
+  async function assignCart(agent: string): Promise<void> {
+    if (!cart.length) return
+    await window.tangos.assignBatch(
+      { title: `Custom batch (${cart.length})`, prompt: 'Match these hand-picked targets.', items: cart },
+      agent
+    )
+  }
 
   const descriptorOk = !!repo?.descriptor && (repo?.validationErrors?.length ?? 0) === 0
   const showControls = !!repo?.path && descriptorOk
+  const detailAgent = detailName ? agents.find((a) => a.name === detailName) ?? null : null
+
+  const mcpPill = (
+    <div className="pop-wrap" data-tour="mcp" ref={popRef}>
+      <button className={`tb-btn ${mcp?.running ? 'on' : 'off'}`} onClick={() => setMcpOpen((o) => !o)}>
+        <span className="dot" />
+        MCP: {mcp?.running ? 'ON' : 'OFF'}
+      </button>
+      <div className={`bubble-pop aero-panel solid${mcpOpen ? ' open' : ''}`}>
+        {mcpOpen && <McpBubble mcp={mcp} onMcp={setMcp} />}
+      </div>
+    </div>
+  )
 
   const consoleBody = (
-    <div className="workspace">
-      <div className="col left aero-scroll">
-        <div className={`req-slot${reqAllSet ? ' below' : ''}`}>
-          <Requirements repo={repo!} onStatus={setReqAllSet} />
-        </div>
+    <div className="workspace ctl-workspace">
+      <Controller
+        agents={agents}
+        runs={runs}
+        batches={batches}
+        looping={looping}
+        cartCount={cart.length}
+        onAssignCart={assignCart}
+        onClearCart={() => setCart([])}
+        onOpenViewer={() => switchApp('atlas')}
+        allowMutations={allowMutations}
+        safeMode={safeMode}
+        onToggleWrites={toggleMutations}
+        onToggleReview={toggleSafeMode}
+        onOpenDetail={setDetailName}
+        mcpControl={mcpPill}
+      />
+      <div className="right-rail aero-scroll">
         <ToolPalette repo={repo!} allowMutations={allowMutations} enabledIds={enabledIds} onSetEnabled={setEnabled} />
-      </div>
-      <div className="col right-col">
-        <LiveViewer runs={runs} onClear={() => setRuns([])} />
-        <div className="mcp-footer">
-          <div className="pop-wrap up" ref={popRef}>
-            <button className={`tb-btn ${mcp?.running ? 'on' : 'off'}`} onClick={() => setMcpOpen((o) => !o)}>
-              <span className="dot" />
-              MCP: {mcp?.running ? 'ON' : 'OFF'}
-            </button>
-            <div className={`bubble-pop aero-panel${mcpOpen ? ' open' : ''}`}>
-              <McpBubble mcp={mcp} onMcp={setMcp} clients={clients} />
-            </div>
-          </div>
-          {mcp?.running && <span className="mcp-foot-url mono">{mcp.url}</span>}
+        <div className="req-slot below">
+          <Requirements repo={repo!} onStatus={setReqAllSet} />
         </div>
       </div>
     </div>
@@ -200,9 +239,9 @@ export default function App(): JSX.Element {
   else if (!repo.hasDescriptor || !descriptorOk) body = <div className="center-stage"><DescriptorGate repo={repo} onChanged={setRepo} /></div>
   else body = view === 'atlas'
     ? <AtlasView
-        onAdd={addToBatch}
-        onRemove={removeFromBatch}
-        draftRefs={new Set(draft.items.map((i) => i.ref))}
+        onAdd={addToCart}
+        onRemove={removeFromCart}
+        draftRefs={new Set(cart.map((i) => i.ref))}
         liveEnabled={!!repo?.descriptor?.data?.committedDbUrl}
         claimsEnabled={!!repo?.descriptor?.data?.claimsApi}
       />
@@ -211,79 +250,62 @@ export default function App(): JSX.Element {
   return (
     <div className="app">
       <div className="topbar">
-        {showControls ? (
-          <AppSwitcher view={view} onSwitch={switchApp} />
-        ) : (
-          <div className="brand"><span>tang<span className="os">OS</span></span><span className="sub">Chaos Tools</span></div>
-        )}
-        {repo?.path && (
-          <button className="repo-chip" title={`${repo.path}\n(click to choose a different repo)`} onClick={changeRepo}>
-            <FolderOpen size={14} style={{ flex: 'none', opacity: 0.7 }} />
-            <span className="name">{repo.descriptor?.project?.title ?? 'repo'}</span>
-            <span className="path">{repo.path}</span>
-          </button>
-        )}
-        <div className="spacer" />
-        {showControls && (
-          <>
-            <button
-              className={`tb-btn ${allowMutations ? 'warn' : ''}`}
-              onClick={toggleMutations}
-              title={allowMutations ? 'Tools may write to the repo' : 'Read-only: mutating tools are blocked'}
-            >
-              {allowMutations ? <AlertTriangle size={14} /> : <ShieldCheck size={14} />}
-              Writes: {allowMutations ? 'ON' : 'OFF'}
+        <div className="tb-left">
+          <div className="brand">
+            <span>tang<span className="os">OS</span></span>
+            {!showControls && <span className="sub">Chaos Controller</span>}
+          </div>
+        </div>
+        <div className="tb-center">{showControls && <AppSwitcher view={view} onSwitch={switchApp} />}</div>
+        <div className="tb-right">
+          {repo?.path && !showControls && (
+            <button className="repo-chip" title={repo.path} onClick={changeRepo}>
+              <FolderOpen size={14} style={{ flex: 'none', opacity: 0.7 }} />
+              <span className="path">{repo.path}</span>
             </button>
-            <button
-              className={`tb-btn ${safeMode ? 'active' : ''}`}
-              onClick={toggleSafeMode}
-              title={safeMode ? 'Mutations run on tangos/work for review before merge' : 'Mutations write straight to your branch'}
-            >
-              <GitBranch size={14} />
-              Review: {safeMode ? 'ON' : 'OFF'}
+          )}
+          {showControls && (
+            <button className="tb-btn icononly" onClick={reloadDescriptor} title="Reload tangos.json from disk">
+              <RefreshCw size={15} />
             </button>
-            <div className="pop-wrap" ref={keysRef}>
+          )}
+          {showControls && (
+            <div className="pop-wrap" data-tour="settings" ref={settingsRef}>
               <button
-                className={`tb-btn ${keysOpen ? 'active' : ''}`}
-                onClick={() => setKeysOpen((o) => !o)}
-                title="Securely store API keys for tools that call an HTTP service instead of MCP"
+                className={`tb-btn icononly ${settingsOpen ? 'active' : ''}`}
+                onClick={() => setSettingsOpen((o) => !o)}
+                title="Settings — keys, theme, repo"
               >
-                <KeyRound size={14} />
-                Keys
+                <Settings2 size={15} />
               </button>
-              <div className={`bubble-pop aero-panel solid${keysOpen ? ' open' : ''}`}>
-                {keysOpen && <KeyVault />}
+              <div className={`bubble-pop aero-panel solid${settingsOpen ? ' open' : ''}`}>
+                {settingsOpen && (
+                  <SettingsPanel
+                    repo={repo}
+                    theme={theme}
+                    themes={THEMES}
+                    onTheme={setTheme}
+                    onPickRepo={changeRepo}
+                    reportsEnabled={reportsEnabled}
+                    useAgents={useAgents}
+                    autoLand={autoLand}
+                  />
+                )}
               </div>
             </div>
-            <button
-              className="tb-btn icononly"
-              onClick={reloadDescriptor}
-              title="Reload tangos.json from disk (edits also hot-reload automatically on save)"
-            >
-              <RefreshCw size={14} />
-            </button>
-          </>
-        )}
-        <select className="theme-select" value={theme} onChange={(e) => setTheme(e.target.value)}>
-          {THEMES.map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
-        <WindowControls />
+          )}
+          <WindowControls />
+        </div>
       </div>
 
       {body}
 
       {showControls && reviews.length > 0 && <ReviewPanel reviews={reviews} baseBranch={baseBranch} />}
-      {showControls && (
-        <PromptComposer
-          draft={draft}
-          onDraft={setDraft}
-          batches={batches}
-          mcpRunning={!!mcp?.running}
-          readyAgents={clients.filter((c) => c.name && !c.name.startsWith('connecting')).length}
-        />
+      {showControls && view === 'console' && tourSeen && <TangoHelper firstRun={false} />}
+      {showControls && view === 'console' && !tourSeen && (
+        <TangoTour onDone={() => window.tangos.markTourSeen()} />
       )}
+      {detailAgent && <AiDetail agent={detailAgent} runs={runs} onClose={() => setDetailName(null)} />}
       {splash && <Splash label={splash} />}
       {reloadNote && <div className="reload-toast aero-glass">{reloadNote}</div>}
     </div>
