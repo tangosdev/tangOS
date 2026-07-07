@@ -71,6 +71,7 @@ const api = {
   setClientRole: (id: string, role: string): Promise<ConnectedClient[]> =>
     ipcRenderer.invoke('clients:setRole', { id, role }),
 
+  generateBatch: (count?: number): Promise<BatchDraft> => ipcRenderer.invoke('batch:generate', count),
   enqueueBatch: (draft: BatchDraft): Promise<Batch[]> => ipcRenderer.invoke('batch:enqueue', draft),
   removeBatch: (id: string): Promise<Batch[]> => ipcRenderer.invoke('batch:remove', id),
   reorderBatch: (id: string, dir: 'up' | 'down'): Promise<Batch[]> =>

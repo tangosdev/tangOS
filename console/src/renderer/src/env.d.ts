@@ -58,6 +58,7 @@ export interface TangosApi {
   mergeReview(): Promise<boolean>
   discardReview(): Promise<boolean>
   setClientRole(id: string, role: string): Promise<ConnectedClient[]>
+  generateBatch(count?: number): Promise<BatchDraft>
   enqueueBatch(draft: BatchDraft): Promise<Batch[]>
   removeBatch(id: string): Promise<Batch[]>
   reorderBatch(id: string, dir: 'up' | 'down'): Promise<Batch[]>

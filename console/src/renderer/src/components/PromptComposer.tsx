@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Send, Plus, X, ChevronUp, ChevronDown, Trash2, ArrowUp, ArrowDown, AlertTriangle } from 'lucide-react'
+import { Send, Plus, X, ChevronUp, ChevronDown, Trash2, ArrowUp, ArrowDown, AlertTriangle, Sparkles } from 'lucide-react'
 import type { Batch, BatchDraft, BatchItem } from '../../../shared/types'
 import { BATCH_SOFT_CAP } from '../../../shared/types'
 
@@ -7,21 +7,26 @@ export default function PromptComposer({
   draft,
   onDraft,
   batches,
-  mcpRunning
+  mcpRunning,
+  readyAgents
 }: {
   draft: BatchDraft
   onDraft: (d: BatchDraft) => void
   batches: Batch[]
   mcpRunning: boolean
+  readyAgents: number
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const [showQueue, setShowQueue] = useState(true)
   const [newRef, setNewRef] = useState('')
+  const [genning, setGenning] = useState(false)
 
   const overCap = draft.items.length > BATCH_SOFT_CAP
   const queued = batches.filter((b) => b.status === 'queued')
   const active = batches.find((b) => b.status === 'active')
   const doneCount = batches.filter((b) => b.status === 'done').length
+  const noAgent = !mcpRunning || readyAgents === 0
+  const emptyDraft = !draft.prompt.trim() && draft.items.length === 0
 
   function addItem(): void {
     const ref = newRef.trim()
@@ -37,7 +42,26 @@ export default function PromptComposer({
   async function send(): Promise<void> {
     if (!draft.prompt.trim() && draft.items.length === 0) return
     await window.tangos.enqueueBatch(draft)
-    onDraft({ title: '', prompt: draft.prompt, items: [] }) // keep prompt, clear the rest
+    onDraft({ title: '', prompt: '', items: [] }) // clear the composer for the next batch
+  }
+
+  // Fill the composer with N functions the scheduler picked by opcode similarity to
+  // already-matched code. Preserves any title/prompt the human already typed.
+  async function generate(): Promise<void> {
+    setGenning(true)
+    try {
+      const d = await window.tangos.generateBatch(16)
+      onDraft({
+        title: draft.title || d.title,
+        prompt: draft.prompt.trim() ? draft.prompt : d.prompt,
+        items: d.items
+      })
+      setOpen(true)
+    } catch (e) {
+      alert(String((e as Error).message ?? e))
+    } finally {
+      setGenning(false)
+    }
   }
 
   return (
@@ -48,6 +72,18 @@ export default function PromptComposer({
         {queued.length > 0 && <span className="aero-badge">{queued.length} queued</span>}
         {active && <span className="status-dot running" style={{ width: 8, height: 8 }} />}
         <div style={{ flex: 1 }} />
+        <button
+          className="ch-generate-hd"
+          onClick={(e) => {
+            e.stopPropagation()
+            generate()
+          }}
+          disabled={genning}
+          title="Fill the composer with 16 functions ranked by similarity to already-matched code"
+        >
+          <Sparkles size={14} style={{ verticalAlign: -2, marginRight: 5 }} />
+          {genning ? 'Generating…' : 'Generate batch'}
+        </button>
         <button
           className="dock-close"
           onClick={(e) => {
@@ -61,6 +97,11 @@ export default function PromptComposer({
       </div>
 
       <div className="composer-body aero-scroll">
+        <p className="hint" style={{ margin: '0 0 8px' }}>
+          <b>Generate batch</b> (header button) fills this with 16 unmatched functions ranked by opcode
+          similarity to matched code, each with a matched sibling as scaffolding.
+        </p>
+
         <input
           className="ch-input"
           placeholder="Batch title (optional)"
@@ -104,11 +145,22 @@ export default function PromptComposer({
           </div>
         )}
 
-        <button className="aero-button ch-send" onClick={send} disabled={!draft.prompt.trim() && draft.items.length === 0}>
+        <button
+          className="aero-button ch-send"
+          onClick={send}
+          disabled={noAgent || emptyDraft}
+          title={noAgent ? 'Connect an AI to the MCP server before queuing work' : undefined}
+        >
           <Send size={15} style={{ verticalAlign: -2, marginRight: 6 }} />
           Send to queue
         </button>
-        {!mcpRunning && <p className="notice" style={{ marginTop: 6 }}>Start the MCP server so the AI can pull batches with next_batch.</p>}
+        {noAgent && (
+          <p className="notice" style={{ marginTop: 6 }}>
+            {!mcpRunning
+              ? 'Start the MCP server and connect an AI before you can queue work.'
+              : 'Waiting for an AI to connect to the MCP — you can queue once one is ready.'}
+          </p>
+        )}
 
         <div className="section-title" style={{ marginTop: 10, cursor: 'pointer' }} onClick={() => setShowQueue((s) => !s)}>
           Queue · {queued.length} waiting{active ? ' · 1 active' : ''}{doneCount ? ` · ${doneCount} done` : ''}
