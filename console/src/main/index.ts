@@ -70,6 +70,18 @@ const agentLoop = new Set<string>()
 // end a drive early. Whatever the driver already landed is kept (matches are recorded live).
 const driveKills = new Map<string, () => void>()
 
+// Batch generation is serialized: the scheduler ranks the whole corpus and is CPU/RAM heavy,
+// so running two at once (e.g. clicking Recommended on a second AI mid-generation, on top of a
+// live scan) thrashes the machine and can make one scheduler die before it writes its worklist.
+// Each generation waits for the previous to finish; the second also then sees the first's batch
+// in the "taken" set, so two agents never get the same targets.
+let genChain: Promise<unknown> = Promise.resolve()
+function serializeGen<T>(fn: () => Promise<T>): Promise<T> {
+  const run = genChain.then(fn, fn) // run after the previous settles (success OR failure)
+  genChain = run.catch(() => {}) // a failed generation must not wedge the queue
+  return run
+}
+
 /**
  * Run a tool, wrapping mutating runs in safe-mode git handling when enabled:
  * isolate on the tangos/work branch, commit what changed, and record a review.
@@ -832,7 +844,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
 ipcMain.handle('batch:generate', async (_e, arg: number | { count?: number; role?: string } = 16) => {
   const role = typeof arg === 'object' ? arg.role : undefined
   const count = (typeof arg === 'object' ? arg.count : arg) ?? roleBatchSize(role)
-  return genDraft(role, count)
+  return serializeGen(() => genDraft(role, count)) // share the single-scheduler-at-a-time queue
 })
 
 ipcMain.handle('repo:pick', async () => {
@@ -951,12 +963,15 @@ ipcMain.handle('batch:assign', (_e, payload: { draft: BatchDraft; agentName: str
   addBatch(payload.draft, payload.agentName)
 )
 
-/** Generate a role-aware batch and address it to one AI, setting/clearing its loop flag. */
-async function assignToAgent(agentName: string, role: string, count: number, loop: boolean): Promise<void> {
+/** Generate a role-aware batch and address it to one AI, setting/clearing its loop flag.
+ *  Serialized against other generations so schedulers never run concurrently. */
+function assignToAgent(agentName: string, role: string, count: number, loop: boolean): Promise<void> {
   if (loop) agentLoop.add(agentName)
   else agentLoop.delete(agentName)
-  const draft = await genDraft(role && role !== 'Unassigned' ? role : undefined, count)
-  addBatch(draft, agentName)
+  return serializeGen(async () => {
+    const draft = await genDraft(role && role !== 'Unassigned' ? role : undefined, count)
+    addBatch(draft, agentName) // inside the lock, so the next queued generation sees these as taken
+  })
 }
 
 ipcMain.handle('ai:assign', async (_e, p: { agent: string; role?: string; count: number; loop?: boolean }) => {
