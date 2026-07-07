@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, Search, Plus, X, Database, Cloud, HardDrive, Users, Lock, ExternalLink } from 'lucide-react'
+import { RefreshCw, Search, Plus, Minus, X, Database, Cloud, HardDrive, Users, Lock, ExternalLink } from 'lucide-react'
 import type { AtlasDb, AtlasFunction, BatchItem, Claim, GithubCredits } from '../../../shared/types'
 import Treemap from './Treemap'
 import { sortFns, SORT_LABELS, type SortKey } from '../atlas/sort'
@@ -12,10 +12,14 @@ const PALETTE = [
 
 export default function AtlasView({
   onAdd,
+  onRemove,
+  draftRefs,
   liveEnabled,
   claimsEnabled
 }: {
   onAdd: (item: BatchItem) => void
+  onRemove: (ref: string) => void
+  draftRefs: Set<string>
   liveEnabled: boolean
   claimsEnabled: boolean
 }): JSX.Element {
@@ -184,7 +188,7 @@ export default function AtlasView({
           {liveEnabled && (
             <div className="seg" title="Live = the whole team's published progress (recommended). Local = your generated data.">
               <button className={source === 'live' ? 'on' : ''} onClick={() => load('live', true)}><Cloud size={12} /> Live</button>
-              <button className={source === 'local' ? 'on' : ''} onClick={() => load('local')}><HardDrive size={12} /> Local</button>
+              <button className={source === 'local' ? 'on' : ''} onClick={generate} title="Recount from your repo (reads src/ + symbols now)"><HardDrive size={12} /> Local</button>
             </div>
           )}
           <span className="hint" style={{ margin: 0 }}>
@@ -295,6 +299,51 @@ export default function AtlasView({
         )}
       </div>
 
+      {selectedFn && (
+        <div className="atlas-detail aero-panel">
+          <span className="ad-name mono">{selectedFn.name}</span>
+          <span className="ad-meta">
+            {selectedFn.module} · 0x{selectedFn.addr.toString(16).padStart(8, '0')} · {selectedFn.size}b ·{' '}
+            {selectedFn.matched
+              ? 'matched'
+              : selectedFn.div != null
+                ? `near-miss (div ${selectedFn.div})`
+                : selectedFn.srcPath
+                  ? 'draft'
+                  : 'unmatched'}
+          </span>
+          <div style={{ flex: 1 }} />
+          {!selectedFn.matched &&
+            (draftRefs.has(selectedFn.name) ? (
+              <button className="aero-button danger" onClick={() => onRemove(selectedFn.name)}>
+                <Minus size={14} style={{ verticalAlign: -2, marginRight: 5 }} />
+                Remove from batch
+              </button>
+            ) : (
+              <button
+                className="aero-button"
+                onClick={() =>
+                  onAdd({
+                    id: `${Date.now()}-${selectedFn.name}`,
+                    ref: selectedFn.name,
+                    label: selectedFn.module,
+                    module: selectedFn.module,
+                    addr: selectedFn.addr,
+                    size: selectedFn.size,
+                    srcPath: selectedFn.srcPath
+                  })
+                }
+              >
+                <Plus size={14} style={{ verticalAlign: -2, marginRight: 5 }} />
+                Add to batch
+              </button>
+            ))}
+          <button className="run-icon" title="close" onClick={() => { setSelectedFn(null); setModuleFilter(null) }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       <div className="atlas-toolbar aero-panel">
         <div className="atlas-search">
           <Search size={14} />
@@ -334,16 +383,24 @@ export default function AtlasView({
                 )}
               </span>
               <span className="fn-add">
-                {!f.matched && (
+                {!f.matched && (draftRefs.has(f.name) ? (
+                  <button
+                    className="bubble-btn added"
+                    title="Remove from batch"
+                    onClick={() => onRemove(f.name)}
+                  >
+                    <Minus size={14} strokeWidth={2.5} />
+                  </button>
+                ) : (
                   <button
                     className="bubble-btn"
                     disabled={claimedByOther}
                     title={claimedByOther ? `claimed by ${c!.handle} — the AI will handle claiming` : 'Add to batch'}
-                    onClick={() => { if (!claimedByOther) onAdd({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module }) }}
+                    onClick={() => { if (!claimedByOther) onAdd({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module, module: f.module, addr: f.addr, size: f.size, srcPath: f.srcPath }) }}
                   >
                     <Plus size={14} strokeWidth={2.5} />
                   </button>
-                )}
+                ))}
               </span>
             </div>
           )

@@ -6,7 +6,7 @@ import { sortFns, SORT_LABELS, type SortKey } from '../atlas/sort'
 import type { AtlasDb, AtlasFunction, Claim } from '../../../shared/types'
 
 function addToBatch(f: AtlasFunction): void {
-  window.tangos.addDraftItem({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module })
+  window.tangos.addDraftItem({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module, module: f.module, addr: f.addr, size: f.size, srcPath: f.srcPath })
 }
 
 export default function ModulePopout({ module }: { module: string }): JSX.Element {
