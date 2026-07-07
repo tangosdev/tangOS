@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Sparkles, Play, Square, ShoppingCart, ShieldCheck, AlertTriangle, GitBranch } from 'lucide-react'
 import type { AiAgent, ActivityRun, Batch } from '../../../shared/types'
 import { ROLE_NAMES, ROLE_PRESETS } from '../../../shared/types'
@@ -7,6 +7,20 @@ import { recommendRole } from '../roleRec'
 import GithubSignIn from './GithubSignIn'
 
 const SIZES = [8, 16, 32, 64] // batch-size options; -1 = infinite (continuous)
+
+/** Ticks mm:ss from mount — shows the batch generator is working, not frozen. */
+function Elapsed(): JSX.Element {
+  const [s, setS] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setS((x) => x + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+  return (
+    <span className="aib-elapsed">
+      {Math.floor(s / 60)}:{(s % 60).toString().padStart(2, '0')}
+    </span>
+  )
+}
 
 function runName(r: ActivityRun): string {
   return r.source === 'ai' ? r.client?.name ?? 'AI' : 'You'
@@ -153,7 +167,10 @@ export default function Controller({
               >
                 {generating && (
                   <div className="aib-loading">
-                    <span className="aib-loadtext">Generating batch…</span>
+                    <span className="aib-loadtext">
+                      Generating batch… <Elapsed />
+                    </span>
+                    <span className="aib-loadsub">ranking targets by similarity — up to a minute on a cold start</span>
                     <span className="aib-loadbar" />
                   </div>
                 )}

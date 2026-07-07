@@ -797,6 +797,8 @@ html, body, #root { background: transparent !important; }
   background: rgba(236,243,250,0.86); backdrop-filter: blur(1.5px);
 }
 .aib-loadtext { font-size: 12px; font-weight: 700; color: var(--aero-muted); }
+.aib-elapsed { font-variant-numeric: tabular-nums; color: rgb(var(--aero-primary-rgb)); }
+.aib-loadsub { font-size: 10.5px; color: var(--aero-muted); opacity: 0.8; max-width: 84%; text-align: center; }
 .aib-loadbar { position: relative; width: 62%; height: 6px; border-radius: 999px; background: rgba(0,0,0,0.1); overflow: hidden; }
 .aib-loadbar::before {
   content: ''; position: absolute; top: 0; height: 100%; width: 38%; border-radius: 999px;

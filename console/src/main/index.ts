@@ -753,15 +753,38 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   if (!sched) throw new Error('this repo has no similarity scheduler (coddog) in tangos.json')
 
   const outPath = join(app.getPath('temp'), `tangos-batch-${randomUUID()}.jsonl`)
-  await runTool({
-    tool: sched,
-    values: { ...plan.values, out: outPath },
-    runtime: currentRuntime(),
-    source: 'user',
-    repoPath: state.repoPath,
-    allowMutations: false,
-    extraEnv: secretsEnv()
-  })
+  // The scheduler ranks the whole corpus every run (coddog disassembles + scores thousands of
+  // functions, then keeps `limit`), so a cold machine can take a minute+. Cap it so a wedged or
+  // pathologically slow run surfaces a clear error instead of an app that looks frozen forever.
+  let schedKill: (() => void) | null = null
+  let timedOut = false
+  const SCHED_TIMEOUT_MS = 5 * 60 * 1000
+  const timer = setTimeout(() => {
+    timedOut = true
+    schedKill?.()
+  }, SCHED_TIMEOUT_MS)
+  try {
+    await runTool({
+      tool: sched,
+      values: { ...plan.values, out: outPath },
+      runtime: currentRuntime(),
+      source: 'user',
+      repoPath: state.repoPath,
+      allowMutations: false,
+      extraEnv: secretsEnv(),
+      onSpawn: ({ kill }) => {
+        schedKill = kill
+      }
+    })
+  } finally {
+    clearTimeout(timer)
+  }
+  if (timedOut) {
+    throw new Error(
+      `the similarity scheduler (${sched.id}) ran longer than 5 minutes and was stopped. ` +
+        `It ranks the whole corpus each time; try a smaller batch, a specific module, or check that the repo is set up.`
+    )
+  }
 
   let lines: string[] = []
   try {
