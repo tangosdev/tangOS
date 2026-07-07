@@ -191,10 +191,17 @@ export default function App(): JSX.Element {
   }
   async function assignCart(agent: string): Promise<void> {
     if (!cart.length) return
-    await window.tangos.assignBatch(
-      { title: `Custom batch (${cart.length})`, prompt: 'Match these hand-picked targets.', items: cart },
-      agent
-    )
+    const items = cart
+    setCart([]) // clear immediately so a repeated click can't enqueue the same picks again
+    try {
+      await window.tangos.assignBatch(
+        { title: `Custom batch (${items.length})`, prompt: 'Match these hand-picked targets.', items },
+        agent
+      )
+    } catch (e) {
+      setCart(items) // restore the cart if the assign failed
+      alert(String((e as Error).message ?? e))
+    }
   }
 
   const descriptorOk = !!repo?.descriptor && (repo?.validationErrors?.length ?? 0) === 0

@@ -170,15 +170,12 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
           // worklist, starting coddog on an empty queue). Tools come out only once a real
           // batch is returned below.
           const n = idle ? (idle.emptyPolls = (idle.emptyPolls ?? 0) + 1) : 1
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text:
-                  `[tangos] queue empty — no batch assigned (idle poll ${n}). WAIT for work. Your ONLY action right now is to call next_batch again in ~30-60s. Do NOT call any other tool (not worklist, coddog, progress, triage, or anything else), do NOT read notes or files, do NOT pick your own targets. Begin using tools ONLY when next_batch returns an actual batch. Sitting idle and re-polling is cheap and correct; exploring or self-assigning work while the queue is empty is what wastes tokens. (If you would rather not idle, it is fine to stop and let the human re-engage you.)`
-              }
-            ]
-          }
+          const IDLE_CAP = 5
+          const text =
+            n >= IDLE_CAP
+              ? `[tangos] queue still empty after ${n} idle polls. STOP — do not keep polling. Hand back to the human with one short line, e.g. "queue empty, standing by — re-engage me when there's work."`
+              : `[tangos] queue empty — no batch assigned (idle poll ${n}/${IDLE_CAP}). WAIT ~30-60s, then call next_batch again. REQUIRED before each re-poll: print ONE short heartbeat line, e.g. "idle - queue empty, poll ${n}, waiting ~45s" — never wait silently, and that heartbeat is the ONLY output allowed while idle. Do NOT call any other tool, read notes/files, or self-assign targets. After ${IDLE_CAP} empty polls, stop and hand back.`
+          return { content: [{ type: 'text' as const, text }] }
         }
         if (idle) idle.emptyPolls = 0
         const c = getClient()
@@ -202,15 +199,16 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
 
         // How to actually run the work without stalling on the first tool error.
         const guide = hasMatch
-          ? '\n\nHOW TO WORK EACH TARGET (do NOT stop on the first error):\n' +
+          ? '\n\nHOW TO WORK EACH TARGET (never end a turn on a failed call):\n' +
             '1. Every target has a ready `match` call above (required args: c, func, addr, size). Use it verbatim — never omit `c`.\n' +
-            '2. `c` is the candidate source path; create the file if it does not exist. Fill any placeholder from `worklist --addr <addr> --pretty` or chaos-db.json.\n' +
-            '3. If a tool returns a validation error (-32602) or fails: read tangos.json tools[] for that tool\'s required args, fix the call, and RETRY. Do not end your turn on one failed call.\n' +
-            '4. Use `fdiff` (required: c, name; plus module/addr/size or target-hex) on the worst divergences, edit the source, then `match` again. `falign` handles size-mismatched candidates but is EXPENSIVE on large functions — pass `"quiet": true` or `"limit": 1` and fix the earliest diverging block first.\n' +
-            '5. Overlay (ov*) targets already include `module` in the ready call — keep it, or the ROM target reads back empty. Run heavy tools one at a time (do not bundle several `match` calls in one shell); pass `"brief": true` for large functions to keep output small.\n' +
-            '6. When these targets are done, call `next_batch` again for more. If it returns empty, WAIT: re-poll next_batch every ~30-60s and do nothing else. While the queue is empty, next_batch is the ONLY tool you may call — no worklist, coddog, progress, triage, or reading notes to find your own targets. Idle means wait, not explore; only start pulling tools again when next_batch hands you a real batch.\n' +
-            '7. Coordinate: `claims_check` a target\'s span before working it; `claims_lock` (module/start/end) to reserve it and `claims_release` when it is banked. The console posts under your handle with its own key — you never need a key.\n' +
-            '8. Stay in your lane: edit source ONLY for the targets above. If an edit regresses a function (worse diff or bigger size), REVERT it — never leave a tracked source file worse than you found it. Keep scratch files, notes, and session reports in a temp/scratch dir, NEVER inside the repo or beside source files.\n' +
+            '2. BEFORE any match/fdiff/falign on a target, make sure its `c` candidate file EXISTS. If it does not, CREATE the draft first from `worklist --addr <addr> --pretty` (or disasm / chaos-db.json). Never diff a file you have not created — that is the #1 avoidable error (FileNotFoundError).\n' +
+            '3. On ANY tool error — validation (-32602), compile failure, OR missing-file/FileNotFoundError — diagnose and RETRY in the SAME turn (check tangos.json tools[] for required args if unsure). A turn may only end on a successful call or an explicit "blocked because X" hand-off sentence — never right after a failed call.\n' +
+            '4. For first-pass triage use `fdiff` with `"quiet": true` (returns just `mismatches=N/total`) — do NOT lean on match\'s full byte dump or `brief` to triage. Pull the full diff only once you are fixing a specific block. `falign` handles size-mismatched candidates but is EXPENSIVE on large functions — pass `"quiet": true` or `"limit": 1` and fix the earliest diverging block first.\n' +
+            '5. Overlay (ov*) targets: keep the `module` in the ready call — it auto-loads the overlay binary, so you do NOT need bin/base. (If overlay bytes read back empty/0, your repo is a stale ZIP snapshot — use a fresh `git clone`.) Run heavy tools one at a time; pass `"brief": true` for large functions.\n' +
+            '6. End EVERY working turn with a one-line status: what you just did, the current best divergence, and the single next action. Never end a turn silently after a tool result.\n' +
+            '7. When these targets are done, call `next_batch` for more. If it returns empty, WAIT: print one short heartbeat line and re-poll every ~30-60s, calling next_batch ONLY — no worklist, coddog, notes, or self-assigned targets. After ~5 empty polls, stop and hand back.\n' +
+            '8. Coordinate: `claims_check` a target\'s span before working it; `claims_lock` (module/start/end) to reserve it and `claims_release` when it is banked. The console posts under your handle with its own key — you never need a key.\n' +
+            '9. Stay in your lane: edit source ONLY for the targets above. If an edit regresses a function (worse diff or bigger size), REVERT it — never leave a tracked source file worse than you found it. Keep scratch files, notes, and session reports in a temp/scratch dir, NEVER inside the repo or beside source files.\n' +
             'Fallback if native MCP tools are unavailable in your client: run `npx tsx scripts/mcp-run.mts <calls.json> <your-name>` (e.g. grok) from the tangOS console dir, where calls.json is [{"tool":"match","args":{...}}]. Pass your name so the live viewer tags your runs correctly (omitting it shows "agent").'
           : ''
 
