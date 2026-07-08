@@ -4,9 +4,9 @@ import type { AiAgent, ActivityRun, Batch } from '../../../shared/types'
 import { ROLE_NAMES, ROLE_PRESETS } from '../../../shared/types'
 import { aiColor } from '../aiColor'
 import { recommendRole } from '../roleRec'
+import { effortSpec, currentEffort } from '../efforts'
 import GithubSignIn from './GithubSignIn'
 
-const SIZES = [8, 16, 32, 64] // batch-size options; -1 = infinite (continuous)
 
 /** Ticks mm:ss from mount — shows the batch generator is working, not frozen. */
 function Elapsed(): JSX.Element {
@@ -170,7 +170,8 @@ export default function Controller({
             const driving = a.kind === 'api' && (a.connected || busy[a.name] === 'Driving')
             const canDrive = a.kind === 'api' && !!batch && !batchDone && !isLooping && !driving && !busy[a.name] && !live
             const generating = busy[a.name] === 'Generating batch'
-            const size = sizes[a.name] ?? 16
+            const rawSize = sizes[a.name] // undefined = empty (use recommended); -1 = loop
+            const loopSel = rawSize === -1
             const rec = recommendRole(a)
             return (
               <div
@@ -260,21 +261,58 @@ export default function Controller({
                         </option>
                       ))}
                     </select>
+                    {(() => {
+                      const spec = effortSpec(a)
+                      return (
+                        <select
+                          className="agent-effort"
+                          value={currentEffort(a)}
+                          onChange={(e) => window.tangos.setClientEffort(a.name, e.target.value)}
+                          title={`Reasoning effort${spec.note ? ` — ${spec.note}` : ''}`}
+                        >
+                          {spec.options.map((o) => (
+                            <option key={o} value={o}>
+                              {o}
+                            </option>
+                          ))}
+                        </select>
+                      )
+                    })()}
                   </div>
                   <div className="aib-btns">
-                    <select
+                    <input
                       className="aib-size"
-                      value={size}
-                      onChange={(e) => setSizes((s) => ({ ...s, [a.name]: Number(e.target.value) }))}
-                      title="Batch size (infinite keeps going after each batch)"
+                      type="number"
+                      min={1}
+                      max={200}
+                      value={loopSel || rawSize == null ? '' : rawSize}
+                      placeholder={loopSel ? '∞' : '16'}
+                      disabled={loopSel}
+                      title={loopSel ? 'Running continuously (∞)' : 'Batch size — leave empty for the recommended 16, max 200'}
+                      onChange={(e) => {
+                        const v = e.target.value.trim()
+                        setSizes((s) => {
+                          const next = { ...s }
+                          if (v === '') delete next[a.name]
+                          else next[a.name] = Math.max(1, Math.min(200, Math.floor(Number(v)) || 1))
+                          return next
+                        })
+                      }}
+                    />
+                    <button
+                      className={`aib-loop${loopSel ? ' on' : ''}`}
+                      title={loopSel ? 'Stop looping — run a single batch' : 'Run continuously: keep pulling recommended-size batches until stopped'}
+                      onClick={() =>
+                        setSizes((s) => {
+                          const next = { ...s }
+                          if (loopSel) delete next[a.name]
+                          else next[a.name] = -1
+                          return next
+                        })
+                      }
                     >
-                      {SIZES.map((n) => (
-                        <option key={n} value={n}>
-                          {n}
-                        </option>
-                      ))}
-                      <option value={-1}>∞</option>
-                    </select>
+                      ∞
+                    </button>
                     <button className="mini-btn" disabled={generating} onClick={() => assign(a.name, a.roles[0])} title="Generate a role-fit batch of this size and assign it">
                       <Sparkles size={12} /> Recommended
                     </button>

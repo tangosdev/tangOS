@@ -95,6 +95,8 @@ const api = {
   discardReview: (): Promise<boolean> => ipcRenderer.invoke('review:discard'),
   setClientRoles: (name: string, roles: string[]): Promise<AiAgent[]> =>
     ipcRenderer.invoke('clients:setRoles', { name, roles }),
+  setClientEffort: (name: string, effort: string): Promise<AiAgent[]> =>
+    ipcRenderer.invoke('clients:setEffort', { name, effort }),
 
   generateBatch: (count?: number): Promise<BatchDraft> => ipcRenderer.invoke('batch:generate', count),
   enqueueBatch: (draft: BatchDraft): Promise<Batch[]> => ipcRenderer.invoke('batch:enqueue', draft),

@@ -370,8 +370,9 @@ function currentRuntime(): TangosRuntime {
   return state.descriptor?.runtime ?? { cwd: '.', python: 'python', shell: false }
 }
 
-// Remember the last-opened repo + each agent's assigned role across sessions.
+// Remember the last-opened repo + each agent's assigned role + reasoning effort across sessions.
 let agentRoles: Record<string, string[]> = {}
+let agentEfforts: Record<string, string> = {}
 function settingsFile(): string {
   return join(app.getPath('userData'), 'tangos-settings.json')
 }
@@ -382,6 +383,7 @@ function saveSettings(): void {
       JSON.stringify({
         lastRepo: state.repoPath,
         agentRoles,
+        agentEfforts,
         agentStats: aiStats.serialize(),
         reportsEnabled: state.reportsEnabled,
         tourSeen: state.tourSeen,
@@ -397,6 +399,7 @@ function saveSettings(): void {
 function loadSettings(): {
   lastRepo?: string
   agentRoles?: Record<string, string | string[]> // string = legacy single-role format
+  agentEfforts?: Record<string, string>
   agentStats?: Record<string, { totalMatches: number; matchAttempts: number }>
   reportsEnabled?: boolean
   tourSeen?: boolean
@@ -542,6 +545,7 @@ function agentsSnapshot(): AiAgent[] {
       name,
       kind: 'mcp',
       roles: list.find((c) => c.roles.length)?.roles ?? agentRoles[name] ?? [],
+      effort: agentEfforts[name],
       connected: true,
       sessions: list.length,
       currentBatchId: aiStats.currentBatchId(name),
@@ -563,6 +567,7 @@ function agentsSnapshot(): AiAgent[] {
       kind: 'api',
       provider,
       roles: agentRoles[provider] ?? [],
+      effort: agentEfforts[provider],
       connected: apiDriving.has(provider),
       currentBatchId: aiStats.currentBatchId(provider),
       stats: aiStats.statsFor(provider)
@@ -576,6 +581,7 @@ function agentsSnapshot(): AiAgent[] {
       name,
       kind: 'mcp',
       roles: agentRoles[name] ?? [],
+      effort: agentEfforts[name],
       connected: false,
       stats: aiStats.statsFor(name)
     })
@@ -1428,6 +1434,16 @@ ipcMain.handle('clients:setRoles', (_e, p: { name: string; roles: string[] }) =>
   return agentsSnapshot()
 })
 
+// Set an agent's reasoning-effort level (valid values depend on the model family; see efforts.ts).
+// Console-driven API agents pass it to the driver; for MCP agents it's a recorded preference.
+ipcMain.handle('clients:setEffort', (_e, p: { name: string; effort: string }) => {
+  if (p.effort) agentEfforts[p.name] = p.effort
+  else delete agentEfforts[p.name]
+  saveSettings()
+  pushState()
+  return agentsSnapshot()
+})
+
 ipcMain.handle('policy:setSafeMode', (_e, on: boolean) => {
   state.safeMode = !!on
   pushState()
@@ -1703,6 +1719,7 @@ app.whenReady().then(() => {
   agentRoles = Object.fromEntries(
     Object.entries(saved.agentRoles ?? {}).map(([k, v]) => [k, (Array.isArray(v) ? v : [v]).filter((r) => r && r !== 'Unassigned')])
   )
+  agentEfforts = { ...(saved.agentEfforts ?? {}) }
   aiStats.hydrate(saved.agentStats)
   aiStats.remapKeys(normalizeName) // fold old per-model/per-session stat keys into one family box
   state.reportsEnabled = saved.reportsEnabled ?? false
