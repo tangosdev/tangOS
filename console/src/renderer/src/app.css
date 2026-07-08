@@ -676,8 +676,10 @@ html, body, #root { background: transparent !important; }
   position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 120;
   max-width: 560px; padding: 12px 18px; border-radius: 12px; cursor: pointer;
   font-size: 12.5px; line-height: 1.5; text-align: center; color: var(--aero-text);
-  background: rgba(var(--aero-primary-rgb) / 0.14);
-  border: 1px solid rgba(var(--aero-primary-rgb) / 0.4);
+  background: var(--aero-panel);
+  backdrop-filter: blur(18px) saturate(1.1);
+  -webkit-backdrop-filter: blur(18px) saturate(1.1);
+  border: 1px solid rgba(var(--aero-primary-rgb) / 0.45);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
   animation: gh-pop 0.16s ease-out;
 }

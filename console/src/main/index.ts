@@ -880,14 +880,14 @@ ipcMain.handle('atlas:loadLive', async (_e, force?: boolean) => {
   }
 })
 
-ipcMain.handle('atlas:generate', async () => {
-  if (!state.repoPath || !state.descriptor?.data?.generate) {
-    throw new Error('this repo has no data.generate command in tangos.json')
-  }
+// Regenerate the local Atlas DB (chaos-db.json) from the current repo state and refresh the cache,
+// so the Atlas AND the near-miss/refine pool reflect what's actually in src/ now. Best-effort.
+async function regenAtlasDb(source: 'user' | 'ai'): Promise<AtlasDb | null> {
+  if (!state.repoPath || !state.descriptor?.data?.generate) return null
   const dbRel = state.descriptor.data.dbPath || 'chaos-db.json'
   const tool: TangosTool = {
     id: 'generate_atlas_data',
-    label: 'Generate Atlas data',
+    label: 'Refresh Atlas data',
     category: 'reporting',
     readOnly: true,
     command: state.descriptor.data.generate
@@ -897,13 +897,33 @@ ipcMain.handle('atlas:generate', async () => {
     values: { out: dbRel },
     runtime: currentRuntime(),
     repoPath: state.repoPath,
-    source: 'user',
+    source,
     allowMutations: true,
     extraEnv: secretsEnv()
   })
   const db = readAtlas(state.repoPath, state.descriptor)
   atlasCache = { ...atlasCache, repo: state.repoPath, local: db }
   return db
+}
+
+// After a drive lands matches, chaos-db.json is stale until regenerated. Debounce a background regen
+// so a burst of landed drives (loop mode) coalesces into one refresh instead of one per drive.
+let atlasRegenTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleAtlasRegen(): void {
+  if (atlasRegenTimer) clearTimeout(atlasRegenTimer)
+  atlasRegenTimer = setTimeout(() => {
+    atlasRegenTimer = null
+    regenAtlasDb('ai')
+      .then(() => pushState())
+      .catch(() => {})
+  }, 8000)
+}
+
+ipcMain.handle('atlas:generate', async () => {
+  if (!state.repoPath || !state.descriptor?.data?.generate) {
+    throw new Error('this repo has no data.generate command in tangos.json')
+  }
+  return regenAtlasDb('user')
 })
 
 // A role shapes BOTH what the scheduler picks and the default batch size:
@@ -1270,8 +1290,10 @@ async function driveBatch(agentName: string): Promise<void> {
   }
   // Reasoning effort chosen on the AI box (falls back to the family default). The driver maps it
   // to the provider's thinking knob (Claude budget vs GLM on/off) - see tools/glm_refine.py.
-  const effortDefault: Record<string, string> = { GLM: 'thinking', Claude: 'high' }
-  driverEnv.TANGOS_EFFORT = agentEfforts[agentName] ?? effortDefault[agentName] ?? ''
+  const effortDefault: Record<string, string> = { Claude: 'high' }
+  // GLM's refine driver emits code directly; extended thinking just eats its token budget and
+  // starves the code block (no code returned), so it's forced off - even over a stale saved choice.
+  driverEnv.TANGOS_EFFORT = agentName === 'GLM' ? 'off' : agentEfforts[agentName] ?? effortDefault[agentName] ?? ''
   const batch = state.batches.find((b) => b.targetAgent === agentName && b.status !== 'done')
   if (!batch) throw new Error(`no batch assigned to ${agentName} - assign one first`)
   // Build the driver worklist with FULL context. Prefer coddog's preserved enriched row (from
@@ -1457,6 +1479,7 @@ async function driveBatch(agentName: string): Promise<void> {
         outputTail: (landRes.output || '').slice(-4000)
       })
       await noteMatchAndPush(agentName) // roll this driver's just-landed matches into its own PR
+      scheduleAtlasRegen() // matches are now in src/ - refresh chaos-db so Atlas + near-miss pool track them
     }
   } finally {
     apiDriving.delete(agentName)
