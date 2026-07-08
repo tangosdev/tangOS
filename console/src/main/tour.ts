@@ -35,7 +35,7 @@ These buttons let you swap between applications in the tangOS. :joke[Every downl
 
 [smile] @mcp
 Turn on MCP
-Switch this ON so AIs can connect, then copy and send the prompt to your AI. :joke[My daily caloric intake is 100fp.]
+Switch this ON so AIs can connect, then copy and send the prompt to your AI. :joke[My daily caloric intake is one hundred (100) fp.]
 
 [thinking] @settings
 Keys and GitHub login
