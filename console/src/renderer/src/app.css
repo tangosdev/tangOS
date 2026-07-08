@@ -976,6 +976,43 @@ html, body, #root { background: transparent !important; }
 .gh-err { font-size: 11px; color: var(--aero-danger); }
 .gh-done { display: inline-flex; align-items: center; font-size: 12px; font-weight: 700; color: rgb(var(--aero-matched-rgb)); }
 
+/* Full-screen device-code overlay: the code has to be unmissable and click-to-copy. */
+.gh-code-scrim {
+  position: fixed; inset: 0; z-index: 300;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(8, 18, 36, 0.55); backdrop-filter: blur(4px);
+}
+.gh-code-modal {
+  position: relative; text-align: center; padding: 34px 44px 26px;
+  border-radius: 18px; min-width: 440px; max-width: 90vw;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  animation: gh-pop 0.16s ease-out;
+}
+@keyframes gh-pop { from { transform: scale(0.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.gh-code-x { position: absolute; top: 12px; right: 12px; }
+.gh-code-mark { color: var(--aero-text); opacity: 0.85; }
+.gh-code-modal h2 { margin: 8px 0 6px; font-size: 20px; color: var(--aero-text); }
+.gh-code-sub { margin: 0 auto 18px; font-size: 13px; color: var(--aero-muted); max-width: 420px; }
+.gh-code-big {
+  display: inline-flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 20px 34px; margin: 0 auto 16px; cursor: pointer;
+  border-radius: 14px; border: 2px dashed rgba(var(--aero-primary-rgb) / 0.55);
+  background: rgba(var(--aero-primary-rgb) / 0.10); transition: background 0.12s, transform 0.06s;
+}
+.gh-code-big:hover { background: rgba(var(--aero-primary-rgb) / 0.18); }
+.gh-code-big:active { transform: scale(0.985); }
+.gh-code-value {
+  font-family: ui-monospace, Consolas, monospace; font-size: 46px; font-weight: 800;
+  letter-spacing: 8px; color: rgb(var(--aero-primary-rgb)); line-height: 1;
+}
+.gh-code-copy {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; font-weight: 600; color: var(--aero-muted); letter-spacing: normal;
+}
+.gh-code-copy.ok { color: rgb(var(--aero-matched-rgb)); }
+.gh-code-actions { margin-bottom: 12px; }
+.gh-code-wait { display: block; font-size: 12px; color: var(--aero-muted); }
+
 /* not-a-git-repo warning (ZIP download): can't commit/push, likely stale tooling */
 .repo-warn {
   display: flex; align-items: center; gap: 8px; margin: 8px 14px 0; padding: 8px 12px;
