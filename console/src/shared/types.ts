@@ -48,6 +48,7 @@ export interface TangosProject {
   verifyCommand?: string
   readFirst?: string
   rules?: string
+  submitting?: string // how to open a PR (format, what may land in src/); surfaced at MCP startup + in next_batch
   nearMissNote?: string
   knownWalls?: string // proven-unreachable shapes; surfaced to connected AIs via next_batch
 }

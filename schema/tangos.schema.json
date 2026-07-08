@@ -31,6 +31,8 @@
         "verifyCommand": { "type": "string", "description": "Template command that verifies one function matches (placeholders like {name} {addrHex} {sizeHex})." },
         "readFirst": { "type": "string" },
         "rules": { "type": "string", "description": "Legal / contribution rules (ROM ownership, what may be committed)." },
+        "submitting": { "type": "string", "description": "How to open a PR: format, what may land in src/, where near-misses go. Surfaced to connected AIs at MCP startup and in next_batch. Point at an AGENTS.md in the repo for the full guide." },
+        "knownWalls": { "type": "string", "description": "Proven-unreachable codegen shapes; surfaced to connected AIs via next_batch." },
         "nearMissNote": { "type": "string" }
       }
     },

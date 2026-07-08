@@ -148,7 +148,16 @@ function capOutput(s: string): string {
 
 function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClient | undefined): McpServer {
   const ctx = getCtx()
-  const server = new McpServer({ name: 'tangos', version: '0.1.0' })
+  // Surface the repo's contribution rules to every connecting AI on `initialize` (MCP
+  // startup). `submitting` is the PR/how-to-post directive (points at AGENTS.md); `rules`
+  // is the legal/ROM line. Repo-agnostic: whatever the descriptor declares is what shows.
+  const proj = ctx.descriptor.project
+  const instructions =
+    [proj.submitting, proj.rules && `Legal: ${proj.rules}`].filter(Boolean).join('\n\n') || undefined
+  const server = new McpServer(
+    { name: 'tangos', version: '0.1.0' },
+    instructions ? { instructions } : undefined
+  )
   const enabled = new Set(ctx.enabledToolIds ?? ctx.descriptor.tools.map((t) => t.id))
 
   for (const tool of ctx.descriptor.tools) {
@@ -225,11 +234,15 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
         const wallsNote = walls
           ? `\n\n[known walls - verify your near-miss IS one, then say so and move on; do not grind or give up blanket]\n${walls}`
           : ''
+        const submitting = desc.project?.submitting
+        const submitNote = submitting
+          ? `\n\n[what may land in src/ - AGENTS.md has the full format]\n${submitting}`
+          : ''
         return {
           content: [
             {
               type: 'text' as const,
-              text: `${prefix}[tangos batch] "${b.title}" (${b.items.length} targets)\n\n${b.prompt}${targets}${guide}${wallsNote}`
+              text: `${prefix}[tangos batch] "${b.title}" (${b.items.length} targets)\n\n${b.prompt}${targets}${guide}${wallsNote}${submitNote}`
             }
           ]
         }
