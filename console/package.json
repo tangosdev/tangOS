@@ -86,7 +86,8 @@
     "publish": {
       "provider": "github",
       "owner": "bmanus2-dotcom",
-      "repo": "tangos-console"
+      "repo": "tangos-console",
+      "releaseType": "release"
     }
   }
 }
