@@ -975,17 +975,26 @@ html, body, #root { background: transparent !important; }
 .gh-hint { font-size: 11px; color: var(--aero-muted); }
 .gh-err { font-size: 11px; color: var(--aero-danger); }
 .gh-done { display: inline-flex; align-items: center; font-size: 12px; font-weight: 700; color: rgb(var(--aero-matched-rgb)); }
+.gh-signout {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 8px;
+  font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+  padding: 2px 7px; border-radius: 7px;
+  border: 1px solid var(--aero-border); background: rgba(255, 255, 255, 0.5); color: var(--aero-muted);
+}
+.gh-signout:hover { color: var(--aero-danger); border-color: rgba(224, 58, 62, 0.4); background: rgba(224, 58, 62, 0.08); }
 
 /* Full-screen device-code overlay: the code has to be unmissable and click-to-copy. */
 .gh-code-scrim {
   position: fixed; inset: 0; z-index: 300;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(8, 18, 36, 0.55); backdrop-filter: blur(4px);
+  /* transparent on purpose: still catches clicks, but no dark veil graying out the UI behind it */
 }
 .gh-code-modal {
   position: relative; text-align: center; padding: 34px 44px 26px;
   border-radius: 18px; min-width: 440px; max-width: 90vw;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid var(--aero-border);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
   animation: gh-pop 0.16s ease-out;
 }
 @keyframes gh-pop { from { transform: scale(0.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }

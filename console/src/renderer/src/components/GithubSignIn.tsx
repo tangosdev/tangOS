@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Github, Check, Copy, X } from 'lucide-react'
+import { Github, Check, Copy, X, LogOut } from 'lucide-react'
 
 /** Bottom-right "Sign into GitHub" button: runs the device flow and pops a big, unmissable
  *  full-screen overlay with the user code (click to copy) + a link to github.com/login/device.
@@ -41,11 +41,20 @@ export default function GithubSignIn(): JSX.Element {
     setTimeout(() => setCopied(false), 1600)
   }
 
+  async function signout(): Promise<void> {
+    await window.tangos.deleteSecret('GITHUB_TOKEN')
+    setDone(false)
+  }
+
   if (done)
     return (
       <span className="gh-done" title="GITHUB_TOKEN stored in the vault">
         <Check size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
         GitHub connected
+        <button className="gh-signout" onClick={signout} title="Sign out — remove the stored GitHub token">
+          <LogOut size={12} />
+          sign out
+        </button>
       </span>
     )
 
@@ -59,7 +68,7 @@ export default function GithubSignIn(): JSX.Element {
 
       {code && (
         <div className="gh-code-scrim">
-          <div className="gh-code-modal aero-panel solid">
+          <div className="gh-code-modal">
             <button className="dock-close gh-code-x" onClick={() => setCode(null)} title="Cancel">
               <X size={16} />
             </button>
