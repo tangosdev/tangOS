@@ -1180,6 +1180,10 @@ async function driveBatch(agentName: string): Promise<void> {
   } else {
     throw new Error(`${agentName} has no console driver yet (idle-only)`)
   }
+  // Reasoning effort chosen on the AI box (falls back to the family default). The driver maps it
+  // to the provider's thinking knob (Claude budget vs GLM on/off) - see tools/glm_refine.py.
+  const effortDefault: Record<string, string> = { GLM: 'thinking', Claude: 'high' }
+  driverEnv.TANGOS_EFFORT = agentEfforts[agentName] ?? effortDefault[agentName] ?? ''
   const batch = state.batches.find((b) => b.targetAgent === agentName && b.status !== 'done')
   if (!batch) throw new Error(`no batch assigned to ${agentName} — assign one first`)
   const rows = batch.items
