@@ -125,9 +125,9 @@ export default function AiDetail({
             <b>{s.matchAttempts}</b>
             <span>attempts</span>
           </div>
-          <div className="aid-stat">
-            <b>{s.tokensPerMatch != null ? s.tokensPerMatch.toLocaleString() : 'n/a'}</b>
-            <span>tok / match</span>
+          <div className="aid-stat" title="compiled non-matches with a real byte-diff (close attempts)">
+            <b>{(s.nearMisses ?? 0).toLocaleString()}</b>
+            <span>near misses</span>
           </div>
         </div>
 

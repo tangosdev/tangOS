@@ -21,6 +21,7 @@ function bucketFor(size?: number): string | null {
 interface Persisted {
   totalMatches: number
   matchAttempts: number
+  nearMisses?: number
   tokensIn?: number
   tokensOut?: number
   bySize?: Record<string, { attempts: number; matches: number }>
@@ -37,6 +38,20 @@ interface Current {
  *  real version token after the colon, and never accept "none". */
 export function outputIsMatch(output: string): boolean {
   return /MATCHING VERSIONS:\s*(?!none\b)\S/i.test(output)
+}
+
+/** Smallest byte-diff a match/driver run reports ("N word(s) differ" or "divergences=N"), or null
+ *  if none parses. A non-match with a real, small diff (compiled to the right size, a few words
+ *  off) is a NEAR MISS; the sentinel 999 (size differs / way off) is not. */
+export function matchDivergence(output: string): number | null {
+  let min: number | null = null
+  const re = /(\d+)\s+word\(s\)\s+differ|divergences?\s*=\s*(\d+)/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(output || '')) !== null) {
+    const n = Number(m[1] ?? m[2])
+    if (!Number.isNaN(n) && (min === null || n < min)) min = n
+  }
+  return min
 }
 
 class AiStatsStore {
@@ -68,6 +83,15 @@ class AiStatsStore {
     this.onChange?.()
   }
 
+  /** A non-matching but close attempt (compiled + produced a real byte-diff). Separate from
+   *  matchAttempts, which recordMatch already bumps for the same run. */
+  recordNearMiss(name: string | undefined): void {
+    if (!name) return
+    const s = this.raw(name)
+    s.nearMisses = (s.nearMisses ?? 0) + 1
+    this.onChange?.()
+  }
+
   recordTokens(name: string | undefined, tokensIn: number, tokensOut: number): void {
     if (!name) return
     const s = this.raw(name)
@@ -94,6 +118,7 @@ class AiStatsStore {
     return {
       totalMatches: s.totalMatches,
       matchAttempts: s.matchAttempts,
+      nearMisses: s.nearMisses,
       hitRate: s.matchAttempts ? s.totalMatches / s.matchAttempts : 0,
       tokensIn: s.tokensIn,
       tokensOut: s.tokensOut,
@@ -126,6 +151,7 @@ class AiStatsStore {
       }
       t.totalMatches += s.totalMatches
       t.matchAttempts += s.matchAttempts
+      if (s.nearMisses) t.nearMisses = (t.nearMisses ?? 0) + s.nearMisses
       const ti = (t.tokensIn ?? 0) + (s.tokensIn ?? 0)
       const to = (t.tokensOut ?? 0) + (s.tokensOut ?? 0)
       if (ti) t.tokensIn = ti

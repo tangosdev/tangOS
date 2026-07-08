@@ -226,8 +226,9 @@ export default function Controller({
 
                 <div className="aib-stats">
                   {hit != null && <span title="matches / match attempts">{hit}% hit</span>}
-                  {a.stats.tokensPerMatch != null && <span>{a.stats.tokensPerMatch} tok/match</span>}
-                  {a.kind === 'mcp' && <span className="muted">tokens n/a</span>}
+                  <span title="near misses: compiled non-matches with a real byte-diff (close attempts / progress toward a match)">
+                    {a.stats.nearMisses ?? 0} near
+                  </span>
                 </div>
 
                 <div className="aib-actions" onClick={(e) => e.stopPropagation()}>

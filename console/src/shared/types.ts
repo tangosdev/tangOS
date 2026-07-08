@@ -266,6 +266,7 @@ export type AiKind = 'mcp' | 'api'
 export interface AiStats {
   totalMatches: number
   matchAttempts: number
+  nearMisses?: number // compiling non-matches that produced a real byte-diff (close attempts)
   hitRate: number // 0..1 = totalMatches / matchAttempts
   tokensIn?: number // API-driven AIs only; undefined for external MCP AIs
   tokensOut?: number

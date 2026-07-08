@@ -16,7 +16,7 @@ import { listClaims, tryLock, releaseClaim, hasKey, handle as claimsHandle } fro
 import { githubCredits } from './github'
 import { startDeviceFlow, pollForToken } from './githubAuth'
 import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
-import { aiStats, outputIsMatch } from './aiStats'
+import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
 import { record as report, setReportsEnabled, reportsDir } from './reports'
 import { ensureTips, readTips, openTips } from './tips'
 import { ensureTour, readTour, openTour } from './tour'
@@ -312,6 +312,11 @@ function afterRun(
   if (tool.id !== 'match') return
   const ok = res.status === 'ok' && outputIsMatch(res.output)
   aiStats.recordMatch(client?.name, ok, parseHexish(values.size))
+  if (!ok) {
+    // A non-match that compiled and produced a small real byte-diff is a near miss (progress).
+    const d = matchDivergence(res.output)
+    if (d != null && d >= 1 && d < 999) aiStats.recordNearMiss(client?.name)
+  }
   if (ok && typeof values.func === 'string') markItemDone(values.func)
   // A verified match means the agent (MCP or driven) wrote a matching source; when Writes +
   // Review + Push are on, attribute the new src to THIS agent and roll it into that agent's own
@@ -1250,6 +1255,7 @@ async function driveBatch(agentName: string): Promise<void> {
       recorded.add(name)
       const item = batch.items.find((i) => i.ref === name)
       aiStats.recordMatch(agentName, ok, item?.size)
+      if (!ok) aiStats.recordNearMiss(agentName) // a div=N line: compiled draft, close but not matching
       if (ok && item) item.done = true
       aiStats.setCurrent(agentName, {
         task: batch.title,
