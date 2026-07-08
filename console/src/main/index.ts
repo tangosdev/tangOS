@@ -1429,6 +1429,11 @@ async function driveBatch(agentName: string): Promise<void> {
 }
 
 ipcMain.handle('ai:drive', async (_e, agentName: string) => {
+  // Re-entrancy guard: one driver process per agent. driveBatch() adds to apiDriving
+  // synchronously (before its first await), so a second Drive click / auto-drive that lands
+  // in the same or a later tick sees it and no-ops instead of spawning a parallel glm_refine
+  // that double-walks the same worklist (the "two 6/14s" symptom).
+  if (apiDriving.has(agentName)) return { ok: true, already: true }
   try {
     // Loop while this AI is in continuous mode: drive, then generate + assign the next.
     do {
