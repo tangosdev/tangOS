@@ -1081,6 +1081,11 @@ html, body, #root { background: transparent !important; }
 .repo-warn.ok { color: #14532d; background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.5); }
 /* "a newer app release is out" - violet, distinct from the repo-staleness blue */
 .repo-warn.update { color: #4c1d95; background: rgba(139,92,246,0.15); border-color: rgba(139,92,246,0.5); }
+/* "you have unpublished commits" - quiet neutral FYI, deliberately NOT a warning: publishing is
+   optional and must never look like it's blocking the separate Update above it. */
+.repo-warn.unpushed { color: #475569; background: rgba(100,116,139,0.10); border-color: rgba(100,116,139,0.28); }
+.repo-warn-btn.ghost { color: #334155; background: rgba(148,163,184,0.22); border-color: rgba(148,163,184,0.45); }
+.repo-warn-btn.ghost:hover:not(:disabled) { background: rgba(148,163,184,0.38); }
 .repo-warn-btn {
   display: inline-flex; align-items: center; gap: 5px; margin-left: auto; flex: none;
   padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer;

@@ -145,19 +145,46 @@ export async function aheadBehind(repo: string, branch: string): Promise<{ ahead
   return { ahead: parseInt(m[1], 10), behind: parseInt(m[2], 10) }
 }
 
+/** Count of local commits whose CHANGES aren't already on origin/<branch> - the "genuinely
+ *  unpublished" number, distinct from the SHA-topology `ahead` (which counts a commit as ahead even
+ *  after it was squash/rebase-merged upstream under a new SHA). Robust to squash merges: first a
+ *  content check (does merging HEAD into origin add anything?), then a per-commit patch-id count. */
+export async function unmergedAhead(repo: string, branch: string): Promise<number> {
+  const ref = `origin/${branch}`
+  if ((await git(repo, ['rev-parse', '--verify', '--quiet', ref])).code !== 0) return 0
+  // Content gate (handles multi-commit squashes cherry can't): if the 3-way merge of HEAD into
+  // origin yields origin's exact tree, HEAD contributes nothing new -> everything is published.
+  const mt = await git(repo, ['merge-tree', '--write-tree', ref, 'HEAD'])
+  if (mt.code === 0) {
+    const mergedTree = mt.out.trim().split('\n')[0]
+    const originTree = await git(repo, ['rev-parse', `${ref}^{tree}`])
+    if (originTree.code === 0 && mergedTree === originTree.out.trim()) return 0
+  }
+  // There is unpublished content: count commits with no patch-equivalent upstream (git cherry
+  // marks those with '+'; '-' means an equivalent is already on origin, e.g. a merged single commit).
+  const r = await git(repo, ['cherry', ref, 'HEAD'])
+  if (r.code !== 0) return 0
+  return r.out.split('\n').filter((l) => l.startsWith('+')).length
+}
+
 /** Update remote-tracking refs from origin (best-effort; network may be down). */
 export async function fetchRemote(repo: string): Promise<boolean> {
   return (await git(repo, ['fetch', '--quiet', 'origin'])).code === 0
 }
 
-/** Fast-forward the current branch to origin/<branch>. Never rewrites or discards local commits:
- *  if the branch has diverged (local commits not on origin), the ff-only merge fails cleanly and
- *  the caller surfaces the message. Untracked files are left untouched (git refuses to clobber). */
-export async function fastForwardPull(repo: string, branch: string): Promise<{ ok: boolean; err: string }> {
+/** Bring in new upstream work while keeping local commits: rebase the current branch onto
+ *  origin/<branch>. Fast-forwards when there are no local commits, and when there are it replays
+ *  them on top (dropping any that were already merged upstream). --autostash tucks uncommitted
+ *  TRACKED changes aside and restores them after; untracked files (e.g. new match sources) are never
+ *  touched. On any failure - a real conflict most likely - it aborts so the tree is never left
+ *  mid-rebase, and returns the error for the caller to surface. */
+export async function rebasePull(repo: string, branch: string): Promise<{ ok: boolean; err: string }> {
   const f = await git(repo, ['fetch', '--quiet', 'origin', branch])
   if (f.code !== 0) return { ok: false, err: (f.err || f.out).trim() || 'fetch failed' }
-  const r = await git(repo, ['merge', '--ff-only', `origin/${branch}`])
-  return { ok: r.code === 0, err: (r.err || r.out).trim() }
+  const r = await git(repo, ['rebase', '--autostash', `origin/${branch}`])
+  if (r.code === 0) return { ok: true, err: '' }
+  await git(repo, ['rebase', '--abort']) // undo: restores the pre-rebase state incl. the autostash
+  return { ok: false, err: (r.err || r.out).trim() || 'rebase failed (conflict)' }
 }
 
 /** The remote's default branch (what a PR should target), falling back to 'main'. */

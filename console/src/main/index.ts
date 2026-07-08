@@ -25,7 +25,7 @@ import {
   mergeWorkBranch, discardWorkBranch, WORK_BRANCH,
   remoteSlug, defaultBranch, currentBranch,
   pushSubsetToBranch, changedSrcFiles,
-  isDirty, aheadBehind, fetchRemote, fastForwardPull, pushToBranch, gitUserName
+  isDirty, aheadBehind, unmergedAhead, fetchRemote, rebasePull, pushToBranch, gitUserName
 } from './gitsafe'
 import { ensurePullRequest } from './pullRequests'
 import { writeBugReport } from './bugReport'
@@ -1722,20 +1722,28 @@ ipcMain.handle('repo:updateStatus', async (): Promise<RepoUpdateStatus> => {
     const fetched = await fetchRemote(repo)
     const [branch, db, dirty] = await Promise.all([currentBranch(repo), defaultBranch(repo), isDirty(repo)])
     const ab = await aheadBehind(repo, db)
-    return { isGit: true, branch, defaultBranch: db, ahead: ab?.ahead ?? 0, behind: ab?.behind ?? 0, dirty, fetched }
+    // "behind" and "unpublished" are independent signals: behind drives the Update offer regardless
+    // of local commits; unmergedAhead is the real unpublished count (already-merged commits excluded).
+    const unmerged = ab && ab.ahead > 0 ? await unmergedAhead(repo, db) : 0
+    return {
+      isGit: true, branch, defaultBranch: db,
+      ahead: ab?.ahead ?? 0, unmergedAhead: unmerged, behind: ab?.behind ?? 0, dirty, fetched
+    }
   } catch (e) {
     return { isGit: true, error: String(e) }
   }
 })
 
-// Fast-forward the local checkout to the remote default branch. Non-destructive: fails cleanly on
-// a diverged branch and never touches untracked matched work. On success, reload the descriptor
-// (tangos.json may have moved) and drop the atlas cache so progress re-reads the updated tree.
+// Bring the local checkout up to the remote default branch by rebasing onto it: fast-forwards when
+// there are no local commits, and keeps local commits (replaying them, dropping already-merged ones)
+// when there are - so having unpublished work never blocks getting new upstream work. Auto-stashes
+// uncommitted tracked changes; never touches untracked matched work; aborts cleanly on a conflict.
+// On success, reload the descriptor (tangos.json may have moved) and drop the atlas cache.
 ipcMain.handle('repo:pull', async (): Promise<{ ok: boolean; err?: string; behind?: number }> => {
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo))) return { ok: false, err: 'not a git checkout' }
   const db = await defaultBranch(repo)
-  const res = await fastForwardPull(repo, db)
+  const res = await rebasePull(repo, db)
   if (res.ok) {
     atlasCache = { repo: null }
     reloadDescriptor('manual')

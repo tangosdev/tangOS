@@ -135,7 +135,8 @@ export interface RepoUpdateStatus {
   isGit: boolean
   branch?: string
   defaultBranch?: string
-  ahead?: number
+  ahead?: number // local commits not on origin by SHA (a squash-merged commit still counts here)
+  unmergedAhead?: number // local commits whose CHANGES aren't upstream yet - the real "unpublished" count
   behind?: number
   dirty?: boolean // uncommitted/untracked work present (informational; ff-pull never clobbers it)
   fetched?: boolean // false = couldn't reach origin (offline / no remote), so behind may be stale

@@ -51,8 +51,8 @@ export default function RepoUpdateBanner({
         setStatus(await window.tangos.repoUpdateStatus())
         setMsg('Updated to the latest.')
         setTimeout(() => setMsg(null), 4000)
-      } else if (r.err && /diverged|fast-forward|non-fast/i.test(r.err)) {
-        setMsg("Your branch has local commits the remote doesn't - can't auto-update. Commit or reconcile manually.")
+      } else if (r.err && /conflict|rebase/i.test(r.err)) {
+        setMsg("Couldn't auto-update - your local changes conflict with the new upstream work. Nothing was changed; reconcile manually.")
       } else {
         setMsg(`Update failed: ${r.err ?? 'unknown error'}`)
       }
@@ -117,42 +117,49 @@ export default function RepoUpdateBanner({
     )
   }
 
-  // Case 2: a git checkout that's behind and/or has local commits the remote lacks.
+  // Case 2: a git checkout. Two INDEPENDENT signals, each its own row - having unpublished commits
+  // never blocks getting new upstream work (that was the old, wrong coupling):
+  //   - behind: new upstream commits you don't have -> Update (rebases, so it keeps your local work)
+  //   - unmergedAhead: your commits not yet published; already-merged ones are excluded, so a
+  //     squash-merged PR stops nagging. Quiet and optional - no pressure to publish.
   {
     const behind = status?.behind ?? 0
-    const ahead = status?.ahead ?? 0
-    if (status?.isGit && (behind > 0 || ahead > 0)) {
+    const unpublished = status?.unmergedAhead ?? 0
+    if (status?.isGit && (behind > 0 || unpublished > 0)) {
       const db = status.defaultBranch ?? 'main'
-      const diverged = ahead > 0
       return (
-        <div className="repo-warn behind">
-          {diverged ? <GitPullRequest size={14} /> : <ArrowDownToLine size={14} />}
-          <span>
-            {behind > 0 && (
-              <>
-                Your local is <b>{behind}</b> commit{behind === 1 ? '' : 's'} behind <code>origin/{db}</code>
-                {diverged ? ' and ' : `${status?.dirty ? ' (your uncommitted work is kept)' : ''}.`}
-              </>
-            )}
-            {diverged && (
-              <>
-                {behind > 0 ? 'has ' : 'You have '}
-                <b>{ahead}</b> local commit{ahead === 1 ? '' : 's'} the remote doesn&apos;t - a fast-forward
-                can&apos;t reconcile that. Push your work as a PR to contribute it (your local branch is untouched).
-              </>
-            )}
-          </span>
-          {diverged ? (
-            <button className="repo-warn-btn" disabled={busy} onClick={pushWorkPr}>
-              {busy ? <Loader2 size={13} className="spin" /> : <GitPullRequest size={13} />} Push work as PR
-            </button>
-          ) : (
-            <button className="repo-warn-btn" disabled={busy} onClick={update}>
-              {busy ? <Loader2 size={13} className="spin" /> : <ArrowDownToLine size={13} />} Update
-            </button>
+        <>
+          {behind > 0 && (
+            <div className="repo-warn behind">
+              <ArrowDownToLine size={14} />
+              <span>
+                <b>{behind}</b> new commit{behind === 1 ? '' : 's'} available from <code>origin/{db}</code>
+                {status?.dirty ? ' (your uncommitted work is kept)' : ''}.
+              </span>
+              <button className="repo-warn-btn" disabled={busy} onClick={update}>
+                {busy ? <Loader2 size={13} className="spin" /> : <ArrowDownToLine size={13} />} Update
+              </button>
+            </div>
           )}
-          {msg && <span className="repo-warn-msg">{msg}</span>}
-        </div>
+          {unpublished > 0 && (
+            <div className="repo-warn unpushed">
+              <GitPullRequest size={14} />
+              <span>
+                You have <b>{unpublished}</b> unpublished commit{unpublished === 1 ? '' : 's'} - optional, publish
+                whenever. Your local branch stays untouched.
+              </span>
+              <button className="repo-warn-btn ghost" disabled={busy} onClick={pushWorkPr}>
+                {busy ? <Loader2 size={13} className="spin" /> : <GitPullRequest size={13} />} Push as PR
+              </button>
+            </div>
+          )}
+          {msg && (
+            <div className="repo-warn ok">
+              <Check size={14} />
+              <span>{msg}</span>
+            </div>
+          )}
+        </>
       )
     }
   }
