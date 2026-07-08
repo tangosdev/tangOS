@@ -11,3 +11,7 @@ console/release/
 console/out/
 # TypeScript incremental build cache (regenerated every build)
 *.tsbuildinfo
+# Local Windows double-click launchers (dev + built app). Kept out of the public
+# tree on purpose - restore from history if you need them again.
+/Launch tangOS (dev).cmd
+/Launch tangOS Console.cmd
