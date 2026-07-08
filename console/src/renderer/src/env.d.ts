@@ -55,6 +55,7 @@ export interface TangosApi {
   writeDescriptor(descriptor: TangosDescriptor): Promise<RepoState>
   reloadDescriptor(): Promise<RepoState>
   onDescriptorReloaded(cb: (info: { toolCount: number; errors: number; reason: string }) => void): () => void
+  onDebugDumped(cb: (dir: string) => void): () => void
   secretsInfo(): Promise<SecretsInfo>
   setSecret(name: string, value: string): Promise<SecretsInfo>
   deleteSecret(name: string): Promise<SecretsInfo>

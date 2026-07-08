@@ -70,6 +70,10 @@ export default function App(): JSX.Element {
       setReloadNote(`Descriptor reloaded · ${info.toolCount} tools${errs}`)
       window.setTimeout(() => setReloadNote(null), 2600)
     })
+    const unsubDebug = window.tangos.onDebugDumped(() => {
+      setReloadNote('Debug snapshot saved')
+      window.setTimeout(() => setReloadNote(null), 2200)
+    })
     ;(async () => {
       const s = await window.tangos.getState()
       setRepo(s.repo)
@@ -111,6 +115,7 @@ export default function App(): JSX.Element {
       unsubActivity()
       unsubState()
       unsubReload()
+      unsubDebug()
     }
   }, [])
 

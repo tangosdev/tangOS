@@ -53,10 +53,12 @@ export async function dumpDebug(win: BrowserWindow | null, state: unknown, activ
     join(dir, 'state.json'),
     JSON.stringify({ at: new Date().toISOString(), version: app.getVersion(), state, activity }, null, 2)
   )
+  // In-app toast (works in dev, unlike a native notification which needs the installed app's ID).
+  if (win && !win.isDestroyed()) win.webContents.send('debug:dumped', dir)
   try {
     new Notification({ title: 'tangOS debug', body: 'Snapshot saved (screenshot + state + dom)' }).show()
   } catch {
-    /* notifications may be off */
+    /* native notifications may be off (e.g. a dev build) */
   }
   return dir
 }

@@ -60,6 +60,11 @@ const api = {
     ipcRenderer.on('descriptor:reloaded', l)
     return () => ipcRenderer.removeListener('descriptor:reloaded', l)
   },
+  onDebugDumped: (cb: (dir: string) => void): (() => void) => {
+    const l = (_e: unknown, dir: string): void => cb(dir)
+    ipcRenderer.on('debug:dumped', l)
+    return () => ipcRenderer.removeListener('debug:dumped', l)
+  },
 
   secretsInfo: (): Promise<SecretsInfo> => ipcRenderer.invoke('secrets:info'),
   setSecret: (name: string, value: string): Promise<SecretsInfo> =>
