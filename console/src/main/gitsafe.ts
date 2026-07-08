@@ -123,6 +123,38 @@ export async function remoteSlug(repo: string): Promise<{ owner: string; repo: s
   return null
 }
 
+/** Whether the working tree has any uncommitted or untracked changes (matched work not yet banked). */
+export async function isDirty(repo: string): Promise<boolean> {
+  return (await git(repo, ['status', '--porcelain'])).out.trim().length > 0
+}
+
+/** How many commits HEAD is ahead of / behind origin/<branch>. null if the remote ref is unknown
+ *  (no fetch yet, or the branch doesn't exist on origin). */
+export async function aheadBehind(repo: string, branch: string): Promise<{ ahead: number; behind: number } | null> {
+  const ref = `origin/${branch}`
+  if ((await git(repo, ['rev-parse', '--verify', '--quiet', ref])).code !== 0) return null
+  const r = await git(repo, ['rev-list', '--left-right', '--count', `HEAD...${ref}`])
+  if (r.code !== 0) return null
+  const m = /(\d+)\s+(\d+)/.exec(r.out.trim())
+  if (!m) return null
+  return { ahead: parseInt(m[1], 10), behind: parseInt(m[2], 10) }
+}
+
+/** Update remote-tracking refs from origin (best-effort; network may be down). */
+export async function fetchRemote(repo: string): Promise<boolean> {
+  return (await git(repo, ['fetch', '--quiet', 'origin'])).code === 0
+}
+
+/** Fast-forward the current branch to origin/<branch>. Never rewrites or discards local commits:
+ *  if the branch has diverged (local commits not on origin), the ff-only merge fails cleanly and
+ *  the caller surfaces the message. Untracked files are left untouched (git refuses to clobber). */
+export async function fastForwardPull(repo: string, branch: string): Promise<{ ok: boolean; err: string }> {
+  const f = await git(repo, ['fetch', '--quiet', 'origin', branch])
+  if (f.code !== 0) return { ok: false, err: (f.err || f.out).trim() || 'fetch failed' }
+  const r = await git(repo, ['merge', '--ff-only', `origin/${branch}`])
+  return { ok: r.code === 0, err: (r.err || r.out).trim() }
+}
+
 /** The remote's default branch (what a PR should target), falling back to 'main'. */
 export async function defaultBranch(repo: string): Promise<string> {
   const r = await git(repo, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'])
