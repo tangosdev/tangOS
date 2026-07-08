@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Sparkles, Play, Square, ShoppingCart, ShieldCheck, AlertTriangle, GitBranch, GitPullRequest } from 'lucide-react'
+import { Sparkles, Play, Square, ShoppingCart, ShieldCheck, AlertTriangle, GitBranch, GitPullRequest, BarChart2 } from 'lucide-react'
 import type { AiAgent, ActivityRun, Batch } from '../../../shared/types'
 import { ROLE_NAMES, ROLE_PRESETS } from '../../../shared/types'
 import { aiColor } from '../aiColor'
@@ -192,7 +192,6 @@ export default function Controller({
                 className={`ai-box ${state}${generating ? ' busy' : ''}`}
                 key={a.name}
                 style={{ borderColor: col }}
-                onClick={() => onOpenDetail(a.name)}
               >
                 {generating && (
                   <div className="aib-loading">
@@ -214,6 +213,13 @@ export default function Controller({
                     {a.stats.totalMatches}
                     <small> matched</small>
                   </span>
+                  <button
+                    className="aib-detail-btn"
+                    title="Open detailed stats, history, and recommendation"
+                    onClick={() => onOpenDetail(a.name)}
+                  >
+                    <BarChart2 size={13} />
+                  </button>
                 </div>
 
                 <div className="aib-task">

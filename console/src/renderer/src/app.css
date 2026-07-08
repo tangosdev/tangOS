@@ -825,6 +825,15 @@ html, body, #root { background: transparent !important; }
 }
 .aib-matches { margin-left: auto; flex: none; font-weight: 800; font-size: 16px; color: rgb(var(--aero-matched-rgb)); }
 .aib-matches small { font-size: 10px; font-weight: 600; color: var(--aero-muted); }
+/* Explicit "open detail" affordance — the box body no longer opens the modal, so its
+   inline controls (size, roles, buttons) are always directly clickable. */
+.aib-detail-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border-radius: 7px; cursor: pointer;
+  color: var(--aero-muted); background: rgba(255, 255, 255, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.7); transition: all 0.12s ease;
+}
+.aib-detail-btn:hover { color: var(--aero-text); background: rgba(255, 255, 255, 0.85); }
 .aib-task {
   flex: 1 1 auto; border-radius: 10px; padding: 8px 10px; min-height: 40px; background: rgba(255,255,255,0.4);
   border: 1px solid var(--aero-border); display: flex; flex-direction: column; gap: 6px; justify-content: center;
