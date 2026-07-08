@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
-  Batch, BatchDraft, BatchItem, AtlasDb, Review, ClaimsResult, ClaimsList, GithubCredits, ConnectedClient, SecretsInfo,
+  Batch, BatchDraft, BatchItem, AtlasDb, Review, GithubCredits, ConnectedClient, SecretsInfo,
   AiAgent, RepoUpdateStatus
 } from '../../shared/types'
 
@@ -19,6 +19,7 @@ type FullState = {
   reportsEnabled: boolean
   tourSeen: boolean
   useAgents: boolean
+  agentFanout: number
   autoLand: boolean
   autoPush: { enabled: boolean; on: boolean; state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'; message?: string; prUrl?: string; at?: number }
   looping: string[]
@@ -39,10 +40,6 @@ export interface TangosApi {
   atlasLoadLive(force?: boolean): Promise<AtlasDb | null>
   atlasCurrent(): Promise<AtlasDb | null>
   atlasGenerate(): Promise<AtlasDb | null>
-  claimsCheck(module: string, start: string, end: string): Promise<ClaimsResult | null>
-  claimsList(): Promise<ClaimsList>
-  claimsLock(p: { module: string; start: string; end: string; note?: string }): Promise<{ ok: boolean; error?: string }>
-  claimsRelease(id: string): Promise<{ ok: boolean; error?: string }>
   openModulePopout(module: string): Promise<void>
   addDraftItem(item: BatchItem): Promise<void>
   onDraftAdd(cb: (item: BatchItem) => void): () => void
@@ -88,6 +85,7 @@ export interface TangosApi {
   assignAi(p: { agent: string; role?: string; count: number; loop?: boolean }): Promise<{ ok: boolean }>
   stopAi(agent: string): Promise<boolean>
   setUseAgents(on: boolean): Promise<boolean>
+  setAgentFanout(n: number): Promise<number>
   setAutoLand(on: boolean): Promise<boolean>
   setAutoPush(on: boolean): Promise<boolean>
   removeBatch(id: string): Promise<Batch[]>

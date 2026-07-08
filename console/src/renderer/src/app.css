@@ -1048,6 +1048,31 @@ html, body, #root { background: transparent !important; }
   background: rgba(234,179,8,0.16); border: 1px solid rgba(234,179,8,0.5);
 }
 .repo-warn code { background: rgba(0,0,0,0.06); padding: 0 4px; border-radius: 4px; }
+/* Settings: functions-per-sub-agent number row */
+.settings-num-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; }
+/* Settings: collapsible "What's this?" info bubble that keeps the panel compact */
+.settings-info { margin: 3px 0 6px; }
+.settings-info > summary {
+  cursor: pointer; list-style: none; width: fit-content;
+  display: inline-flex; align-items: center; gap: 2px;
+  font-size: 11px; font-weight: 600; color: var(--aero-muted);
+  padding: 2px 9px 2px 5px; border-radius: 999px;
+  background: rgba(255,255,255,0.55); border: 1px solid var(--aero-border);
+}
+.settings-info > summary::-webkit-details-marker { display: none; }
+.settings-info > summary:hover { background: rgba(255,255,255,0.85); }
+.settings-info-caret { transition: transform 0.15s ease; flex: none; }
+.settings-info[open] .settings-info-caret { transform: rotate(90deg); }
+.settings-info-body {
+  margin-top: 5px; font-size: 11.5px; line-height: 1.45; color: var(--aero-muted); padding: 0 4px;
+}
+.settings-info-body code { background: rgba(0,0,0,0.06); padding: 0 3px; border-radius: 4px; }
+/* functions-per-agent token-waste hint under an AI box's size input */
+.aib-size-warn {
+  display: block; margin-top: 4px; font-size: 10.5px; line-height: 1.3; color: #7a3b00;
+  background: rgba(234,179,8,0.14); border: 1px solid rgba(234,179,8,0.4);
+  border-radius: 7px; padding: 3px 7px;
+}
 /* "local is behind the remote" - informational blue, distinct from the amber ZIP warning */
 .repo-warn.behind { color: #0b4a6f; background: rgba(14,165,233,0.14); border-color: rgba(14,165,233,0.5); }
 /* brief post-update confirmation - green */
@@ -1146,9 +1171,26 @@ html, body, #root { background: transparent !important; }
 .aid-runs { max-height: 260px; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 7px; padding: 2px; }
 .aid-runs .mini-run { background: rgba(255,255,255,0.6); box-shadow: 0 1px 3px rgba(20,50,80,0.06); }
 .aid-live {
-  max-height: 200px; overflow: auto; margin: 0; padding: 10px 12px; border-radius: 10px;
+  min-height: 170px; max-height: 400px; overflow: auto; margin: 0; padding: 10px 12px; border-radius: 10px;
   font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
   background: #10241a; color: #b7f0c0; border: 1px solid rgba(94,194,46,0.35);
+}
+/* Recent runs: collapsed by default, holds the 10 latest inside its own scrolling bubble */
+.aid-runs-wrap { margin-top: 8px; }
+.aid-runs-summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 4px; }
+.aid-runs-summary::-webkit-details-marker { display: none; }
+.aid-runs-wrap[open] .settings-info-caret { transform: rotate(90deg); }
+.aid-runs-count {
+  margin-left: 6px; font-size: 10px; font-weight: 700; color: var(--aero-muted);
+  background: rgba(0,0,0,0.06); border-radius: 999px; padding: 1px 7px;
+}
+.aid-runs-wrap[open] .aid-runs { margin-top: 7px; }
+/* Output revealed when a recent-run row is expanded - same terminal look as the live pane */
+.mini-output {
+  max-height: 220px; overflow: auto; margin: 0; padding: 8px 10px;
+  border-top: 1px solid rgba(94,194,46,0.25); border-radius: 0 0 9px 9px;
+  font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; line-height: 1.4;
+  white-space: pre-wrap; word-break: break-word; background: #10241a; color: #b7f0c0;
 }
 
 /* Tango helper: bottom-right mascot holding a floating tips panel */

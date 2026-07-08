@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
-  Batch, BatchDraft, BatchItem, AtlasDb, Review, ClaimsResult, ClaimsList, GithubCredits, ConnectedClient, SecretsInfo,
+  Batch, BatchDraft, BatchItem, AtlasDb, Review, GithubCredits, ConnectedClient, SecretsInfo,
   AiAgent, RepoUpdateStatus
 } from '../shared/types'
 
@@ -19,6 +19,7 @@ type FullState = {
   reportsEnabled: boolean
   tourSeen: boolean
   useAgents: boolean
+  agentFanout: number
   autoLand: boolean
   autoPush: { enabled: boolean; on: boolean; state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'; message?: string; prUrl?: string; at?: number }
   looping: string[]
@@ -32,12 +33,6 @@ const api = {
   atlasLoadLive: (force?: boolean): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:loadLive', force),
   atlasCurrent: (): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:current'),
   atlasGenerate: (): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:generate'),
-  claimsCheck: (module: string, start: string, end: string): Promise<ClaimsResult | null> =>
-    ipcRenderer.invoke('claims:check', { module, start, end }),
-  claimsList: (): Promise<ClaimsList> => ipcRenderer.invoke('claims:list'),
-  claimsLock: (p: { module: string; start: string; end: string; note?: string }): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke('claims:lock', p),
-  claimsRelease: (id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('claims:release', id),
   openModulePopout: (module: string): Promise<void> => ipcRenderer.invoke('atlas:popout', module),
   addDraftItem: (item: BatchItem): Promise<void> => ipcRenderer.invoke('draft:addItem', item),
   onDraftAdd: (cb: (item: BatchItem) => void): (() => void) => {
@@ -115,6 +110,7 @@ const api = {
     ipcRenderer.invoke('ai:assign', p),
   stopAi: (agent: string): Promise<boolean> => ipcRenderer.invoke('ai:stop', agent),
   setUseAgents: (on: boolean): Promise<boolean> => ipcRenderer.invoke('policy:setUseAgents', on),
+  setAgentFanout: (n: number): Promise<number> => ipcRenderer.invoke('policy:setAgentFanout', n),
   setAutoLand: (on: boolean): Promise<boolean> => ipcRenderer.invoke('policy:setAutoLand', on),
   setAutoPush: (on: boolean): Promise<boolean> => ipcRenderer.invoke('policy:setAutoPush', on),
   removeBatch: (id: string): Promise<Batch[]> => ipcRenderer.invoke('batch:remove', id),

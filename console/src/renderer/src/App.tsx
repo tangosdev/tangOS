@@ -46,6 +46,7 @@ export default function App(): JSX.Element {
   const [reportsEnabled, setReportsEnabled] = useState(false)
   const [version, setVersion] = useState('')
   const [useAgents, setUseAgents] = useState(false)
+  const [agentFanout, setAgentFanout] = useState(8)
   const [autoLand, setAutoLand] = useState(true)
   const [autoPush, setAutoPush] = useState<{
     enabled: boolean
@@ -64,8 +65,6 @@ export default function App(): JSX.Element {
   const settingsRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    let unsubActivity = (): void => {}
-    let unsubState = (): void => {}
     const unsubReload = window.tangos.onDescriptorReloaded((info) => {
       const errs = info.errors ? ` · ${info.errors} error(s)` : ''
       setReloadNote(`Descriptor reloaded · ${info.toolCount} tools${errs}`)
@@ -74,6 +73,29 @@ export default function App(): JSX.Element {
     const unsubDebug = window.tangos.onDebugDumped(() => {
       setReloadNote('Debug snapshot saved')
       window.setTimeout(() => setReloadNote(null), 2200)
+    })
+    // Subscribe SYNCHRONOUSLY, never inside the async block below. If a subscribe sits after an
+    // await, StrictMode's dev mount -> cleanup -> remount runs this effect's cleanup before the
+    // awaited subscribe has happened, so the listener can't be removed and a second one leaks -
+    // every activity/state event then fires twice (the doubled live-viewer output).
+    const unsubActivity = window.tangos.onActivity(applyActivity)
+    const unsubState = window.tangos.onState((st) => {
+      setRepo(st.repo)
+      setMcp(st.mcp)
+      setAllowMutations(st.allowMutations)
+      setEnabledIds(st.enabledToolIds)
+      setBatches(st.batches)
+      setSafeMode(st.safeMode)
+      setReviews(st.reviews)
+      setBaseBranch(st.baseBranch)
+      setAgents(st.agents)
+      setReportsEnabled(st.reportsEnabled)
+      setUseAgents(st.useAgents)
+      setAgentFanout(st.agentFanout ?? 8)
+      setAutoLand(st.autoLand)
+      setAutoPush(st.autoPush)
+      setLooping(st.looping)
+      setTourSeen(st.tourSeen)
     })
     ;(async () => {
       const s = await window.tangos.getState()
@@ -88,29 +110,12 @@ export default function App(): JSX.Element {
       setAgents(s.agents)
       setReportsEnabled(s.reportsEnabled)
       setUseAgents(s.useAgents)
+      setAgentFanout(s.agentFanout ?? 8)
       setAutoLand(s.autoLand)
       setAutoPush(s.autoPush)
       setLooping(s.looping)
       setTourSeen(s.tourSeen)
       setRuns((await window.tangos.activitySnapshot()).slice(-MAX_RUNS))
-      unsubActivity = window.tangos.onActivity(applyActivity)
-      unsubState = window.tangos.onState((st) => {
-        setRepo(st.repo)
-        setMcp(st.mcp)
-        setAllowMutations(st.allowMutations)
-        setEnabledIds(st.enabledToolIds)
-        setBatches(st.batches)
-        setSafeMode(st.safeMode)
-        setReviews(st.reviews)
-        setBaseBranch(st.baseBranch)
-        setAgents(st.agents)
-        setReportsEnabled(st.reportsEnabled)
-        setUseAgents(st.useAgents)
-        setAutoLand(st.autoLand)
-        setAutoPush(st.autoPush)
-        setLooping(st.looping)
-        setTourSeen(st.tourSeen)
-      })
     })()
     return () => {
       unsubActivity()
@@ -280,7 +285,6 @@ export default function App(): JSX.Element {
         onRemove={removeFromCart}
         draftRefs={new Set(cart.map((i) => i.ref))}
         liveEnabled={!!repo?.descriptor?.data?.committedDbUrl}
-        claimsEnabled={!!repo?.descriptor?.data?.claimsApi}
       />
     : consoleBody
 
@@ -339,6 +343,7 @@ export default function App(): JSX.Element {
                     onPickRepo={changeRepo}
                     reportsEnabled={reportsEnabled}
                     useAgents={useAgents}
+                    agentFanout={agentFanout}
                     autoLand={autoLand}
                   />
                 )}

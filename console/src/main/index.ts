@@ -13,7 +13,6 @@ import { registerAll, cliCommand } from './connect'
 import { runTool } from './runTool'
 import { preflight } from './preflight'
 import { readAtlas } from './atlas'
-import { listClaims, tryLock, releaseClaim, hasKey, handle as claimsHandle, claimGuard, type ClaimGuard } from './claims'
 import { githubCredits } from './github'
 import { startDeviceFlow, pollForToken } from './githubAuth'
 import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
@@ -53,6 +52,7 @@ interface AppState {
   reportsEnabled: boolean
   tourSeen: boolean
   useAgents: boolean // run drivers with parallel workers (and allow concurrent drives)
+  agentFanout: number // functions per sub-agent an MCP AI spawns in agents mode (batch/this = agent count)
   autoLand: boolean // after a drive, bank + verify (crackloop land) the matches into the repo
   autoPushEnabled: boolean // the "Push" toggle: with Writes + Review also on, auto-push matched work as a rolling PR
 }
@@ -71,6 +71,7 @@ const state: AppState = {
   reportsEnabled: false,
   tourSeen: false,
   useAgents: false,
+  agentFanout: 8,
   autoLand: true,
   autoPushEnabled: false
 }
@@ -81,6 +82,13 @@ const agentLoop = new Set<string>()
 // Kill switches for in-flight API drivers, keyed by agent name, so the red Stop button can
 // end a drive early. Whatever the driver already landed is kept (matches are recorded live).
 const driveKills = new Map<string, () => void>()
+
+// Full enriched worklist rows (disasm/callees/pool/...) coddog produced during genDraft, keyed by
+// function name. driveBatch writes THESE as the driver's worklist so its context tool (abrow.py)
+// gets real disassembly; a minimal row makes the driver fly blind (KeyError: 'disasm') and match
+// nothing. Targets without a preserved row (e.g. a custom Atlas batch) are enriched on demand via
+// `worklist --addr`. Cleared on repo change.
+const enrichedRows = new Map<string, string>()
 
 // Batch generation is serialized: the scheduler ranks the whole corpus and is CPU/RAM heavy,
 // so running two at once (e.g. clicking Recommended on a second AI mid-generation, on top of a
@@ -436,6 +444,7 @@ function saveSettings(): void {
         reportsEnabled: state.reportsEnabled,
         tourSeen: state.tourSeen,
         useAgents: state.useAgents,
+        agentFanout: state.agentFanout,
         autoLand: state.autoLand,
         autoPushEnabled: state.autoPushEnabled
       })
@@ -452,6 +461,7 @@ function loadSettings(): {
   reportsEnabled?: boolean
   tourSeen?: boolean
   useAgents?: boolean
+  agentFanout?: number
   autoLand?: boolean
   autoPushEnabled?: boolean
 } {
@@ -559,6 +569,9 @@ function agentPrompt(): string {
     '  4. On any tool error (-32602 / compile fail): read that tool\'s args in tangos.json, fix the call, and RETRY. Never end your turn on the first failed call.',
     '  5. Every call streams into the human\'s live viewer tagged with your name - skip the narration and just work. If you hit a known wall, say so plainly and move on rather than grinding.',
     '  6. Stay in your lane: edit source only for your assigned targets, and if an edit makes a function worse, revert it - never leave a tracked file regressed. Keep scratch files, notes, and reports in a temp dir, not in the repo or next to source.',
+    state.useAgents
+      ? `  7. Agents mode is ON: if you fan out into sub-agents, put ~${state.agentFanout} functions in EACH (e.g. a 16-function batch -> about ${Math.max(1, Math.round(16 / state.agentFanout))} sub-agents). NEVER spawn one sub-agent per function - that multiplies token cost for no gain.`
+      : '  7. Work your whole batch yourself in one context. Do NOT spawn one sub-agent per function - it wastes tokens.',
     proj?.readFirst ? `\nREAD FIRST: ${proj.readFirst}` : null
   ]
   return lines.filter((l) => l !== null).join('\n').trim()
@@ -653,6 +666,7 @@ function fullState() {
     reportsEnabled: state.reportsEnabled,
     tourSeen: state.tourSeen,
     useAgents: state.useAgents,
+    agentFanout: state.agentFanout,
     autoLand: state.autoLand,
     autoPush: { enabled: state.autoPushEnabled, on: autoPushActive(), ...autoPushStatus },
     looping: [...agentLoop]
@@ -737,6 +751,7 @@ function setRepo(path: string | null): RepoState {
   state.batches = []
   state.reviews = []
   state.baseBranch = null
+  enrichedRows.clear() // preserved coddog context belongs to the old repo
   atlasCache = { repo: state.repoPath }
   // Changing the repo invalidates any AI sessions' tool lists.
   mcp.resetSessions()
@@ -865,38 +880,6 @@ ipcMain.handle('atlas:loadLive', async (_e, force?: boolean) => {
   }
 })
 
-ipcMain.handle('claims:list', async () => {
-  const base = state.descriptor?.data?.claimsApi
-  if (!base || !state.repoPath) return { claims: [], whoami: { hasKey: false, handle: '' } }
-  const claims = await listClaims(base)
-  return { claims, whoami: { hasKey: hasKey(state.repoPath), handle: claimsHandle(state.repoPath) } }
-})
-
-ipcMain.handle('claims:lock', async (_e, p: { module: string; start: string; end: string; note?: string }) => {
-  const base = state.descriptor?.data?.claimsApi
-  if (!base || !state.repoPath) throw new Error('this repo has no claimsApi configured')
-  return tryLock(base, state.repoPath, p)
-})
-
-ipcMain.handle('claims:release', async (_e, id: string) => {
-  const base = state.descriptor?.data?.claimsApi
-  if (!base || !state.repoPath) throw new Error('this repo has no claimsApi configured')
-  return releaseClaim(base, state.repoPath, id)
-})
-
-ipcMain.handle('claims:check', async (_e, p: { module: string; start: string; end: string }) => {
-  const base = state.descriptor?.data?.claimsApi
-  if (!base) return null
-  const u = `${base.replace(/\/$/, '')}/check?module=${encodeURIComponent(p.module)}&start=${encodeURIComponent(p.start)}&end=${encodeURIComponent(p.end)}`
-  try {
-    const r = await fetch(u)
-    if (!r.ok) return { ok: false, error: r.status }
-    return await r.json()
-  } catch (e) {
-    return { ok: false, error: String(e) }
-  }
-})
-
 ipcMain.handle('atlas:generate', async () => {
   if (!state.repoPath || !state.descriptor?.data?.generate) {
     throw new Error('this repo has no data.generate command in tangos.json')
@@ -953,22 +936,10 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   const taken = new Set(
     state.batches.filter((b) => b.status !== 'done').flatMap((b) => b.items.map((i) => i.ref))
   )
-  // Reconcile with the live claims board so we never hand out a span another machine already
-  // claimed (the duplicate-work bug in CLAIMS_COORDINATION_REPORT). The read is keyless and
-  // best-effort: an unconfigured or unreachable board simply skips this gate rather than blocking
-  // generation. Fetched once here; the loop below drops any candidate a different handle owns.
-  let guard: ClaimGuard | null = null
-  const claimsApi = state.descriptor.data?.claimsApi
-  if (claimsApi) {
-    try {
-      guard = claimGuard(await listClaims(claimsApi), claimsHandle(state.repoPath))
-    } catch {
-      guard = null
-    }
-  }
-  let droppedForClaims = 0
-  // Ask the scheduler for extra so we still have `count` after dropping the taken ones.
-  const plan = genPlanFor(role, count + taken.size)
+  // Over-fetch beyond `count`: sibling-name dupes get dropped below, so without headroom "give me
+  // 20" quietly lands short. coddog ranks the whole corpus regardless of limit (it only truncates
+  // the result), so a bigger limit is nearly free.
+  const plan = genPlanFor(role, count + taken.size + Math.max(count, 16))
   // The planned scheduler, falling back to coddog, then any read-only limit+out tool.
   const sched =
     state.descriptor.tools.find((t) => t.id === plan.schedId) ??
@@ -1054,11 +1025,6 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
       if (taken.has(r.name)) continue // already assigned elsewhere, or a same-name sibling above
       const addr = r.addr ? parseInt(r.addr, 16) : undefined
       const size = r.size ? parseInt(r.size, 16) : undefined
-      if (guard?.(r.module, addr, size)) {
-        droppedForClaims++
-        taken.add(r.name) // skip this row and reach further down for an unclaimed candidate
-        continue
-      }
       const sib = r.siblings?.[0]
       const sim = Math.round((r.coddog_sim ?? sib?.sim ?? 0) * 100)
       items.push({
@@ -1070,6 +1036,9 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
         targetHex: r.target_hex,
         label: sib ? `${sim}% like ${sib.name}` : undefined
       })
+      // Keep coddog's FULL enriched row (disasm/callees/pool) so driveBatch can hand the driver real
+      // context instead of a stripped-down row its context tool can't read.
+      enrichedRows.set(r.name, line)
       // Sibling thunks (e.g. _ZThn80_*D0Ev) share a mangled name across addresses; one source
       // matches them all, so never put the same name in a batch twice - it just looks like the
       // scheduler handed out the same target repeatedly.
@@ -1083,21 +1052,10 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   } catch {
     /* ignore */
   }
-  if (!items.length) {
-    if (droppedForClaims)
-      throw new Error(
-        `Every candidate this round is already claimed by other agents on the board (${droppedForClaims} skipped). ` +
-          'Nothing free to hand out right now - try again once they release, or switch role/module.'
-      )
-    throw new Error('scheduler returned no functions')
-  }
-  const coordNote = droppedForClaims
-    ? `\n\nCoordination: skipped ${droppedForClaims} target(s) already claimed by other agents on the board, so this batch is disjoint from their live claims.`
-    : ''
+  if (!items.length) throw new Error('scheduler returned no functions')
   const prompt =
     'Match these targets. Each was picked by opcode similarity to an already-matched sibling ' +
-    '(shown per target) - lean on that sibling as scaffolding. Run `match` on each; use `fdiff` on near-misses.' +
-    coordNote
+    '(shown per target) - lean on that sibling as scaffolding. Run `match` on each; use `fdiff` on near-misses.'
   const label = role && role !== 'Unassigned' ? role : 'Similarity'
   return { title: `${label} batch (${items.length})`, prompt, items } satisfies BatchDraft
 }
@@ -1257,6 +1215,40 @@ ipcMain.handle('ai:stop', (_e, agentName: string) => {
   return true
 })
 
+/** Fetch one target's full enriched worklist row (disasm/callees/pool) via `worklist --addr`, for
+ *  batch targets coddog didn't produce (e.g. functions picked in the Atlas). Returns the JSONL row
+ *  string, or null if the repo has no worklist tool / the target can't be located. Quiet: spawns
+ *  python directly rather than through runTool, so it never clutters the live viewer. */
+async function enrichTarget(item: BatchItem): Promise<string | null> {
+  const repo = state.repoPath
+  if (!repo || item.addr == null || !item.module) return null
+  if (!state.descriptor?.tools?.some((t) => t.id === 'worklist')) return null
+  const py = currentRuntime().python || 'python'
+  const addr = '0x' + item.addr.toString(16).padStart(8, '0')
+  const out = await new Promise<string>((resolve) => {
+    let buf = ''
+    try {
+      const c = spawn(py, ['tools/worklist.py', '--module', item.module!, '--addr', addr], {
+        cwd: repo,
+        env: { ...process.env, ...secretsEnv() }
+      })
+      c.stdout?.on('data', (d) => (buf += String(d)))
+      c.on('error', () => resolve(''))
+      c.on('close', () => resolve(buf))
+    } catch {
+      resolve('')
+    }
+  })
+  // worklist prints one enriched JSON row (when not --pretty). Take the last line that looks like it.
+  return (
+    out
+      .split('\n')
+      .map((l) => l.trim())
+      .reverse()
+      .find((l) => l.startsWith('{') && l.includes('"disasm"')) ?? null
+  )
+}
+
 // Console-drive a keyed API provider on its assigned batch: write a worklist and run the
 // model driver (glm_refine, Anthropic-dialect) tagged as that AI, then fold the reported
 // landed matches + token usage into its stats.
@@ -1280,18 +1272,29 @@ async function driveBatch(agentName: string): Promise<void> {
   driverEnv.TANGOS_EFFORT = agentEfforts[agentName] ?? effortDefault[agentName] ?? ''
   const batch = state.batches.find((b) => b.targetAgent === agentName && b.status !== 'done')
   if (!batch) throw new Error(`no batch assigned to ${agentName} - assign one first`)
-  const rows = batch.items
-    .filter((i) => i.addr != null && i.size != null && i.module && i.targetHex)
-    .map((i) =>
-      JSON.stringify({
-        name: i.ref,
-        addr: '0x' + i.addr!.toString(16).padStart(8, '0'),
-        size: '0x' + i.size!.toString(16),
-        module: i.module,
-        target_hex: i.targetHex
-      })
+  // Build the driver worklist with FULL context. Prefer coddog's preserved enriched row (from
+  // genDraft); for a target without one (a batch built in the Atlas), enrich on demand via
+  // `worklist --addr`. A target we can neither preserve nor enrich (no addr/module) is skipped.
+  const rows: string[] = []
+  let couldNotEnrich = 0
+  for (const i of batch.items) {
+    const preserved = enrichedRows.get(i.ref)
+    if (preserved) {
+      rows.push(preserved)
+      continue
+    }
+    const enriched = await enrichTarget(i)
+    if (enriched) {
+      enrichedRows.set(i.ref, enriched)
+      rows.push(enriched)
+    } else couldNotEnrich++
+  }
+  if (!rows.length)
+    throw new Error(
+      couldNotEnrich
+        ? `none of this batch's ${couldNotEnrich} target(s) could be enriched with context - pick targets with an addr + module the worklist tool knows, or generate the batch with the Recommended button (coddog)`
+        : 'this batch has no drivable targets'
     )
-  if (!rows.length) throw new Error('this batch has no drivable targets (need addr/size/module/target bytes)')
 
   // Stable, discoverable location (not a random temp name) so the run's "open folder" link
   // always resolves to real files. One worklist + output per agent; the next drive overwrites.
@@ -1560,6 +1563,15 @@ ipcMain.handle('policy:setUseAgents', (_e, on: boolean) => {
   pushState()
   return state.useAgents
 })
+
+ipcMain.handle('policy:setAgentFanout', (_e, n: number) => {
+  // Functions per sub-agent in agents mode. Clamp to something sane; 8 is the default.
+  const v = Math.floor(Number(n))
+  state.agentFanout = Number.isFinite(v) && v >= 1 ? Math.min(64, v) : 8
+  saveSettings()
+  pushState()
+  return state.agentFanout
+})
 ipcMain.handle('policy:setAutoLand', (_e, on: boolean) => {
   state.autoLand = !!on
   saveSettings()
@@ -1812,6 +1824,7 @@ ipcMain.handle('bug:submit', async (_e, payload: { description: string; screensh
       allowMutations: state.allowMutations,
       safeMode: state.safeMode,
       useAgents: state.useAgents,
+      agentFanout: state.agentFanout,
       autoLand: state.autoLand,
       autoPushEnabled: state.autoPushEnabled
     },
@@ -1866,6 +1879,7 @@ app.whenReady().then(() => {
   state.reportsEnabled = saved.reportsEnabled ?? false
   state.tourSeen = saved.tourSeen ?? false
   state.useAgents = saved.useAgents ?? false
+  state.agentFanout = saved.agentFanout ?? 8
   state.autoLand = saved.autoLand ?? true
   state.autoPushEnabled = saved.autoPushEnabled ?? false
   setReportsEnabled(state.reportsEnabled)

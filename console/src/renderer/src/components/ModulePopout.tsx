@@ -3,7 +3,7 @@ import { X, Plus } from 'lucide-react'
 import Treemap from './Treemap'
 import WindowControls from './WindowControls'
 import { sortFns, SORT_LABELS, type SortKey } from '../atlas/sort'
-import type { AtlasDb, AtlasFunction, Claim } from '../../../shared/types'
+import type { AtlasDb, AtlasFunction } from '../../../shared/types'
 
 function addToBatch(f: AtlasFunction): void {
   window.tangos.addDraftItem({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module, module: f.module, addr: f.addr, size: f.size, srcPath: f.srcPath })
@@ -11,8 +11,6 @@ function addToBatch(f: AtlasFunction): void {
 
 export default function ModulePopout({ module }: { module: string }): JSX.Element {
   const [db, setDb] = useState<AtlasDb | null>(null)
-  const [claims, setClaims] = useState<Claim[]>([])
-  const [whoami, setWhoami] = useState<{ hasKey: boolean; handle: string }>({ hasKey: false, handle: '' })
   const [sel, setSel] = useState<AtlasFunction | null>(null)
   const [sort, setSort] = useState<SortKey>('unmatched')
 
@@ -27,13 +25,6 @@ export default function ModulePopout({ module }: { module: string }): JSX.Elemen
         /* ignore */
       }
       setDb(data)
-      try {
-        const cl = await window.tangos.claimsList()
-        setClaims(cl.claims)
-        setWhoami(cl.whoami)
-      } catch {
-        /* no claims */
-      }
     })()
   }, [module])
 
@@ -53,10 +44,6 @@ export default function ModulePopout({ module }: { module: string }): JSX.Elemen
       functions
     }
   }, [db, module])
-
-  function claimFor(f: AtlasFunction): Claim | null {
-    return claims.find((c) => c.module === f.module && f.addr < Number(c.end) && f.addr + f.size > Number(c.start)) ?? null
-  }
 
   const funcs = useMemo(() => (moduleDb ? sortFns(moduleDb.functions, sort) : []), [moduleDb, sort])
 
@@ -99,16 +86,11 @@ export default function ModulePopout({ module }: { module: string }): JSX.Elemen
                   {sel.floor && <div><span className="k">floor</span><span className="v">{sel.floor}</span></div>}
                   {sel.sibling && <div><span className="k">closest match</span><span className="v mono">{sel.sibling}{sel.sim ? ` (${sel.sim})` : ''}</span></div>}
                   {sel.srcPath && <div><span className="k">source</span><span className="v mono">{sel.srcPath}</span></div>}
-                  {(() => {
-                    const c = claimFor(sel)
-                    return c ? <div><span className="k">claim</span><span className="v">{c.handle}{c.note ? ` - ${c.note}` : ''}</span></div> : null
-                  })()}
                 </div>
                 {!sel.matched && (
                   <button
                     className="aero-button"
                     style={{ marginTop: 12 }}
-                    disabled={!!claimFor(sel) && claimFor(sel)!.handle !== whoami.handle}
                     onClick={() => addToBatch(sel)}
                   >
                     <Plus size={14} style={{ verticalAlign: -2, marginRight: 6 }} /> Add to batch
@@ -126,22 +108,14 @@ export default function ModulePopout({ module }: { module: string }): JSX.Elemen
             </div>
             <div className="pop-list">
               {funcs.map((f) => {
-                const c = claimFor(f)
-                const claimedByOther = !!c && c.handle !== whoami.handle
                 return (
                   <div key={f.id} className={`fn-row2 ${sel?.id === f.id ? 'sel' : ''}`} onClick={() => setSel(f)}>
                     <span className={`status-dot ${f.matched ? 'ok' : ''}`} style={f.matched ? {} : { background: 'var(--aero-unmatched)' }} />
                     <span className="fn-name mono">{f.name}</span>
-                    {c && <span className="claim-chip other" title={`claimed by ${c.handle}`}>{c.handle}</span>}
                     <span className="fn-size">{f.size}b</span>
                     <span className="fn-add2" onClick={(e) => e.stopPropagation()}>
                       {!f.matched && (
-                        <button
-                          className="bubble-btn"
-                          disabled={claimedByOther}
-                          title={claimedByOther ? `claimed by ${c!.handle}` : 'Add to batch'}
-                          onClick={() => addToBatch(f)}
-                        >
+                        <button className="bubble-btn" title="Add to batch" onClick={() => addToBatch(f)}>
                           <Plus size={13} strokeWidth={2.5} />
                         </button>
                       )}

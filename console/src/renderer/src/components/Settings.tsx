@@ -1,9 +1,23 @@
-import { FolderOpen, Bug } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { FolderOpen, Bug, ChevronRight } from 'lucide-react'
 import type { RepoState } from '../../../shared/types'
 import KeyVault from './KeyVault'
 
-/** The gear-opened settings panel: repo/decomp folder, theme, and the API-key vault.
- *  Everything that used to clutter the top bar lives here now. */
+/** Collapsible "info bubble" - keeps the settings panel compact by tucking each setting's long
+ *  explanation behind a click. Collapsed by default. */
+function Info({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <details className="settings-info">
+      <summary>
+        <ChevronRight size={11} className="settings-info-caret" /> What&apos;s this?
+      </summary>
+      <div className="settings-info-body">{children}</div>
+    </details>
+  )
+}
+
+/** The gear-opened settings panel: repo/decomp folder, theme, throughput, and the API-key vault.
+ *  Long explanations live in collapsible Info bubbles so the panel stays short. */
 export default function Settings({
   repo,
   theme,
@@ -12,6 +26,7 @@ export default function Settings({
   onPickRepo,
   reportsEnabled,
   useAgents,
+  agentFanout,
   autoLand
 }: {
   repo: RepoState | null
@@ -21,8 +36,10 @@ export default function Settings({
   onPickRepo: () => void
   reportsEnabled: boolean
   useAgents: boolean
+  agentFanout: number
   autoLand: boolean
 }): JSX.Element {
+  const fanout = agentFanout ?? 8
   return (
     <div className="inner-pad settings-panel aero-scroll">
       <h2 style={{ margin: '0 0 10px' }}>Settings</h2>
@@ -47,20 +64,48 @@ export default function Settings({
         <input type="checkbox" checked={useAgents} onChange={(e) => window.tangos.setUseAgents(e.target.checked)} />
         <span>Use agents (run batches in parallel)</span>
       </label>
-      <p className="hint" style={{ margin: '2px 0 6px' }}>
+      <Info>
         Off = one worker at a time. On = a console-driven AI runs its batch across several parallel workers,
         and multiple AIs can drive at once. Faster, but uses more API tokens and CPU.
-      </p>
+      </Info>
+
+      <div className="settings-num-row">
+        <span>Functions per sub-agent</span>
+        <input
+          type="number"
+          min={1}
+          max={64}
+          value={fanout}
+          onChange={(e) => {
+            const n = Math.floor(Number(e.target.value))
+            if (Number.isFinite(n) && n >= 1) window.tangos.setAgentFanout(Math.min(64, n))
+          }}
+          style={{ width: 60 }}
+        />
+      </div>
+      <Info>
+        When agents mode is on and an AI fans out into sub-agents, each one takes this many functions
+        (a 16-function batch = {Math.max(1, Math.round(16 / fanout))} sub-agents). 8 is the sweet spot -
+        smaller repeats per-agent setup cost, and one-function-per-agent is the most wasteful.
+      </Info>
+      {fanout !== 8 && (
+        <span className="aib-size-warn">
+          {fanout < 8
+            ? `${fanout} per sub-agent is low - small groups repeat setup cost and waste tokens. 8 is recommended.`
+            : `${fanout} per sub-agent is high - big groups make each sub-agent slow and pricey. 8 is recommended.`}
+        </span>
+      )}
+
       <label className="settings-check" style={{ marginTop: 8 }}>
         <input type="checkbox" checked={autoLand} onChange={(e) => window.tangos.setAutoLand(e.target.checked)} />
         <span>Auto-land matches into the repo</span>
       </label>
-      <p className="hint" style={{ margin: '2px 0 6px' }}>
+      <Info>
         On (default) = when a drive finishes, its matches are banked into <code>src/</code>, the free-tier
         clone pass runs, and every bank is link-checked - so a found match actually reaches your working tree.
         It stops before <code>git commit</code>; review and commit yourself. Off = matches stay in a scratch
         file for you to land by hand.
-      </p>
+      </Info>
 
       <div className="section-title" style={{ marginTop: 14 }}>Help</div>
       <button className="mini-btn" onClick={() => window.tangos.replayTour()}>
@@ -69,17 +114,13 @@ export default function Settings({
 
       <div className="section-title" style={{ marginTop: 14 }}>Debug reports</div>
       <label className="settings-check">
-        <input
-          type="checkbox"
-          checked={reportsEnabled}
-          onChange={(e) => window.tangos.setReports(e.target.checked)}
-        />
+        <input type="checkbox" checked={reportsEnabled} onChange={(e) => window.tangos.setReports(e.target.checked)} />
         <span>Save batch &amp; run reports (48h)</span>
       </label>
-      <p className="hint" style={{ margin: '2px 0 6px' }}>
+      <Info>
         Off by default. When on, every batch and tool run is logged locally for 48 hours so you can share
         them for prompt and driver tuning. Nothing is sent anywhere.
-      </p>
+      </Info>
       {reportsEnabled && (
         <button className="mini-btn" onClick={() => window.tangos.openReports()}>
           <FolderOpen size={12} style={{ verticalAlign: -2, marginRight: 4 }} />
@@ -88,10 +129,10 @@ export default function Settings({
       )}
 
       <div className="section-title" style={{ marginTop: 14 }}>Debug snapshot</div>
-      <p className="hint" style={{ margin: '2px 0 6px' }}>
+      <Info>
         Saves a screenshot + full app state + the rendered layout to a folder, for diagnosing visual and
         state bugs. Shortcut: <code>Ctrl+Shift+D</code>. (<code>Ctrl+Shift+I</code> toggles DevTools.)
-      </p>
+      </Info>
       <div style={{ display: 'flex', gap: 6 }}>
         <button className="mini-btn go" onClick={() => window.tangos.dumpDebug()}>
           <Bug size={12} style={{ verticalAlign: -2, marginRight: 4 }} />

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, Search, Plus, Minus, X, Database, Cloud, HardDrive, Users, Lock, ExternalLink } from 'lucide-react'
-import type { AtlasDb, AtlasFunction, BatchItem, Claim, GithubCredits } from '../../../shared/types'
+import { RefreshCw, Search, Plus, Minus, X, Database, Cloud, HardDrive, Users, ExternalLink } from 'lucide-react'
+import type { AtlasDb, AtlasFunction, BatchItem, GithubCredits } from '../../../shared/types'
 import Treemap from './Treemap'
 import { sortFns, SORT_LABELS, type SortKey } from '../atlas/sort'
 
@@ -14,14 +14,12 @@ export default function AtlasView({
   onAdd,
   onRemove,
   draftRefs,
-  liveEnabled,
-  claimsEnabled
+  liveEnabled
 }: {
   onAdd: (item: BatchItem) => void
   onRemove: (ref: string) => void
   draftRefs: Set<string>
   liveEnabled: boolean
-  claimsEnabled: boolean
 }): JSX.Element {
   const [db, setDb] = useState<AtlasDb | null>(null)
   const [loading, setLoading] = useState(true)
@@ -35,8 +33,6 @@ export default function AtlasView({
   const [authorFilter, setAuthorFilter] = useState<string | null>(null)
   const [showNearMiss, setShowNearMiss] = useState(true)
   const [selectedFn, setSelectedFn] = useState<AtlasFunction | null>(null)
-  const [claims, setClaims] = useState<Claim[]>([])
-  const [whoami, setWhoami] = useState<{ hasKey: boolean; handle: string }>({ hasKey: false, handle: '' })
   const [gh, setGh] = useState<GithubCredits | null>(null)
 
   useEffect(() => {
@@ -78,13 +74,6 @@ export default function AtlasView({
     }
   }
 
-  async function refreshClaims(): Promise<void> {
-    if (!claimsEnabled) return
-    const r = await window.tangos.claimsList()
-    setClaims(r.claims)
-    setWhoami(r.whoami)
-  }
-
   useEffect(() => {
     ;(async () => {
       if (liveEnabled) {
@@ -93,14 +82,12 @@ export default function AtlasView({
           setDb(await window.tangos.atlasLoadLive())
           setSource('live')
           setLoading(false)
-          refreshClaims()
           return
         } catch {
           /* offline - fall through */
         }
       }
       await load('local')
-      refreshClaims()
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -122,25 +109,6 @@ export default function AtlasView({
     () => [...loginCounts.entries()].filter(([, n]) => n >= 1).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
     [loginCounts]
   )
-
-  const claimIndex = useMemo(() => {
-    const m = new Map<string, { s: number; e: number; handle: string; id: string; note?: string }[]>()
-    for (const c of claims) {
-      const arr = m.get(c.module) ?? []
-      // claim addrs arrive as "0x..." strings - Number() parses those (parseInt(,16) would stop at 'x')
-      arr.push({ s: Number(c.start), e: Number(c.end), handle: c.handle, id: c.id, note: c.note })
-      m.set(c.module, arr)
-    }
-    return m
-  }, [claims])
-
-  function claimFor(f: AtlasFunction): { handle: string; id: string; note?: string } | null {
-    const arr = claimIndex.get(f.module)
-    if (!arr) return null
-    const a = f.addr
-    const b = f.addr + f.size
-    return arr.find((c) => a < c.e && b > c.s) ?? null
-  }
 
   const filtered = useMemo(() => {
     if (!db) return []
@@ -198,12 +166,6 @@ export default function AtlasView({
             {source === 'live' ? 'live · everyone’s progress' : 'local'}{db.generatedAt ? ` · ${db.generatedAt}` : ''}
           </span>
           <div style={{ flex: 1 }} />
-          {claimsEnabled && (
-            <button className="mini-btn" onClick={refreshClaims} title={whoami.handle ? `you: ${whoami.handle}` : 'refresh claims'}>
-              <Lock size={12} style={{ verticalAlign: -2, marginRight: 4 }} />
-              {claims.length} claims
-            </button>
-          )}
           {source === 'live' && (
             <button className="mini-btn" onClick={() => load('live', true)} disabled={loading} title="re-fetch the team's latest published progress (bypasses cache)">
               <RefreshCw size={12} className={loading ? 'spin' : ''} style={{ verticalAlign: -2, marginRight: 4 }} />
@@ -369,8 +331,6 @@ export default function AtlasView({
 
       <div className="atlas-list aero-panel aero-scroll">
         {shown.map((f) => {
-          const c = claimFor(f)
-          const claimedByOther = !!c && c.handle !== whoami.handle
           return (
             <div className="fn-row" key={f.id}>
               <span className={`status-dot ${f.matched ? 'ok' : ''}`} style={f.matched ? {} : { background: 'var(--aero-unmatched)' }} />
@@ -378,13 +338,6 @@ export default function AtlasView({
               <span className="fn-mod">{f.module}</span>
               <span className="fn-author" title="author">{f.author ?? ''}</span>
               <span className="fn-size">{f.size}b</span>
-              <span className="fn-claim">
-                {c && (
-                  <span className={`claim-chip ${c.handle === whoami.handle ? 'mine' : 'other'}`} title={`claimed by ${c.handle}${c.note ? ` - ${c.note}` : ''}`}>
-                    <Lock size={11} /> {c.handle === whoami.handle ? 'you' : c.handle}
-                  </span>
-                )}
-              </span>
               <span className="fn-add">
                 {!f.matched && (draftRefs.has(f.name) ? (
                   <button
@@ -397,9 +350,8 @@ export default function AtlasView({
                 ) : (
                   <button
                     className="bubble-btn"
-                    disabled={claimedByOther}
-                    title={claimedByOther ? `claimed by ${c!.handle} - the AI will handle claiming` : 'Add to batch'}
-                    onClick={() => { if (!claimedByOther) onAdd({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module, module: f.module, addr: f.addr, size: f.size, srcPath: f.srcPath }) }}
+                    title="Add to batch"
+                    onClick={() => onAdd({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module, module: f.module, addr: f.addr, size: f.size, srcPath: f.srcPath })}
                   >
                     <Plus size={14} strokeWidth={2.5} />
                   </button>
