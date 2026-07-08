@@ -18,6 +18,7 @@ import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv }
 import { aiStats, outputIsMatch } from './aiStats'
 import { record as report, setReportsEnabled, reportsDir } from './reports'
 import { ensureTips, readTips, openTips } from './tips'
+import { ensureTour, readTour, openTour } from './tour'
 import {
   isGitRepo, ensureWorkBranch, statusMap, changedSince, diffForFile, commitFiles,
   mergeWorkBranch, discardWorkBranch, WORK_BRANCH,
@@ -1472,6 +1473,11 @@ ipcMain.handle('tips:open', () => {
   openTips()
   return true
 })
+ipcMain.handle('tour:get', () => readTour())
+ipcMain.handle('tour:open', () => {
+  openTour()
+  return true
+})
 ipcMain.handle('tour:seen', () => {
   state.tourSeen = true
   saveSettings()
@@ -1705,6 +1711,7 @@ app.whenReady().then(() => {
   state.autoPushEnabled = saved.autoPushEnabled ?? false
   setReportsEnabled(state.reportsEnabled)
   ensureTips()
+  ensureTour()
   if (saved.lastRepo && looksLikeRepo(saved.lastRepo)) setRepo(saved.lastRepo)
   createWindow()
   app.on('activate', () => {

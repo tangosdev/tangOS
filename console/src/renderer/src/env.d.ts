@@ -69,6 +69,8 @@ export interface TangosApi {
   openReports(): Promise<string>
   getTips(): Promise<{ title: string; body: string }[]>
   openTips(): Promise<boolean>
+  getTour(): Promise<{ target?: string; title: string; body: string; emotion: string }[]>
+  openTour(): Promise<boolean>
   markTourSeen(): Promise<boolean>
   replayTour(): Promise<boolean>
   mergeReview(): Promise<boolean>

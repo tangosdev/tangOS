@@ -55,9 +55,11 @@ export default function TangoHelper({ firstRun }: { firstRun: boolean }): JSX.El
                   {i + 1}/{tips.length}
                 </span>
               )}
-              <button className="tt-x" onClick={() => window.tangos.openTips()} title="Edit Tango's messages">
-                <Pencil size={13} />
-              </button>
+              {import.meta.env.DEV && (
+                <button className="tt-x" onClick={() => window.tangos.openTips()} title="Edit Tango's messages (dev only)">
+                  <Pencil size={13} />
+                </button>
+              )}
               <button className="tt-x" onClick={close} title="Hide">
                 <X size={14} />
               </button>

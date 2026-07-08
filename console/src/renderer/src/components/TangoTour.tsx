@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useState, type CSSProperties } from 'react'
 import { X } from 'lucide-react'
 import { frame } from '../tangoFrames'
 
@@ -9,7 +9,8 @@ interface Step {
   emotion: string
 }
 
-// The first-run tour: shows off the features AND walks through the first batch.
+// The first-run tour: shows off the features AND walks through the first batch. This hardcoded
+// list is the fallback shown until the editable file (userData/tango-tour.txt) loads over it.
 const STEPS: Step[] = [
   {
     title: "Hi, I'm Tango!",
@@ -71,7 +72,18 @@ function popStyle(rect: DOMRect | null): CSSProperties {
 export default function TangoTour({ onDone }: { onDone: () => void }): JSX.Element {
   const [i, setI] = useState(0)
   const [rect, setRect] = useState<DOMRect | null>(null)
-  const step = STEPS[i]
+  const [steps, setSteps] = useState<Step[]>(STEPS) // hardcoded until the editable file loads over it
+  const step = steps[i] ?? steps[0]
+
+  // Pull the tour text from userData/tango-tour.txt so edits show without a rebuild.
+  useEffect(() => {
+    window.tangos
+      .getTour()
+      .then((s) => {
+        if (s && s.length) setSteps(s as Step[])
+      })
+      .catch(() => {})
+  }, [])
 
   useLayoutEffect(() => {
     function measure(): void {
@@ -86,7 +98,7 @@ export default function TangoTour({ onDone }: { onDone: () => void }): JSX.Eleme
     return () => window.removeEventListener('resize', measure)
   }, [i, step.target])
 
-  const last = i === STEPS.length - 1
+  const last = i === steps.length - 1
   const spot: CSSProperties | null = rect
     ? { top: rect.top - 6, left: rect.left - 6, width: rect.width + 12, height: rect.height + 12 }
     : null
@@ -104,7 +116,7 @@ export default function TangoTour({ onDone }: { onDone: () => void }): JSX.Eleme
           <p className="tour-box-body">{step.body}</p>
           <div className="tour-nav">
             <div className="tt-dots">
-              {STEPS.map((_, k) => (
+              {steps.map((_, k) => (
                 <span key={k} className={k === i ? 'on' : ''} />
               ))}
             </div>
