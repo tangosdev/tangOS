@@ -1,8 +1,16 @@
-name: Build macOS (Intel)
+name: Build + publish macOS
 
-# electron-builder can only produce a macOS app on macOS, so the Intel (x64)
-# .dmg is built here on a macOS runner. Trigger manually from the Actions tab,
-# or automatically on a version tag (e.g. `git tag v3.1.9 && git push --tags`).
+# electron-builder can only produce a macOS app on macOS, so the Intel (x64) and Apple
+# Silicon (arm64) .dmg builds are made here on a macOS runner and published to the public
+# bmanus2-dotcom/tangos-console Releases (the same feed the Windows build publishes to, so
+# Mac users download + auto-update from one place).
+#
+# Trigger manually from the Actions tab, or automatically on a version tag (e.g.
+# `git tag v3.1.13 && git push --tags`). It publishes into the release matching the version
+# in console/package.json, adding the Mac assets next to the Windows ones.
+#
+# Requires a repo secret RELEASE_TOKEN: a fine-grained PAT with Contents: write on the
+# tangos-console repo (this source repo's own GITHUB_TOKEN cannot write to a different repo).
 on:
   workflow_dispatch:
   push:
@@ -11,7 +19,7 @@ on:
 
 jobs:
   build-mac:
-    runs-on: macos-latest # arm64 host; cross-builds the x64 target (no native deps to compile)
+    runs-on: macos-latest # arm64 host; builds arm64 natively and cross-builds x64
     steps:
       - uses: actions/checkout@v4
 
@@ -22,16 +30,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Intel (x64) dmg
+      - name: Build + publish Intel (x64) and Apple Silicon (arm64) dmgs
         run: npm run console:dist:mac
         env:
-          # No Apple Developer cert in CI: build unsigned. Users bypass Gatekeeper
-          # via right-click > Open (or `xattr -cr "/Applications/tangOS Console.app"`).
+          # No Apple Developer cert in CI: build unsigned. Users bypass Gatekeeper via
+          # right-click > Open (or `xattr -cr "/Applications/tangOS Console.app"`).
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # Cross-repo publish token: a PAT with Contents:write on tangos-console.
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
-      - name: Upload dmg artifact
+      - name: Upload dmgs as a backup artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tangos-console-mac-x64
+          name: tangos-console-mac
           path: console/release/*.dmg
-          if-no-files-found: error
+          if-no-files-found: warn

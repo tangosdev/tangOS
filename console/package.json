@@ -11,7 +11,7 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "dist": "electron-vite build && electron-builder --win",
-    "dist:mac": "electron-vite build && electron-builder --mac --x64",
+    "dist:mac": "electron-vite build && electron-builder --mac --publish always",
     "pack": "electron-vite build && electron-builder --win --dir"
   },
   "dependencies": {
@@ -71,7 +71,8 @@
         {
           "target": "dmg",
           "arch": [
-            "x64"
+            "x64",
+            "arm64"
           ]
         }
       ]
