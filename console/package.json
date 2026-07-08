@@ -1,6 +1,6 @@
 {
   "name": "console",
-  "version": "3.1.11",
+  "version": "3.1.12",
   "description": "tangOS Console — exposes a decomp repo's tools as an MCP server an AI connects to, with a live viewer.",
   "main": "./out/main/index.js",
   "author": "Brennen (Tango)",
@@ -14,7 +14,9 @@
     "dist:mac": "electron-vite build && electron-builder --mac --x64",
     "pack": "electron-vite build && electron-builder --win --dir"
   },
-  "dependencies": {},
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@tangos/ui": "*",
@@ -55,7 +57,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -66,7 +70,9 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -76,6 +82,11 @@
       "allowToChangeInstallationDirectory": true,
       "shortcutName": "tangOS Console",
       "deleteAppDataOnUninstall": true
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "bmanus2-dotcom",
+      "repo": "tangos-console"
     }
   }
 }

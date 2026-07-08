@@ -28,6 +28,7 @@ import {
 } from './gitsafe'
 import { ensurePullRequest } from './pullRequests'
 import { writeBugReport } from './bugReport'
+import { initAutoUpdate } from './updater'
 import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
@@ -1736,6 +1737,7 @@ app.whenReady().then(() => {
   ensureTour()
   if (saved.lastRepo && looksLikeRepo(saved.lastRepo)) setRepo(saved.lastRepo)
   createWindow()
+  initAutoUpdate() // check the public releases feed for a newer build
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
