@@ -13,7 +13,7 @@ import { registerAll, cliCommand } from './connect'
 import { runTool } from './runTool'
 import { preflight } from './preflight'
 import { readAtlas } from './atlas'
-import { listClaims, tryLock, releaseClaim, hasKey, handle as claimsHandle } from './claims'
+import { listClaims, tryLock, releaseClaim, hasKey, handle as claimsHandle, claimGuard, type ClaimGuard } from './claims'
 import { githubCredits } from './github'
 import { startDeviceFlow, pollForToken } from './githubAuth'
 import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
@@ -25,7 +25,8 @@ import {
   isGitRepo, ensureWorkBranch, statusMap, changedSince, diffForFile, commitFiles,
   mergeWorkBranch, discardWorkBranch, WORK_BRANCH,
   remoteSlug, defaultBranch, currentBranch,
-  pushSubsetToBranch, changedSrcFiles
+  pushSubsetToBranch, changedSrcFiles,
+  isDirty, aheadBehind, fetchRemote, fastForwardPull
 } from './gitsafe'
 import { ensurePullRequest } from './pullRequests'
 import { writeBugReport } from './bugReport'
@@ -33,7 +34,7 @@ import { initAutoUpdate } from './updater'
 import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
-  Review, RunResult, AtlasDb, SecretsInfo, AiAgent, ConnectedClient
+  Review, RunResult, AtlasDb, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus
 } from '../shared/types'
 
 const DEFAULT_PORT = 4808
@@ -952,6 +953,20 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   const taken = new Set(
     state.batches.filter((b) => b.status !== 'done').flatMap((b) => b.items.map((i) => i.ref))
   )
+  // Reconcile with the live claims board so we never hand out a span another machine already
+  // claimed (the duplicate-work bug in CLAIMS_COORDINATION_REPORT). The read is keyless and
+  // best-effort: an unconfigured or unreachable board simply skips this gate rather than blocking
+  // generation. Fetched once here; the loop below drops any candidate a different handle owns.
+  let guard: ClaimGuard | null = null
+  const claimsApi = state.descriptor.data?.claimsApi
+  if (claimsApi) {
+    try {
+      guard = claimGuard(await listClaims(claimsApi), claimsHandle(state.repoPath))
+    } catch {
+      guard = null
+    }
+  }
+  let droppedForClaims = 0
   // Ask the scheduler for extra so we still have `count` after dropping the taken ones.
   const plan = genPlanFor(role, count + taken.size)
   // The planned scheduler, falling back to coddog, then any read-only limit+out tool.
@@ -1037,14 +1052,21 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
         coddog_sim?: number; siblings?: { name: string; sim: number }[]
       }
       if (taken.has(r.name)) continue // already assigned elsewhere, or a same-name sibling above
+      const addr = r.addr ? parseInt(r.addr, 16) : undefined
+      const size = r.size ? parseInt(r.size, 16) : undefined
+      if (guard?.(r.module, addr, size)) {
+        droppedForClaims++
+        taken.add(r.name) // skip this row and reach further down for an unclaimed candidate
+        continue
+      }
       const sib = r.siblings?.[0]
       const sim = Math.round((r.coddog_sim ?? sib?.sim ?? 0) * 100)
       items.push({
         id: `gen-${r.name}`,
         ref: r.name,
         module: r.module,
-        addr: r.addr ? parseInt(r.addr, 16) : undefined,
-        size: r.size ? parseInt(r.size, 16) : undefined,
+        addr,
+        size,
         targetHex: r.target_hex,
         label: sib ? `${sim}% like ${sib.name}` : undefined
       })
@@ -1061,10 +1083,21 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   } catch {
     /* ignore */
   }
-  if (!items.length) throw new Error('scheduler returned no functions')
+  if (!items.length) {
+    if (droppedForClaims)
+      throw new Error(
+        `Every candidate this round is already claimed by other agents on the board (${droppedForClaims} skipped). ` +
+          'Nothing free to hand out right now — try again once they release, or switch role/module.'
+      )
+    throw new Error('scheduler returned no functions')
+  }
+  const coordNote = droppedForClaims
+    ? `\n\nCoordination: skipped ${droppedForClaims} target(s) already claimed by other agents on the board, so this batch is disjoint from their live claims.`
+    : ''
   const prompt =
     'Match these targets. Each was picked by opcode similarity to an already-matched sibling ' +
-    '(shown per target) — lean on that sibling as scaffolding. Run `match` on each; use `fdiff` on near-misses.'
+    '(shown per target) — lean on that sibling as scaffolding. Run `match` on each; use `fdiff` on near-misses.' +
+    coordNote
   const label = role && role !== 'Unassigned' ? role : 'Similarity'
   return { title: `${label} batch (${items.length})`, prompt, items } satisfies BatchDraft
 }
@@ -1634,6 +1667,37 @@ ipcMain.handle('repo:clone', async (_e, payload: { url: string; dest: string }) 
     child.on('error', (err) => resolve({ ok: false, output: String(err) }))
     child.on('close', (code) => resolve({ ok: code === 0, output: out, code }))
   })
+})
+
+// Is this checkout behind its remote? Fetches (best-effort) then reports ahead/behind vs the
+// default branch, so the renderer can offer a one-click update when the local tooling is stale.
+ipcMain.handle('repo:updateStatus', async (): Promise<RepoUpdateStatus> => {
+  const repo = state.repoPath
+  if (!repo || !(await isGitRepo(repo))) return { isGit: false }
+  try {
+    const fetched = await fetchRemote(repo)
+    const [branch, db, dirty] = await Promise.all([currentBranch(repo), defaultBranch(repo), isDirty(repo)])
+    const ab = await aheadBehind(repo, db)
+    return { isGit: true, branch, defaultBranch: db, ahead: ab?.ahead ?? 0, behind: ab?.behind ?? 0, dirty, fetched }
+  } catch (e) {
+    return { isGit: true, error: String(e) }
+  }
+})
+
+// Fast-forward the local checkout to the remote default branch. Non-destructive: fails cleanly on
+// a diverged branch and never touches untracked matched work. On success, reload the descriptor
+// (tangos.json may have moved) and drop the atlas cache so progress re-reads the updated tree.
+ipcMain.handle('repo:pull', async (): Promise<{ ok: boolean; err?: string; behind?: number }> => {
+  const repo = state.repoPath
+  if (!repo || !(await isGitRepo(repo))) return { ok: false, err: 'not a git checkout' }
+  const db = await defaultBranch(repo)
+  const res = await fastForwardPull(repo, db)
+  if (res.ok) {
+    atlasCache = { repo: null }
+    reloadDescriptor('manual')
+  }
+  const ab = res.ok ? await aheadBehind(repo, db) : null
+  return { ok: res.ok, err: res.ok ? undefined : res.err, behind: ab?.behind }
 })
 
 ipcMain.handle('win:minimize', (e) => BrowserWindow.fromWebContents(e.sender)?.minimize())

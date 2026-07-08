@@ -128,6 +128,19 @@ export interface RepoState {
   isGit: boolean // false = not a git checkout (e.g. a "Download ZIP" snapshot): can't commit, tooling may be stale
 }
 
+/** Whether the local checkout is behind the remote — drives the "your local is out of date"
+ *  banner and its one-click fast-forward Update. */
+export interface RepoUpdateStatus {
+  isGit: boolean
+  branch?: string
+  defaultBranch?: string
+  ahead?: number
+  behind?: number
+  dirty?: boolean // uncommitted/untracked work present (informational; ff-pull never clobbers it)
+  fetched?: boolean // false = couldn't reach origin (offline / no remote), so behind may be stale
+  error?: string
+}
+
 export interface McpState {
   running: boolean
   port: number | null

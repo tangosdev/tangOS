@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
   Batch, BatchDraft, BatchItem, AtlasDb, Review, ClaimsResult, ClaimsList, GithubCredits, ConnectedClient, SecretsInfo,
-  AiAgent
+  AiAgent, RepoUpdateStatus
 } from '../shared/types'
 
 type FullState = {
@@ -128,6 +128,8 @@ const api = {
     ipcRenderer.invoke('repo:clone', { url, dest }),
   cloneAndOpen: (url: string): Promise<{ ok: boolean; error?: string; canceled?: boolean; repo?: RepoState }> =>
     ipcRenderer.invoke('repo:cloneAndOpen', url),
+  repoUpdateStatus: (): Promise<RepoUpdateStatus> => ipcRenderer.invoke('repo:updateStatus'),
+  repoPull: (): Promise<{ ok: boolean; err?: string; behind?: number }> => ipcRenderer.invoke('repo:pull'),
 
   minimizeWin: (): Promise<void> => ipcRenderer.invoke('win:minimize'),
   maximizeToggle: (): Promise<boolean> => ipcRenderer.invoke('win:maximizeToggle'),

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Settings2, FolderOpen, RefreshCw, AlertTriangle, MessageCircle, Bug } from 'lucide-react'
+import { Settings2, FolderOpen, RefreshCw, MessageCircle, Bug } from 'lucide-react'
 import type {
   RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchItem, Review, AiAgent
 } from '../../shared/types'
@@ -19,6 +19,7 @@ import Splash from './components/Splash'
 import ReviewPanel from './components/ReviewPanel'
 import WindowControls from './components/WindowControls'
 import BugReport from './components/BugReport'
+import RepoUpdateBanner from './components/RepoUpdateBanner'
 
 const THEMES = ['aero', 'sunset', 'deepsea', 'bubblegum', 'mint', 'hal']
 const APP_LABEL: Record<AppView, string> = { console: 'Chaos Controller', atlas: 'Chaos Viewer' }
@@ -348,14 +349,14 @@ export default function App(): JSX.Element {
         </div>
       </div>
 
-      {repo?.path && repo.isGit === false && (
-        <div className="repo-warn">
-          <AlertTriangle size={14} />
-          <span>
-            This folder isn&apos;t a git checkout — looks like a <b>Download ZIP</b>. You can&apos;t commit or push from
-            here, and the tooling may be out of date. Use <code>git clone</code> for a working setup.
-          </span>
-        </div>
+      {repo?.path && (
+        <RepoUpdateBanner
+          repo={repo}
+          onRepo={(r) => {
+            setRepo(r)
+            setView('console')
+          }}
+        />
       )}
 
       {body}
