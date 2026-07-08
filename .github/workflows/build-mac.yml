@@ -19,7 +19,8 @@ on:
 
 jobs:
   build-mac:
-    runs-on: macos-latest # arm64 host; builds arm64 natively and cross-builds x64
+    runs-on: macos-13 # Intel host: uses the amd64 app-builder helper (the arm64 one ENOENTs on
+    # macos-latest with electron-builder 25) and still cross-builds the arm64 dmg fine.
     steps:
       - uses: actions/checkout@v4
 
