@@ -3,7 +3,7 @@
   "version": "3.1.19",
   "description": "tangOS Console - exposes a decomp repo's tools as an MCP server an AI connects to, with a live viewer.",
   "main": "./out/main/index.js",
-  "author": "Brennen (Tango)",
+  "author": "Tango",
   "license": "MIT",
   "scripts": {
     "dev": "electron-vite dev",

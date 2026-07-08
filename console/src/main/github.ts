@@ -1,6 +1,6 @@
 // Canonical, deduped contributor identity from GitHub (merged commits + PR authors).
-// The Atlas data credits functions by an email-derived key (e.g. "bmanus2" from
-// bmanus2@gmail.com); GitHub knows the real login ("bmanus2-dotcom"). We rebuild
+// The Atlas data credits functions by an email-derived key (the local part of the
+// git author email); GitHub knows the real login. We rebuild
 // that key->login map from the commits API using the same transform the data
 // generator uses, so attribution dedups to one login per person.
 

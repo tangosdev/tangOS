@@ -5,7 +5,7 @@ import type { RepoState } from '../../../shared/types'
 const EXAMPLE = {
   title: 'sm64ds-decomp',
   desc: 'The reference repo - ships a hand-authored tangos.json exposing its full toolchain. (Running it still needs mwccarm + your own ROM.)',
-  github: 'https://github.com/bmanus2-dotcom/sm64ds-decomp'
+  github: 'https://github.com/tangosdev/sm64ds-decomp'
 }
 
 export default function RepoPicker({ onChanged }: { onChanged: (r: RepoState) => void }): JSX.Element {

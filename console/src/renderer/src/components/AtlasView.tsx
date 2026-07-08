@@ -39,7 +39,7 @@ export default function AtlasView({
     window.tangos.githubCredits().then(setGh).catch(() => {})
   }, [])
 
-  // data-file author key -> canonical GitHub login (dedups bmanus2 vs bmanus2-dotcom, etc.)
+  // data-file author key -> canonical GitHub login (dedups an email-derived key vs the GitHub login, etc.)
   const keyToLogin = useMemo(() => new Map(Object.entries(gh?.keyToLogin ?? {})), [gh])
   const loginFor = (f: AtlasFunction): string => (f.author ? keyToLogin.get(f.author) ?? f.author : '')
 

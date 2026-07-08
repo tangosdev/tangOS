@@ -17,7 +17,7 @@ it knows the repo's tools, compiler, data source, and rules.
 ## The descriptor: `tangos.json`
 
 - Schema: [`schema/tangos.schema.json`](schema/tangos.schema.json)
-- Reference example: [`sm64ds-decomp/tangos.json`](https://github.com/bmanus2-dotcom/sm64ds-decomp/blob/main/tangos.json)
+- Reference example: [`sm64ds-decomp/tangos.json`](https://github.com/tangosdev/sm64ds-decomp/blob/main/tangos.json)
 - A repo that has no `tangos.json` yet gets one **generated** by Console (heuristic scan + optional AI refine).
 
 The descriptor declares a `tools[]` registry; Console turns each entry into an MCP tool generically,

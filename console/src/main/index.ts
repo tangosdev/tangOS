@@ -119,7 +119,7 @@ function autoPushActive(): boolean {
   return state.autoPushEnabled && state.allowMutations && state.safeMode
 }
 
-// --- Per-agent isolation (Brennen chose "per-agent branch + PR" over shared-folder worktrees) ---
+// --- Per-agent isolation (per-agent branch + PR, chosen over shared-folder worktrees) ---
 // Every AI's matched work lands on its OWN branch (tangos/<slug>-<session>) as one rolling PR,
 // even though the AIs share a single checkout. Files are attributed to whichever agent's match
 // first made them dirty; the shared tree and checked-out branch are never disturbed (the push
@@ -1311,7 +1311,10 @@ async function driveBatch(agentName: string): Promise<void> {
     readOnly: false,
     command: '{python} tools/glm_refine.py --wl {wl} --out {out} --jobs {jobs}'
   }
-  const jobs = state.useAgents ? 3 : 1 // "Use agents" -> parallel workers (kept modest: the GLM/z.ai API rate-limits hard past ~3 concurrent)
+  // GLM's default endpoint is z.ai's Coding Plan, which is ~single-concurrency: parallel workers
+  // just 429 each other into a slow retry grind (function 1 lands, the rest hang). Drive it
+  // sequentially. Anthropic (Claude) handles concurrency, so it still gets parallel under "Use agents".
+  const jobs = agentName === 'GLM' ? 1 : state.useAgents ? 3 : 1
   batch.status = 'active'
   apiDriving.add(agentName)
   aiStats.setCurrent(agentName, {
