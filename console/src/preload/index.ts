@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
   Batch, BatchDraft, BatchItem, AtlasDb, Review, GithubCredits, ConnectedClient, SecretsInfo,
-  AiAgent, RepoUpdateStatus
+  AiAgent, RepoUpdateStatus, AppUpdateInfo
 } from '../shared/types'
 
 type FullState = {
@@ -87,6 +87,13 @@ const api = {
   getTips: (): Promise<{ title: string; body: string }[]> => ipcRenderer.invoke('tips:get'),
   openTips: (): Promise<boolean> => ipcRenderer.invoke('tips:open'),
   appVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
+  checkAppUpdate: (): Promise<AppUpdateInfo> => ipcRenderer.invoke('app:checkUpdate'),
+  quitAndInstall: (): Promise<void> => ipcRenderer.invoke('app:quitAndInstall'),
+  onAppUpdate: (cb: (info: AppUpdateInfo) => void): (() => void) => {
+    const l = (_e: unknown, info: AppUpdateInfo): void => cb(info)
+    ipcRenderer.on('app:update', l)
+    return () => ipcRenderer.removeListener('app:update', l)
+  },
   dumpDebug: (): Promise<string> => ipcRenderer.invoke('debug:dump'),
   openDebug: (): Promise<string> => ipcRenderer.invoke('debug:open'),
   getTour: (): Promise<{ target?: string; title: string; body: string; emotion: string }[]> =>

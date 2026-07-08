@@ -1079,6 +1079,8 @@ html, body, #root { background: transparent !important; }
 .repo-warn.behind { color: #0b4a6f; background: rgba(14,165,233,0.14); border-color: rgba(14,165,233,0.5); }
 /* brief post-update confirmation - green */
 .repo-warn.ok { color: #14532d; background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.5); }
+/* "a newer app release is out" - violet, distinct from the repo-staleness blue */
+.repo-warn.update { color: #4c1d95; background: rgba(139,92,246,0.15); border-color: rgba(139,92,246,0.5); }
 .repo-warn-btn {
   display: inline-flex; align-items: center; gap: 5px; margin-left: auto; flex: none;
   padding: 4px 10px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer;

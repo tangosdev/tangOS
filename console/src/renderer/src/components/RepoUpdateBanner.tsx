@@ -7,20 +7,29 @@ import type { RepoState, RepoUpdateStatus } from '../../../shared/types'
  *  - git checkout behind origin: -> "Update" (fast-forward, never clobbers local work) */
 export default function RepoUpdateBanner({
   repo,
-  onRepo
+  onRepo,
+  refreshNonce = 0
 }: {
   repo: RepoState
   onRepo: (r: RepoState) => void
+  refreshNonce?: number // bumped by the top-bar refresh; re-runs the local-vs-origin check
 }): JSX.Element | null {
   const [status, setStatus] = useState<RepoUpdateStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
-  // Re-check whenever the repo changes. Skipped for ZIP snapshots (case 1 handles those).
+  // Reset the transient banner state only when the repo itself changes (not on a refresh), so a
+  // manual refresh doesn't blank the banner out from under the fresh check below.
   useEffect(() => {
-    let alive = true
     setStatus(null)
     setMsg(null)
+  }, [repo.path, repo.isGit])
+
+  // (Re-)check on repo change AND whenever the refresh nonce bumps. repo:updateStatus does a real
+  // git fetch first, so if a PR merged upstream while the app was open, one refresh clears the
+  // "behind"/"diverged" banner. Skipped for ZIP snapshots (case 1 handles those).
+  useEffect(() => {
+    let alive = true
     if (!repo.path || repo.isGit === false) return
     window.tangos
       .repoUpdateStatus()
@@ -29,7 +38,7 @@ export default function RepoUpdateBanner({
     return () => {
       alive = false
     }
-  }, [repo.path, repo.isGit])
+  }, [repo.path, repo.isGit, refreshNonce])
 
   const github = repo.descriptor?.project?.github
 

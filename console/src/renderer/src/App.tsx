@@ -20,6 +20,7 @@ import ReviewPanel from './components/ReviewPanel'
 import WindowControls from './components/WindowControls'
 import BugReport from './components/BugReport'
 import RepoUpdateBanner from './components/RepoUpdateBanner'
+import AppUpdateBanner from './components/AppUpdateBanner'
 
 const THEMES = ['aero', 'sunset', 'deepsea', 'bubblegum', 'mint', 'hal']
 const APP_LABEL: Record<AppView, string> = { console: 'Chaos Controller', atlas: 'Chaos Viewer' }
@@ -60,6 +61,7 @@ export default function App(): JSX.Element {
   const [tourSeen, setTourSeen] = useState(true) // assume seen until state loads, to avoid a flash
   const [detailName, setDetailName] = useState<string | null>(null)
   const [reloadNote, setReloadNote] = useState<string | null>(null)
+  const [refreshNonce, setRefreshNonce] = useState(0) // top-bar refresh: re-check repo staleness + app update
   const [bugOpen, setBugOpen] = useState(false)
   const popRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef<HTMLDivElement>(null)
@@ -210,6 +212,9 @@ export default function App(): JSX.Element {
   }
   async function reloadDescriptor(): Promise<void> {
     setRepo(await window.tangos.reloadDescriptor())
+    // Also re-check local-vs-origin and the app-update feed, so one refresh clears a now-stale
+    // "your local is behind" banner (e.g. a PR merged upstream) and surfaces a newer release.
+    setRefreshNonce((n) => n + 1)
   }
   function addToCart(item: BatchItem): void {
     setCart((c) => (c.some((i) => i.ref === item.ref) ? c : [...c, item]))
@@ -320,7 +325,11 @@ export default function App(): JSX.Element {
             </button>
           )}
           {showControls && (
-            <button className="tb-btn icononly" onClick={reloadDescriptor} title="Reload tangos.json from disk">
+            <button
+              className="tb-btn icononly"
+              onClick={reloadDescriptor}
+              title="Refresh: reload tangos.json, re-check if your local is behind, and look for an app update"
+            >
               <RefreshCw size={15} />
             </button>
           )}
@@ -354,9 +363,12 @@ export default function App(): JSX.Element {
         </div>
       </div>
 
+      <AppUpdateBanner refreshNonce={refreshNonce} />
+
       {repo?.path && (
         <RepoUpdateBanner
           repo={repo}
+          refreshNonce={refreshNonce}
           onRepo={(r) => {
             setRepo(r)
             setView('console')

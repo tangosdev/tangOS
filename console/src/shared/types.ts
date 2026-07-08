@@ -142,6 +142,13 @@ export interface RepoUpdateStatus {
   error?: string
 }
 
+/** App auto-update state, surfaced in the top banner so a running install can tell a newer
+ *  release is out. 'dev' = unpackaged (the updater is a no-op there); 'none' = up to date;
+ *  'error' = the check failed (offline, rate-limited, or no releases yet). */
+export type AppUpdateInfo =
+  | { state: 'available' | 'downloaded'; version: string }
+  | { state: 'none' | 'dev' | 'error' }
+
 export interface McpState {
   running: boolean
   port: number | null

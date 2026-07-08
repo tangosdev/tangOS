@@ -29,7 +29,7 @@ import {
 } from './gitsafe'
 import { ensurePullRequest } from './pullRequests'
 import { writeBugReport } from './bugReport'
-import { initAutoUpdate } from './updater'
+import { initAutoUpdate, checkForAppUpdate, quitAndInstallUpdate } from './updater'
 import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
@@ -1635,6 +1635,10 @@ ipcMain.handle('tips:open', () => {
   return true
 })
 ipcMain.handle('app:version', () => app.getVersion())
+// Manual "is a newer build out?" check, driven by the top-bar refresh button. Also fires the
+// updater events that keep the top banner live while the app is open.
+ipcMain.handle('app:checkUpdate', () => checkForAppUpdate())
+ipcMain.handle('app:quitAndInstall', () => quitAndInstallUpdate())
 ipcMain.handle('debug:dump', () => dumpDebug(mainWindow, fullState(), activityBus.snapshot()))
 ipcMain.handle('debug:open', async () => {
   await shell.openPath(debugDir())

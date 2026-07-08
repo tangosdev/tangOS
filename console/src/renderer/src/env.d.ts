@@ -2,7 +2,7 @@
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
   Batch, BatchDraft, BatchItem, AtlasDb, Review, GithubCredits, ConnectedClient, SecretsInfo,
-  AiAgent, RepoUpdateStatus
+  AiAgent, RepoUpdateStatus, AppUpdateInfo
 } from '../../shared/types'
 
 type FullState = {
@@ -68,6 +68,9 @@ export interface TangosApi {
   getTips(): Promise<{ title: string; body: string }[]>
   openTips(): Promise<boolean>
   appVersion(): Promise<string>
+  checkAppUpdate(): Promise<AppUpdateInfo>
+  quitAndInstall(): Promise<void>
+  onAppUpdate(cb: (info: AppUpdateInfo) => void): () => void
   dumpDebug(): Promise<string>
   openDebug(): Promise<string>
   getTour(): Promise<{ target?: string; title: string; body: string; emotion: string }[]>
