@@ -1362,9 +1362,14 @@ async function enrichTarget(item: BatchItem): Promise<string | null> {
         cwd: repo,
         env: { ...process.env, ...secretsEnv() }
       })
+      // Hard cap: never let one slow/hung target wedge the whole drive. Kill + skip it after 20s.
+      const timer = setTimeout(() => {
+        try { c.kill() } catch { /* already gone */ }
+        resolve('')
+      }, 20000)
       c.stdout?.on('data', (d) => (buf += String(d)))
-      c.on('error', () => resolve(''))
-      c.on('close', () => resolve(buf))
+      c.on('error', () => { clearTimeout(timer); resolve('') })
+      c.on('close', () => { clearTimeout(timer); resolve(buf) })
     } catch {
       resolve('')
     }
@@ -1405,27 +1410,38 @@ async function driveBatch(agentName: string): Promise<void> {
   const batch = state.batches.find((b) => b.targetAgent === agentName && b.status !== 'done')
   if (!batch) throw new Error(`no batch assigned to ${agentName} - assign one first`)
   // Build the driver worklist with FULL context. Prefer coddog's preserved enriched row (from
-  // genDraft); for a target without one (a batch built in the Atlas), enrich on demand via
-  // `worklist --addr`. A target we can neither preserve nor enrich (no addr/module) is skipped.
-  const rows: string[] = []
-  let couldNotEnrich = 0
-  for (const i of batch.items) {
-    const preserved = enrichedRows.get(i.ref)
-    if (preserved) {
-      rows.push(preserved)
-      continue
-    }
-    const enriched = await enrichTarget(i)
-    if (enriched) {
-      enrichedRows.set(i.ref, enriched)
-      rows.push(enriched)
-    } else couldNotEnrich++
+  // genDraft); for a target without one (a batch hand-picked in the Atlas), enrich on demand via
+  // `worklist --addr`. Enrich in parallel (capped) with a live "Preparing N/M" status - 50 picks
+  // done sequentially + silently was minutes of a dead-looking "Stop" (the custom-batch "nothing
+  // happened" symptom). A target we can neither preserve nor enrich (no addr/module, or timed out)
+  // is skipped, not fatal.
+  const toEnrich = batch.items.filter((i) => !enrichedRows.has(i.ref))
+  let prepared = batch.items.length - toEnrich.length
+  const showPrep = (): void => {
+    aiStats.setCurrent(agentName, { task: `Preparing targets (${prepared}/${batch.items.length})…`, batchId: batch.id })
+    pushState()
   }
+  if (toEnrich.length) {
+    showPrep()
+    let next = 0
+    let couldNotEnrich = 0
+    const workers = Array.from({ length: Math.min(6, toEnrich.length) }, async () => {
+      while (next < toEnrich.length) {
+        const item = toEnrich[next++]
+        const enriched = await enrichTarget(item)
+        if (enriched) enrichedRows.set(item.ref, enriched)
+        else couldNotEnrich++
+        prepared++
+        showPrep()
+      }
+    })
+    await Promise.all(workers)
+    if (couldNotEnrich) console.log(`[driveBatch] ${agentName}: ${couldNotEnrich}/${batch.items.length} target(s) had no enrichable context and were skipped`)
+  }
+  const rows = batch.items.map((i) => enrichedRows.get(i.ref)).filter((r): r is string => !!r)
   if (!rows.length)
     throw new Error(
-      couldNotEnrich
-        ? `none of this batch's ${couldNotEnrich} target(s) could be enriched with context - pick targets with an addr + module the worklist tool knows, or generate the batch with the Recommended button (coddog)`
-        : 'this batch has no drivable targets'
+      `none of this batch's ${batch.items.length} target(s) could be enriched with context - pick targets with an addr + module the worklist tool knows, or generate the batch with the Recommended button (coddog)`
     )
 
   // Stable, discoverable location (not a random temp name) so the run's "open folder" link
