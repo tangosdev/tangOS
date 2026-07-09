@@ -27,7 +27,7 @@ import {
   pushSubsetToBranch, changedSrcFiles,
   isDirty, aheadBehind, unmergedAhead, fetchRemote, rebasePull, pushToBranch, gitUserName
 } from './gitsafe'
-import { ensurePullRequest } from './pullRequests'
+import { ensurePullRequest, resolvePushTarget, type PushTarget } from './pullRequests'
 import { writeBugReport } from './bugReport'
 import { initAutoUpdate, checkForAppUpdate, quitAndInstallUpdate } from './updater'
 import { release as osRelease } from 'node:os'
@@ -130,6 +130,18 @@ const claimedFiles = new Map<string, string>() // src path -> owning agent slug 
 const pendingByAgent = new Map<string, Set<string>>() // agent slug -> cumulative src files for its PR
 let baselineDirtySrc = new Set<string>() // src already dirty before the session started (never attributed)
 
+// Where this contributor's branches get pushed: straight to the base repo when the signed-in token
+// has push access, otherwise their own fork (opened on demand). Resolving hits the GitHub API, so
+// cache it per repo+base+token - the token suffix in the key re-resolves after a re-sign-in.
+let pushTargetCache: { key: string; target: PushTarget } | null = null
+async function getPushTarget(base: { owner: string; repo: string }, token: string): Promise<PushTarget> {
+  const key = `${state.repoPath}::${base.owner}/${base.repo}::${token.slice(-8)}`
+  if (pushTargetCache?.key === key && pushTargetCache.target.ok) return pushTargetCache.target
+  const target = await resolvePushTarget(base, token)
+  if (target.ok) pushTargetCache = { key, target }
+  return target
+}
+
 /** Branch-safe identity for an AI: lowercase, alnum+dash. Kept per-model (opus != sonnet) so each
  *  gets its own branch, unlike the family-folding used for stats. */
 function agentSlug(name?: string): string {
@@ -193,21 +205,23 @@ async function runAutoPush(slug: string): Promise<void> {
     set({ state: 'pushing', message: `${slug}: ${files.length} file(s)` })
     const branch = `tangos/${slug}-${SESSION_TAG}`
     const base = await defaultBranch(state.repoPath)
+    // Push to the base repo if allowed, else to this user's fork (created on demand) - so contributors
+    // without collaborator access still land their matches as a cross-repo PR instead of 403ing.
+    const target = await getPushTarget(gh, token)
+    if (!target.ok || !target.slug) {
+      return set({ state: 'error', message: `can't push: ${target.error ?? 'no push target'}` })
+    }
     const pushed = await pushSubsetToBranch(
       state.repoPath,
       branch,
       base,
       files,
       `tangos(${slug}): matched work`,
-      gh,
+      target.slug,
       token
     )
     if (!pushed.ok) {
-      const denied = /denied|403|permission|not authorized|authentication|read-only/i.test(pushed.err)
-      const hint = denied
-        ? ' - your GitHub token is read-only; sign out and back into GitHub in Settings to grant push access.'
-        : ''
-      return set({ state: 'error', message: `push failed: ${pushed.err.slice(-200)}${hint}` })
+      return set({ state: 'error', message: `push failed: ${pushed.err.slice(-200)}` })
     }
     const pr = await ensurePullRequest({
       owner: gh.owner,
@@ -215,8 +229,9 @@ async function runAutoPush(slug: string): Promise<void> {
       head: branch,
       base,
       token,
+      headOwner: target.headOwner,
       title: `tangos/${slug}: matched functions (${SESSION_TAG})`,
-      body: `Automated per-agent PR from tangOS Console - matched functions from **${slug}** this session. CI validation + your review gate the merge.`
+      body: `Automated per-agent PR from tangOS Console${target.isFork ? ` (from fork \`${target.slug.owner}/${target.slug.repo}\`)` : ''} - matched functions from **${slug}** this session. CI validation + your review gate the merge.`
     })
     if (!pr.ok) return set({ state: 'error', message: `pushed, but PR failed: ${pr.error}`, prUrl: undefined })
     set({ state: 'ok', message: `${slug}: ${pr.created ? 'opened' : 'updated'} PR`, prUrl: pr.url })
@@ -951,6 +966,28 @@ export const roleBatchSize = (role?: string): number =>
 
 // Generate a batch scheduled for this AI's role (similarity, large-function sweep, spread
 // survey, or near-miss refine). Each target carries scaffolding metadata for the agent.
+// Names of functions already matched in the LIVE committed data (chaos-db on the chaos-data branch).
+// coddog judges "matched" from the local src/ tree, which goes stale the moment main gets ahead, so
+// a clone that's behind re-hands functions others already merged. Best-effort: returns null when the
+// repo has no committedDbUrl or the fetch fails, so batch generation still works offline.
+async function liveMatchedNames(): Promise<Set<string> | null> {
+  const url = state.descriptor?.data?.committedDbUrl
+  if (!url) return null
+  const bust = `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` // bust the ~5-min raw-GitHub cache
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), 15000)
+  try {
+    const r = await fetch(bust, { signal: ac.signal })
+    if (!r.ok) return null
+    const db = (await r.json()) as AtlasDb
+    return new Set(db.functions.filter((f) => f.matched).map((f) => f.name))
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function genDraft(role: string | undefined, count: number): Promise<BatchDraft> {
   if (!state.repoPath || !state.descriptor) throw new Error('no repo loaded')
   // Functions already handed out (in a still-open batch) - never generate these again so
@@ -1036,6 +1073,10 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
     else hint = 'The scheduler ran but wrote nothing. Check the output below and that the repo is fully set up (deps + extracted ROM).'
     throw new Error(`Batch scheduler (${sched.id}) produced no worklist - exit ${res.exitCode ?? '?'}.\n\n${hint}\n\n--- scheduler output ---\n${tail}`)
   }
+  // Cross-check the LIVE matched set so a behind clone doesn't get handed functions already merged on
+  // main (the reported "20 of 40 were already done" bug). Best-effort; null = fall back to local view.
+  const matchedLive = await liveMatchedNames()
+  let droppedMatched = 0
   const items: BatchItem[] = []
   for (const line of lines) {
     if (items.length >= count) break
@@ -1045,6 +1086,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
         coddog_sim?: number; siblings?: { name: string; sim: number }[]
       }
       if (taken.has(r.name)) continue // already assigned elsewhere, or a same-name sibling above
+      if (matchedLive?.has(r.name)) { droppedMatched++; continue } // already matched on main since this clone synced
       const addr = r.addr ? parseInt(r.addr, 16) : undefined
       const size = r.size ? parseInt(r.size, 16) : undefined
       const sib = r.siblings?.[0]
@@ -1074,7 +1116,14 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   } catch {
     /* ignore */
   }
-  if (!items.length) throw new Error('scheduler returned no functions')
+  if (droppedMatched) console.log(`[genDraft] skipped ${droppedMatched} target(s) already matched on main (clone may be behind)`)
+  if (!items.length) {
+    throw new Error(
+      droppedMatched
+        ? `Every candidate for this batch is already matched on main (${droppedMatched} skipped) - your clone is behind. Hit Update, then generate again.`
+        : 'scheduler returned no functions'
+    )
+  }
   const prompt =
     'Match these targets. Each was picked by opcode similarity to an already-matched sibling ' +
     '(shown per target) - lean on that sibling as scaffolding. Run `match` on each; use `fdiff` on near-misses.'
@@ -1793,21 +1842,23 @@ ipcMain.handle('repo:pushWorkPr', async (): Promise<{ ok: boolean; url?: string;
   const base = await defaultBranch(repo)
   const who = (await gitUserName(repo)).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'work'
   const branch = `tangos/${who}`
-  const pushed = await pushToBranch(repo, branch, gh, token)
-  if (!pushed.ok) {
-    const denied = /denied|403|permission|not authorized|authentication|read-only/i.test(pushed.err)
-    return { ok: false, error: (denied ? 'GitHub token lacks push access - sign out and back in from Settings. ' : '') + pushed.err.slice(-160) }
-  }
+  // Push to the base repo if this account can, otherwise to its fork (created on demand), so a
+  // contributor without collaborator access still opens a cross-repo PR instead of getting a 403.
+  const target = await getPushTarget(gh, token)
+  if (!target.ok || !target.slug) return { ok: false, error: target.error ?? 'could not resolve a push target' }
+  const pushed = await pushToBranch(repo, branch, target.slug, token)
+  if (!pushed.ok) return { ok: false, error: `push failed: ${pushed.err.slice(-160)}` }
   const pr = await ensurePullRequest({
     owner: gh.owner,
     repo: gh.repo,
     head: branch,
     base,
     token,
+    headOwner: target.headOwner,
     title: `tangos: matched work (${branch})`,
-    body: 'Matched functions pushed from tangOS Console (reconciling a diverged clone). Review + CI gate the merge.'
+    body: `Matched functions pushed from tangOS Console${target.isFork ? ` (from fork \`${target.slug.owner}/${target.slug.repo}\`)` : ''}. Review + CI gate the merge.`
   })
-  if (!pr.ok) return { ok: false, error: `pushed to ${branch}, but PR failed: ${pr.error}` }
+  if (!pr.ok) return { ok: false, error: `pushed to ${target.slug.owner}/${target.slug.repo}:${branch}, but PR failed: ${pr.error}` }
   return { ok: true, url: pr.url }
 })
 
