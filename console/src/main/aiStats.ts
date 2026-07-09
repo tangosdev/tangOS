@@ -6,6 +6,12 @@
 // undefined. Stats are lifetime, keyed by AI name, persisted in tangos-settings.json.
 import type { AiStats } from '../shared/types'
 
+// A near miss must be genuinely CLOSE, not just an improvement: it counts only when fewer than this
+// fraction of the function's words (size/4 bytes) differ. So div 75 on an 88-word function (~85%)
+// is "compiled but wrong," not near, and doesn't count; a low-div attempt does. Tunable - raise for
+// more lenient, lower for stricter.
+const NEAR_MISS_MAX_RATIO = 0.34
+
 const SIZE_BUCKETS: Array<[string, (n: number) => boolean]> = [
   ['<=0x40', (n) => n <= 0x40],
   ['0x40-0x200', (n) => n > 0x40 && n <= 0x200],
@@ -95,11 +101,16 @@ class AiStatsStore {
    *  re-hitting the same div (or worse) is not progress and must not inflate the tally. bestDiv is
    *  global per function (across agents + sessions), so the win credits whoever pushed it lower.
    *  Separate from matchAttempts, which recordMatch already bumps for the same run. */
-  recordNearMiss(name: string | undefined, func: string | undefined, div: number | null): void {
+  recordNearMiss(name: string | undefined, func: string | undefined, div: number | null, size?: number): void {
     if (!name || !func || div == null || div < 1 || div >= 999) return
     const prev = this.bestDiv.get(func) ?? Infinity
     if (div >= prev) return // no improvement over the best already seen - not a win
-    this.bestDiv.set(func, div)
+    this.bestDiv.set(func, div) // new best; track it even if it's still too far to count below
+    // Closeness floor: an improvement that's still far off (most of the function differs) compiled to
+    // size but isn't "near". Only count when under NEAR_MISS_MAX_RATIO of the words differ. Unknown
+    // size -> can't judge the ratio, so allow it through on the improvement gate alone.
+    const words = size && size > 0 ? size / 4 : 0
+    if (words && div / words >= NEAR_MISS_MAX_RATIO) return
     for (const s of this.scopes(name)) s.nearMisses = (s.nearMisses ?? 0) + 1
     this.onChange?.()
   }

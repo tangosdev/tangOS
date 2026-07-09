@@ -355,7 +355,7 @@ function afterRun(
   if (!ok) {
     // A non-match that compiled to a small real byte-diff is a near miss - but counted only when it
     // IMPROVES the function's best divergence so far (the gate lives inside recordNearMiss).
-    aiStats.recordNearMiss(client?.name, func, matchDivergence(res.output))
+    aiStats.recordNearMiss(client?.name, func, matchDivergence(res.output), parseHexish(values.size))
   }
   if (ok && typeof values.func === 'string') markItemDone(values.func)
   // A verified match means the agent wrote a matching source; when Writes + Review + Push are on,
@@ -1479,7 +1479,7 @@ async function driveBatch(agentName: string): Promise<void> {
       const item = batch.items.find((i) => i.ref === name)
       aiStats.recordMatch(agentName, ok, item?.size, name)
       // a "div=N" line: compiled draft, close but not matching - counts only if it beats the best div
-      if (!ok) aiStats.recordNearMiss(agentName, name, Number(m[4].replace('div=', '')))
+      if (!ok) aiStats.recordNearMiss(agentName, name, Number(m[4].replace('div=', '')), item?.size)
       if (ok && item) item.done = true
       aiStats.setCurrent(agentName, {
         task: batch.title,
