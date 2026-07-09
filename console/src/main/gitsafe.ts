@@ -335,6 +335,24 @@ export async function mergeWorkBranch(repo: string, base: string): Promise<void>
   await git(repo, ['branch', '-D', WORK_BRANCH])
 }
 
+/** Best-effort `git fetch origin <branch>` so origin/<branch> is current before a push builds a
+ *  PR tree on it. A checkout that hasn't fetched for hours otherwise diffs against a stale base,
+ *  and the PR re-includes files that already landed upstream (the duplicate-file PR bug). Failures
+ *  (offline, no remote) are swallowed - the push then falls back to whatever origin/<branch> is. */
+export async function fetchBase(repo: string, branch: string): Promise<boolean> {
+  return (await git(repo, ['fetch', '--quiet', 'origin', branch])).code === 0
+}
+
+/** How a working-tree file relates to origin/<base>: 'absent' (not upstream - normal for a fresh
+ *  match), 'identical' (already landed upstream - nothing left to PR), or 'differs' (upstream has
+ *  its own version - ours is superseded; never overwrite someone else's landed match). */
+export async function upstreamState(repo: string, base: string, path: string): Promise<'absent' | 'identical' | 'differs'> {
+  const ref = `origin/${base}`
+  if ((await git(repo, ['cat-file', '-e', `${ref}:${path}`])).code !== 0) return 'absent'
+  // diff --quiet: exit 0 = worktree file byte-equals the committed blob (after filters)
+  return (await git(repo, ['diff', '--quiet', ref, '--', path])).code === 0 ? 'identical' : 'differs'
+}
+
 /** Working-tree source files that are new or modified (porcelain), for per-agent attribution. */
 export async function changedSrcFiles(repo: string): Promise<string[]> {
   const map = await statusMap(repo)

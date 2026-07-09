@@ -26,7 +26,7 @@ import {
   remoteSlug, defaultBranch, currentBranch,
   pushSubsetToBranch, changedSrcFiles,
   isDirty, aheadBehind, unmergedAhead, fetchRemote, rebasePull, pushToBranch, gitUserName,
-  recentlyAddedSrc
+  recentlyAddedSrc, fetchBase, upstreamState
 } from './gitsafe'
 import { ensurePullRequest, resolvePushTarget, type PushTarget } from './pullRequests'
 import { writeBugReport } from './bugReport'
@@ -130,6 +130,21 @@ const autoPushBusy = new Set<string>()
 const claimedFiles = new Map<string, string>() // src path -> owning agent slug (first matcher wins)
 const pendingByAgent = new Map<string, Set<string>>() // agent slug -> cumulative src files for its PR
 let baselineDirtySrc = new Set<string>() // src already dirty before the session started (never attributed)
+// src path -> file content AT VERIFY TIME. The push fires >=20s after the match and ships the
+// working tree's CURRENT bytes - but refine loops keep rewriting candidate files, so without this
+// snapshot a later WORSE attempt ships under a "matched" flag (the 18-of-19-near-miss PR bug).
+// At flush, a file whose bytes no longer equal its verified snapshot is HELD BACK until a
+// re-verify refreshes the snapshot - never pushed on the strength of a stale MATCH.
+const verifiedContent = new Map<string, string>()
+
+/** Snapshot a just-verified src file's bytes so the debounced push ships what was verified. */
+function snapshotVerified(repoPath: string, relPath: string): void {
+  try {
+    verifiedContent.set(relPath, readFileSync(join(repoPath, relPath), 'utf8'))
+  } catch {
+    /* file vanished between verify and snapshot; the flush's existence check handles it */
+  }
+}
 
 // Where this contributor's branches get pushed: straight to the base repo when the signed-in token
 // has push access, otherwise their own fork (opened on demand). Resolving hits the GitHub API, so
@@ -175,8 +190,10 @@ async function noteMatchAndPush(
         if (!owner) {
           claimedFiles.set(cand, slug)
           mine.add(cand)
+          snapshotVerified(state.repoPath, cand)
         } else if (owner === slug) {
           mine.add(cand)
+          snapshotVerified(state.repoPath, cand) // re-verify refreshes the pushable snapshot
         }
       }
     }
@@ -219,6 +236,48 @@ async function runAutoPush(slug: string): Promise<void> {
     set({ state: 'pushing', message: `${slug}: ${files.length} file(s)` })
     const branch = `tangos/${slug}-${SESSION_TAG}`
     const base = await defaultBranch(state.repoPath)
+
+    // Gate what actually ships. (1) Fetch so origin/<base> is current - a stale base is how PRs
+    // re-included files that had already landed upstream. (2) A file already identical upstream
+    // (or superseded by someone else's landed version) leaves the pending set for good. (3) A file
+    // whose bytes no longer equal its verified-time snapshot is HELD BACK (still pending) until a
+    // re-verify refreshes it - refine loops rewrite candidates, and pushing the current bytes on
+    // the strength of an old MATCH is how near-misses shipped in "matched" PRs.
+    await fetchBase(state.repoPath, base)
+    const pending = pendingByAgent.get(slug) ?? new Set<string>()
+    const ship: string[] = []
+    let landedUpstream = 0
+    let heldStale = 0
+    for (const f of files) {
+      const up = await upstreamState(state.repoPath, base, f)
+      if (up !== 'absent') {
+        pending.delete(f) // landed (identical) or superseded (differs) - either way, not ours to PR
+        verifiedContent.delete(f)
+        landedUpstream++
+        continue
+      }
+      let current: string | null = null
+      try {
+        current = readFileSync(join(state.repoPath, f), 'utf8')
+      } catch {
+        /* deleted since verify (e.g. a land-gate unbank) - treat as stale */
+      }
+      const snap = verifiedContent.get(f)
+      if (current == null || snap == null || current !== snap) {
+        heldStale++ // stays pending; ships when a fresh match re-snapshots it
+        continue
+      }
+      ship.push(f)
+    }
+    pendingByAgent.set(slug, pending)
+    if (!ship.length) {
+      const why = [
+        landedUpstream ? `${landedUpstream} already upstream` : '',
+        heldStale ? `${heldStale} changed since verify (held for re-verify)` : ''
+      ].filter(Boolean).join(', ')
+      return set({ state: 'skipped', message: `${slug}: nothing to push${why ? ` (${why})` : ''}` })
+    }
+
     // Push to the base repo if allowed, else to this user's fork (created on demand) - so contributors
     // without collaborator access still land their matches as a cross-repo PR instead of 403ing.
     const target = await getPushTarget(gh, token)
@@ -229,7 +288,7 @@ async function runAutoPush(slug: string): Promise<void> {
       state.repoPath,
       branch,
       base,
-      files,
+      ship,
       `tangos(${slug}): matched work`,
       target.slug,
       token
@@ -249,7 +308,10 @@ async function runAutoPush(slug: string): Promise<void> {
     })
     if (!pr.ok) return set({ state: 'error', message: `pushed, but PR failed: ${pr.error}`, prUrl: undefined })
     set({ state: 'ok', message: `${slug}: ${pr.created ? 'opened' : 'updated'} PR`, prUrl: pr.url })
-    report('autopush', { agent: slug, branch, base, files: files.length, prUrl: pr.url, created: pr.created })
+    report('autopush', {
+      agent: slug, branch, base, files: ship.length,
+      skippedUpstream: landedUpstream, heldStale, prUrl: pr.url, created: pr.created
+    })
   } catch (e) {
     set({ state: 'error', message: String((e as Error).message ?? e).slice(-200) })
   } finally {
