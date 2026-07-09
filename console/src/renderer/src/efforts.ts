@@ -27,7 +27,7 @@ const FALLBACK: EffortSpec = { options: ['low', 'medium', 'high'], default: 'med
 export function familyOf(a: Pick<AiAgent, 'provider' | 'name'>): string {
   if (a.provider && CATALOG[a.provider]) return a.provider
   const n = (a.name || '').toLowerCase()
-  if (/claude|opus|sonnet|haiku/.test(n)) return 'Claude'
+  if (/claude|opus|sonnet|haiku|fable/.test(n)) return 'Claude'
   if (/glm|zhipu/.test(n)) return 'GLM'
   if (/grok/.test(n)) return 'Grok'
   if (/deepseek/.test(n)) return 'DeepSeek'

@@ -43,7 +43,13 @@ export interface McpContext {
 export function normalizeName(raw?: string): string {
   if (!raw) return 'AI'
   const n = raw.toLowerCase()
-  if (n.includes('claude') || n.includes('opus') || n.includes('sonnet') || n.includes('haiku')) return 'Claude'
+  // Claude models get their OWN boxes (Opus/Fable/Sonnet run + score independently), so resolve the
+  // specific model before the generic 'Claude' fallback. Order matters: "claude-opus-4-8" -> Opus.
+  if (n.includes('opus')) return 'Opus'
+  if (n.includes('fable')) return 'Fable'
+  if (n.includes('sonnet')) return 'Sonnet'
+  if (n.includes('haiku')) return 'Haiku'
+  if (n.includes('claude')) return 'Claude'
   if (n.includes('grok')) return 'Grok'
   if (n.includes('deepseek')) return 'DeepSeek'
   if (n.includes('glm') || n.includes('zhipu') || n.includes('z.ai')) return 'GLM'

@@ -651,13 +651,15 @@ function agentPrompt(): string {
 }
 
 // Stored API keys that surface a provider as an AI in the controller, mapped to its name.
-// Claude + GLM are console-drivable (glm_refine driver); the rest appear as available AIs.
-const LLM_KEYS: Record<string, string> = {
-  ANTHROPIC_API_KEY: 'Claude',
-  GLM_API_KEY: 'GLM',
-  DEEPSEEK_API_KEY: 'DeepSeek',
-  GROK_API_KEY: 'Grok',
-  OPENAI_API_KEY: 'ChatGPT'
+// Claude (Opus/Fable/Sonnet) + GLM + DeepSeek are console-drivable (glm_refine driver); the rest
+// appear as available AIs. One key can back several provider boxes: the Anthropic key drives three
+// distinct model boxes (Opus, Fable, Sonnet) that run and score independently.
+const LLM_KEYS: Record<string, string[]> = {
+  ANTHROPIC_API_KEY: ['Opus', 'Fable', 'Sonnet'],
+  GLM_API_KEY: ['GLM'],
+  DEEPSEEK_API_KEY: ['DeepSeek'],
+  GROK_API_KEY: ['Grok'],
+  OPENAI_API_KEY: ['ChatGPT']
 }
 // Providers currently being driven by the console (Phase D populates this).
 const apiDriving = new Set<string>()
@@ -688,10 +690,10 @@ function agentsSnapshot(): AiAgent[] {
     })
   }
 
-  // 2. keyed API providers (drivable). If already live via MCP, just tag the provider.
+  // 2. keyed API providers (drivable). One key can back several boxes (Anthropic -> Opus/Fable/
+  //    Sonnet). If already live via MCP, just tag the provider.
   for (const s of listSecrets()) {
-    const provider = LLM_KEYS[s.name]
-    if (!provider) continue
+    for (const provider of LLM_KEYS[s.name] ?? []) {
     const existing = byName.get(provider)
     if (existing) {
       existing.provider = provider
@@ -708,6 +710,7 @@ function agentsSnapshot(): AiAgent[] {
       stats: aiStats.statsFor(provider),
       run: aiStats.runStatsFor(provider)
     })
+    }
   }
 
   // 3. previously-seen names with lifetime stats but no live session -> grayed box.
@@ -1394,13 +1397,19 @@ async function driveBatch(agentName: string): Promise<void> {
   if (!state.repoPath) throw new Error('no repo selected')
   const env = secretsEnv()
   const driverEnv: Record<string, string> = {}
+  // Claude models share the Anthropic key but drive different models, each its own box.
+  const CLAUDE_MODEL: Record<string, string> = {
+    Opus: 'claude-opus-4-8',
+    Fable: 'claude-fable-5',
+    Sonnet: 'claude-sonnet-5'
+  }
   if (agentName === 'GLM') {
     if (!env.GLM_API_KEY) throw new Error('no GLM_API_KEY stored - add it in Settings')
-  } else if (agentName === 'Claude') {
+  } else if (CLAUDE_MODEL[agentName]) {
     if (!env.ANTHROPIC_API_KEY) throw new Error('no ANTHROPIC_API_KEY stored - add it in Settings')
     driverEnv.GLM_API_KEY = env.ANTHROPIC_API_KEY // the driver reads GLM_API_KEY; point it at Anthropic
     driverEnv.GLM_BASE_URL = 'https://api.anthropic.com'
-    driverEnv.GLM_MODEL = 'claude-sonnet-4-5'
+    driverEnv.GLM_MODEL = CLAUDE_MODEL[agentName]
   } else if (agentName === 'DeepSeek') {
     if (!env.DEEPSEEK_API_KEY) throw new Error('no DEEPSEEK_API_KEY stored - add it in Settings')
     driverEnv.GLM_API_KEY = env.DEEPSEEK_API_KEY
@@ -1411,12 +1420,10 @@ async function driveBatch(agentName: string): Promise<void> {
   } else {
     throw new Error(`${agentName} has no console driver yet (idle-only)`)
   }
-  // Reasoning effort chosen on the AI box (falls back to the family default). The driver maps it
-  // to the provider's thinking knob (Claude budget vs GLM on/off) - see tools/glm_refine.py.
-  const effortDefault: Record<string, string> = { Claude: 'high' }
-  // GLM's refine driver emits code directly; extended thinking just eats its token budget and
-  // starves the code block. GLM forces it off; DeepSeek picks the model by effort (chat vs reasoner)
-  // and the reasoner does its own thinking, so neither passes a thinking level to the driver.
+  // Reasoning effort chosen on the AI box (falls back to the family default). Claude models map it to
+  // the extended-thinking budget; GLM forces it off (thinking starves its code block); DeepSeek picks
+  // the model by effort (chat vs reasoner) and the reasoner thinks on its own, so both pass 'off'.
+  const effortDefault: Record<string, string> = { Opus: 'high', Fable: 'high', Sonnet: 'high' }
   driverEnv.TANGOS_EFFORT =
     agentName === 'GLM' || agentName === 'DeepSeek' ? 'off' : agentEfforts[agentName] ?? effortDefault[agentName] ?? ''
   const batch = state.batches.find((b) => b.targetAgent === agentName && b.status !== 'done')
@@ -1658,7 +1665,7 @@ async function startDriveLoop(agentName: string): Promise<void> {
  *  currently a live MCP session. An MCP agent self-serves work via next_batch and needs no driver. */
 function isConsoleDrivable(name: string): boolean {
   if (mcp.getClients().some((c) => c.name === name)) return false
-  return listSecrets().some((s) => LLM_KEYS[s.name] === name)
+  return listSecrets().some((s) => (LLM_KEYS[s.name] ?? []).includes(name))
 }
 
 ipcMain.handle('ai:drive', async (_e, agentName: string) => {
