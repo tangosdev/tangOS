@@ -1424,8 +1424,10 @@ async function driveBatch(agentName: string): Promise<void> {
     driverEnv.GLM_API_KEY = env.DEEPSEEK_API_KEY
     driverEnv.GLM_BASE_URL = 'https://api.deepseek.com'
     driverEnv.GLM_DIALECT = 'openai' // DeepSeek is OpenAI /chat/completions, not the Anthropic dialect
-    // the effort box picks the model: 'reasoner' = R1 (deepseek-reasoner), else V3 (deepseek-chat)
-    driverEnv.GLM_MODEL = agentEfforts['DeepSeek'] === 'reasoner' ? 'deepseek-reasoner' : 'deepseek-chat'
+    // The effort box picks the model. IMPORTANT: default to reasoner when no choice is stored -
+    // the dropdown DISPLAYS "reasoner" (the family default) without ever writing agentEfforts, so
+    // requiring === 'reasoner' silently drove deepseek-chat while the UI said reasoner.
+    driverEnv.GLM_MODEL = agentEfforts['DeepSeek'] === 'chat' ? 'deepseek-chat' : 'deepseek-reasoner'
   } else {
     throw new Error(`${agentName} has no console driver yet (idle-only)`)
   }
