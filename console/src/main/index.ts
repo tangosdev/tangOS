@@ -149,28 +149,41 @@ function agentSlug(name?: string): string {
   return s || 'agent'
 }
 
-/** After a verified match, attribute the freshly-dirty src file(s) to this agent and debounce a
- *  push of just that agent's cumulative work to its own branch/PR. */
-async function noteMatchAndPush(agentName: string | undefined): Promise<void> {
+/** Attribute the src file(s) for the functions VERIFIED matched this run to this agent, and debounce
+ *  a push of just that agent's cumulative work to its own branch/PR.
+ *
+ *  `matchedFuncs` MUST be the functions that actually byte-matched (the driver's landed set, or the
+ *  MCP `match` tool's target). We deliberately do NOT sweep all of `changedSrcFiles`: the working
+ *  tree accumulates near-miss .c files (the refine pool) and other ambient untracked sources, and
+ *  blindly grabbing them is what pushed 68 non-matching files into a "matched functions" PR. Each
+ *  matched function is mapped to whichever of src/<name>.c|.cpp actually changed - nothing else. */
+async function noteMatchAndPush(
+  agentName: string | undefined,
+  matchedFuncs: Iterable<string>
+): Promise<void> {
   if (!autoPushActive() || !state.repoPath) return
   const slug = agentSlug(agentName)
   const mine = pendingByAgent.get(slug) ?? new Set<string>()
   try {
-    for (const f of await changedSrcFiles(state.repoPath)) {
-      if (baselineDirtySrc.has(f)) continue // pre-existing dirt, not this session's work
-      const owner = claimedFiles.get(f)
-      if (!owner) {
-        claimedFiles.set(f, slug)
-        mine.add(f)
-      } else if (owner === slug) {
-        mine.add(f)
+    const changed = new Set(await changedSrcFiles(state.repoPath))
+    for (const func of matchedFuncs) {
+      if (!func) continue
+      for (const cand of [`src/${func}.c`, `src/${func}.cpp`]) {
+        if (!changed.has(cand) || baselineDirtySrc.has(cand)) continue // absent, or pre-existing dirt
+        const owner = claimedFiles.get(cand)
+        if (!owner) {
+          claimedFiles.set(cand, slug)
+          mine.add(cand)
+        } else if (owner === slug) {
+          mine.add(cand)
+        }
       }
     }
   } catch {
     /* status read failed; fall through with whatever we already have */
   }
   pendingByAgent.set(slug, mine)
-  scheduleAutoPush(slug)
+  if (mine.size) scheduleAutoPush(slug)
 }
 
 /** Debounced per agent: coalesce a burst of one AI's matches into a single push ~20s after its last. */
@@ -343,10 +356,10 @@ function afterRun(
     if (d != null && d >= 1 && d < 999) aiStats.recordNearMiss(client?.name)
   }
   if (ok && typeof values.func === 'string') markItemDone(values.func)
-  // A verified match means the agent (MCP or driven) wrote a matching source; when Writes +
-  // Review + Push are on, attribute the new src to THIS agent and roll it into that agent's own
-  // branch/PR (debounced so a burst becomes one push).
-  if (ok) void noteMatchAndPush(client?.name)
+  // A verified match means the agent wrote a matching source; when Writes + Review + Push are on,
+  // attribute ONLY this matched function's src to the agent and roll it into its branch/PR (debounced
+  // so a burst becomes one push). Gate on the specific func so ambient near-miss files aren't swept.
+  if (ok && typeof values.func === 'string') void noteMatchAndPush(client?.name, [values.func])
 }
 
 /** Flag a target done across any batch that lists it (drives batch % complete). */
@@ -1552,7 +1565,7 @@ async function driveBatch(agentName: string): Promise<void> {
         wrongBanks: wrong ? Number(wrong[1]) : 0,
         outputTail: (landRes.output || '').slice(-4000)
       })
-      await noteMatchAndPush(agentName) // roll this driver's just-landed matches into its own PR
+      await noteMatchAndPush(agentName, landed) // ONLY this driver's landed matches - not ambient near-misses
       scheduleAtlasRegen() // matches are now in src/ - refresh chaos-db so Atlas + near-miss pool track them
     }
   } finally {
