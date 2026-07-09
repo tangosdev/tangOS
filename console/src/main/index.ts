@@ -528,7 +528,47 @@ let mainWindow: BrowserWindow | null = null
 
 // Cache the loaded Atlas data so popouts + view-switches reuse it instantly
 // instead of re-reading/re-fetching the ~2MB data every time.
-let atlasCache: { repo: string | null; local?: AtlasDb | null; live?: AtlasDb | null } = { repo: null }
+let atlasCache: { repo: string | null; local?: AtlasDb | null; live?: AtlasDb | null; liveAt?: number } = { repo: null }
+
+// One shared fetch of the live chaos-db so the Live view AND the batcher's matched-check don't
+// hammer raw GitHub into a 429. Passive callers reuse anything within TTL and hit the CDN (no
+// cache-bust); a user Live refresh (force) re-fetches fresh but no more than once per throttle
+// window; a rate-limit/failure serves the last good copy instead of erroring.
+const LIVE_TTL_MS = 60_000
+const LIVE_FORCE_THROTTLE_MS = 20_000
+async function loadLiveDb(force: boolean): Promise<AtlasDb> {
+  const url = state.descriptor?.data?.committedDbUrl
+  if (!url) throw new Error('this repo has no committedDbUrl in tangos.json')
+  const cached = atlasCache.repo === state.repoPath ? atlasCache.live : undefined
+  const age = cached && atlasCache.liveAt ? Date.now() - atlasCache.liveAt : Infinity
+  // A user Live refresh re-fetches once past the short throttle window; passive callers reuse for the
+  // full TTL. Either way, within the window the in-memory copy is served - no network hit.
+  const maxAge = force ? LIVE_FORCE_THROTTLE_MS : LIVE_TTL_MS
+  if (cached && age < maxAge) return cached
+  // Passive refresh rides the CDN cache (~5 min) to spare the rate limit; force busts it for freshness.
+  const target = force ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : url
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), 15000)
+  try {
+    const r = await fetch(target, { signal: ac.signal })
+    if (!r.ok) {
+      if (cached) return cached // rate-limited/offline: keep showing the last good copy
+      throw new Error(
+        r.status === 429
+          ? 'GitHub is rate-limiting the live data feed - try Live again in a minute (local data still works).'
+          : `live fetch failed: HTTP ${r.status}`
+      )
+    }
+    const db = (await r.json()) as AtlasDb
+    atlasCache = { ...atlasCache, repo: state.repoPath, live: db, liveAt: Date.now() }
+    return db
+  } catch (e) {
+    if (cached) return cached
+    throw e
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 function repoState(): RepoState {
   return {
@@ -874,26 +914,7 @@ ipcMain.handle('atlas:current', () => {
   return db
 })
 
-ipcMain.handle('atlas:loadLive', async (_e, force?: boolean) => {
-  const url = state.descriptor?.data?.committedDbUrl
-  if (!url) throw new Error('this repo has no committedDbUrl in tangos.json')
-  // Use the session cache only for the initial passive load. A user-initiated Live
-  // toggle/refresh passes force=true, which re-fetches AND cache-busts the CDN (raw
-  // GitHub caches ~5 min) so freshly-published progress actually shows up.
-  if (!force && atlasCache.repo === state.repoPath && atlasCache.live !== undefined) return atlasCache.live
-  const bust = force ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : url
-  const ac = new AbortController()
-  const timer = setTimeout(() => ac.abort(), 15000)
-  try {
-    const r = await fetch(bust, { signal: ac.signal })
-    if (!r.ok) throw new Error(`live fetch failed: HTTP ${r.status}`)
-    const db = (await r.json()) as AtlasDb
-    atlasCache = { ...atlasCache, repo: state.repoPath, live: db }
-    return db
-  } finally {
-    clearTimeout(timer)
-  }
-})
+ipcMain.handle('atlas:loadLive', (_e, force?: boolean) => loadLiveDb(!!force))
 
 // Regenerate the local Atlas DB (chaos-db.json) from the current repo state and refresh the cache,
 // so the Atlas AND the near-miss/refine pool reflect what's actually in src/ now. Best-effort.
@@ -971,20 +992,14 @@ export const roleBatchSize = (role?: string): number =>
 // a clone that's behind re-hands functions others already merged. Best-effort: returns null when the
 // repo has no committedDbUrl or the fetch fails, so batch generation still works offline.
 async function liveMatchedNames(): Promise<Set<string> | null> {
-  const url = state.descriptor?.data?.committedDbUrl
-  if (!url) return null
-  const bust = `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` // bust the ~5-min raw-GitHub cache
-  const ac = new AbortController()
-  const timer = setTimeout(() => ac.abort(), 15000)
+  if (!state.descriptor?.data?.committedDbUrl) return null
+  // Passive (force=false): reuses the shared TTL cache and the CDN, so generating batch after batch
+  // no longer spams the feed toward a 429. Falls back to null offline/on failure.
   try {
-    const r = await fetch(bust, { signal: ac.signal })
-    if (!r.ok) return null
-    const db = (await r.json()) as AtlasDb
+    const db = await loadLiveDb(false)
     return new Set(db.functions.filter((f) => f.matched).map((f) => f.name))
   } catch {
     return null
-  } finally {
-    clearTimeout(timer)
   }
 }
 
