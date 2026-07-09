@@ -1765,7 +1765,7 @@ ipcMain.handle('repo:updateStatus', async (): Promise<RepoUpdateStatus> => {
 // when there are - so having unpublished work never blocks getting new upstream work. Auto-stashes
 // uncommitted tracked changes; never touches untracked matched work; aborts cleanly on a conflict.
 // On success, reload the descriptor (tangos.json may have moved) and drop the atlas cache.
-ipcMain.handle('repo:pull', async (): Promise<{ ok: boolean; err?: string; behind?: number }> => {
+ipcMain.handle('repo:pull', async (): Promise<{ ok: boolean; err?: string; behind?: number; note?: string }> => {
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo))) return { ok: false, err: 'not a git checkout' }
   const db = await defaultBranch(repo)
@@ -1775,7 +1775,7 @@ ipcMain.handle('repo:pull', async (): Promise<{ ok: boolean; err?: string; behin
     reloadDescriptor('manual')
   }
   const ab = res.ok ? await aheadBehind(repo, db) : null
-  return { ok: res.ok, err: res.ok ? undefined : res.err, behind: ab?.behind }
+  return { ok: res.ok, err: res.ok ? undefined : res.err, behind: ab?.behind, note: res.note }
 })
 
 // Diverged clone (local commits the remote lacks, can't fast-forward): push those commits to a

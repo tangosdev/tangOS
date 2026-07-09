@@ -98,7 +98,7 @@ export interface TangosApi {
   cloneRepo(url: string, dest: string): Promise<{ ok: boolean; output: string; code?: number }>
   cloneAndOpen(url: string): Promise<{ ok: boolean; error?: string; canceled?: boolean; repo?: RepoState }>
   repoUpdateStatus(): Promise<RepoUpdateStatus>
-  repoPull(): Promise<{ ok: boolean; err?: string; behind?: number }>
+  repoPull(): Promise<{ ok: boolean; err?: string; behind?: number; note?: string }>
   repoPushWorkPr(): Promise<{ ok: boolean; url?: string; error?: string }>
   minimizeWin(): Promise<void>
   maximizeToggle(): Promise<boolean>

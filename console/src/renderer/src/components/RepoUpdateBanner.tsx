@@ -49,8 +49,8 @@ export default function RepoUpdateBanner({
       const r = await window.tangos.repoPull()
       if (r.ok) {
         setStatus(await window.tangos.repoUpdateStatus())
-        setMsg('Updated to the latest.')
-        setTimeout(() => setMsg(null), 4000)
+        setMsg(r.note ? `Updated to the latest. ${r.note}` : 'Updated to the latest.')
+        setTimeout(() => setMsg(null), r.note ? 15000 : 4000) // linger if there's a backup path to read
       } else if (r.err && /conflict|rebase/i.test(r.err)) {
         setMsg("Couldn't auto-update - your local changes conflict with the new upstream work. Nothing was changed; reconcile manually.")
       } else {

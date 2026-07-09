@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
-import { join } from 'node:path'
-import { readFileSync, unlinkSync } from 'node:fs'
+import { join, dirname } from 'node:path'
+import { readFileSync, unlinkSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 export const WORK_BRANCH = 'tangos/work'
@@ -173,18 +173,76 @@ export async function fetchRemote(repo: string): Promise<boolean> {
 }
 
 /** Bring in new upstream work while keeping local commits: rebase the current branch onto
- *  origin/<branch>. Fast-forwards when there are no local commits, and when there are it replays
- *  them on top (dropping any that were already merged upstream). --autostash tucks uncommitted
- *  TRACKED changes aside and restores them after; untracked files (e.g. new match sources) are never
- *  touched. On any failure - a real conflict most likely - it aborts so the tree is never left
- *  mid-rebase, and returns the error for the caller to surface. */
-export async function rebasePull(repo: string, branch: string): Promise<{ ok: boolean; err: string }> {
+ *  origin/<branch>. Fast-forwards with no local commits; otherwise replays them (dropping any that
+ *  were already merged). --autostash handles uncommitted TRACKED changes.
+ *
+ *  Untracked files are the tricky part: a new match source you haven't committed collides with the
+ *  same path arriving from upstream (someone else merged that function), and git refuses to clobber
+ *  it - "would be overwritten by checkout" - aborting the whole rebase. We clear the path first,
+ *  safely: every colliding untracked file is moved into a backup dir under .git/. After a SUCCESSFUL
+ *  rebase, byte-identical ones (redundant dups) are discarded and any that DIFFERED are kept in the
+ *  backup so nothing is lost; on FAILURE every moved file is restored exactly where it was. `note`
+ *  reports any files kept aside. */
+export async function rebasePull(
+  repo: string,
+  branch: string
+): Promise<{ ok: boolean; err: string; note?: string }> {
   const f = await git(repo, ['fetch', '--quiet', 'origin', branch])
   if (f.code !== 0) return { ok: false, err: (f.err || f.out).trim() || 'fetch failed' }
-  const r = await git(repo, ['rebase', '--autostash', `origin/${branch}`])
-  if (r.code === 0) return { ok: true, err: '' }
-  await git(repo, ['rebase', '--abort']) // undo: restores the pre-rebase state incl. the autostash
-  return { ok: false, err: (r.err || r.out).trim() || 'rebase failed (conflict)' }
+  const ref = `origin/${branch}`
+
+  // Untracked files that also exist on the incoming ref are what block the checkout. Move each into
+  // a backup dir, remembering whether it was byte-identical to upstream (redundant) or differed.
+  const others = (await git(repo, ['ls-files', '--others', '--exclude-standard'])).out
+    .split('\n').map((s) => s.trim()).filter(Boolean)
+  const backupRoot = join(repo, '.git', `tangos-update-backup-${Date.now()}`)
+  const moved: { path: string; identical: boolean }[] = []
+  for (const p of others) {
+    const up = await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}:${p}`])
+    if (up.code !== 0) continue // not on the incoming ref -> no collision
+    const local = await git(repo, ['hash-object', p])
+    try {
+      const dest = join(backupRoot, p)
+      mkdirSync(dirname(dest), { recursive: true })
+      renameSync(join(repo, p), dest)
+      moved.push({ path: p, identical: local.out.trim() === up.out.trim() })
+    } catch {
+      /* couldn't move it: leave it and let the rebase report the collision; we abort + restore below */
+    }
+  }
+
+  const restore = (): void => {
+    for (const m of moved) {
+      try {
+        mkdirSync(dirname(join(repo, m.path)), { recursive: true })
+        renameSync(join(backupRoot, m.path), join(repo, m.path))
+      } catch {
+        /* best-effort */
+      }
+    }
+    try { rmSync(backupRoot, { recursive: true, force: true }) } catch { /* ignore */ }
+  }
+
+  const r = await git(repo, ['rebase', '--autostash', ref])
+  if (r.code !== 0) {
+    await git(repo, ['rebase', '--abort'])
+    restore() // put every moved file back exactly where it was; nothing lost
+    return { ok: false, err: (r.err || r.out).trim() || 'rebase failed (conflict)' }
+  }
+
+  // Rebase landed. Identical backups are pure dups of what upstream just checked out -> discard.
+  // Differing ones are kept so the contributor can compare/recover their version.
+  const kept = moved.filter((m) => !m.identical)
+  for (const m of moved) {
+    if (m.identical) { try { unlinkSync(join(backupRoot, m.path)) } catch { /* ignore */ } }
+  }
+  let note: string | undefined
+  if (kept.length) {
+    note = `Set aside ${kept.length} local file${kept.length === 1 ? '' : 's'} that upstream had also matched (different code) -> ${backupRoot}`
+  } else {
+    try { rmSync(backupRoot, { recursive: true, force: true }) } catch { /* ignore */ }
+  }
+  return { ok: true, err: '', note }
 }
 
 /** The remote's default branch (what a PR should target), falling back to 'main'. */
