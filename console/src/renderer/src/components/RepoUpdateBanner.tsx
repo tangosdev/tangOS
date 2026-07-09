@@ -17,6 +17,11 @@ export default function RepoUpdateBanner({
   const [status, setStatus] = useState<RepoUpdateStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
+  const [progress, setProgress] = useState<{ label: string; pct: number } | null>(null)
+
+  // Live phase + percent streamed from the main process during an Update, so the button isn't a
+  // dead spinner during the slow git fetch/rebase. Subscribe synchronously (StrictMode-safe).
+  useEffect(() => window.tangos.onRepoPullProgress(setProgress), [])
 
   // Reset the transient banner state only when the repo itself changes (not on a refresh), so a
   // manual refresh doesn't blank the banner out from under the fresh check below.
@@ -45,6 +50,7 @@ export default function RepoUpdateBanner({
   async function update(): Promise<void> {
     setBusy(true)
     setMsg(null)
+    setProgress({ label: 'Starting', pct: 0 })
     try {
       const r = await window.tangos.repoPull()
       if (r.ok) {
@@ -58,6 +64,7 @@ export default function RepoUpdateBanner({
       }
     } finally {
       setBusy(false)
+      setProgress(null)
     }
   }
 
@@ -137,8 +144,18 @@ export default function RepoUpdateBanner({
                 {status?.dirty ? ' (your uncommitted work is kept)' : ''}.
               </span>
               <button className="repo-warn-btn" disabled={busy} onClick={update}>
-                {busy ? <Loader2 size={13} className="spin" /> : <ArrowDownToLine size={13} />} Update
+                {busy ? <Loader2 size={13} className="spin" /> : <ArrowDownToLine size={13} />}{' '}
+                {busy && progress ? `${progress.pct}%` : 'Update'}
               </button>
+              {busy && progress && (
+                <div className="repo-warn-progress">
+                  <div className="repo-warn-progress-track">
+                    <i style={{ width: `${progress.pct}%` }} />
+                  </div>
+                  <span className="repo-warn-progress-label">{progress.label}</span>
+                </div>
+              )}
+              {msg && <span className="repo-warn-msg">{msg}</span>}
             </div>
           )}
           {unpublished > 0 && (

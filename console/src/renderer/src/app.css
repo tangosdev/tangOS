@@ -1094,6 +1094,25 @@ html, body, #root { background: transparent !important; }
 .repo-warn-btn:hover:not(:disabled) { background: rgba(14,165,233,1); }
 .repo-warn-btn:disabled { opacity: 0.6; cursor: default; }
 .repo-warn-msg { flex-basis: 100%; font-size: 12px; opacity: 0.9; }
+/* Update progress: full-width row under the banner - a determinate fill by phase, plus a shimmer so
+   the two opaque steps (git fetch + rebase) still read as "working," not frozen. */
+.repo-warn-progress { flex-basis: 100%; display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.repo-warn-progress-track {
+  flex: 1; height: 6px; border-radius: 999px; overflow: hidden;
+  background: rgba(14,165,233,0.18);
+}
+.repo-warn-progress-track > i {
+  display: block; height: 100%; border-radius: 999px; width: 0;
+  background: linear-gradient(90deg, rgba(14,165,233,0.75), rgba(14,165,233,1));
+  transition: width 0.35s ease;
+  background-size: 200% 100%;
+  animation: repo-warn-shimmer 1.1s linear infinite;
+}
+.repo-warn-progress-label { flex: none; font-size: 11.5px; opacity: 0.85; min-width: 0; }
+@keyframes repo-warn-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 /* auto-push (rolling PR) status chip next to the Review toggle */
 .autopush-chip {
   display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700;

@@ -1769,7 +1769,9 @@ ipcMain.handle('repo:pull', async (): Promise<{ ok: boolean; err?: string; behin
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo))) return { ok: false, err: 'not a git checkout' }
   const db = await defaultBranch(repo)
-  const res = await rebasePull(repo, db)
+  const res = await rebasePull(repo, db, (label, pct) =>
+    mainWindow?.webContents.send('repo:pullProgress', { label, pct })
+  )
   if (res.ok) {
     atlasCache = { repo: null }
     reloadDescriptor('manual')

@@ -134,6 +134,11 @@ const api = {
   repoUpdateStatus: (): Promise<RepoUpdateStatus> => ipcRenderer.invoke('repo:updateStatus'),
   repoPull: (): Promise<{ ok: boolean; err?: string; behind?: number; note?: string }> =>
     ipcRenderer.invoke('repo:pull'),
+  onRepoPullProgress: (cb: (p: { label: string; pct: number }) => void): (() => void) => {
+    const l = (_e: unknown, p: { label: string; pct: number }): void => cb(p)
+    ipcRenderer.on('repo:pullProgress', l)
+    return () => ipcRenderer.removeListener('repo:pullProgress', l)
+  },
   repoPushWorkPr: (): Promise<{ ok: boolean; url?: string; error?: string }> => ipcRenderer.invoke('repo:pushWorkPr'),
 
   minimizeWin: (): Promise<void> => ipcRenderer.invoke('win:minimize'),

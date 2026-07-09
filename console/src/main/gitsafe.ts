@@ -185,29 +185,43 @@ export async function fetchRemote(repo: string): Promise<boolean> {
  *  reports any files kept aside. */
 export async function rebasePull(
   repo: string,
-  branch: string
+  branch: string,
+  onProgress?: (label: string, pct: number) => void
 ): Promise<{ ok: boolean; err: string; note?: string }> {
-  const f = await git(repo, ['fetch', '--quiet', 'origin', branch])
-  if (f.code !== 0) return { ok: false, err: (f.err || f.out).trim() || 'fetch failed' }
+  const report = onProgress ?? ((): void => {})
   const ref = `origin/${branch}`
 
-  // Untracked files that also exist on the incoming ref are what block the checkout. Move each into
-  // a backup dir, remembering whether it was byte-identical to upstream (redundant) or differed.
+  report('Fetching from origin', 10)
+  const f = await git(repo, ['fetch', '--quiet', 'origin', branch])
+  if (f.code !== 0) return { ok: false, err: (f.err || f.out).trim() || 'fetch failed' }
+
+  // Find untracked files that collide with a path arriving from upstream (those block the checkout).
+  // One ls-tree yields every upstream path + its blob OID, so we intersect in memory and only touch
+  // the real collisions - no git subprocess per untracked file (a big repo has hundreds, and that
+  // per-file spawn loop was what made Update feel frozen).
+  report('Checking your local files', 30)
+  const upstream = new Map<string, string>()
+  for (const line of (await git(repo, ['ls-tree', '-r', ref])).out.split('\n')) {
+    const m = /^\S+\s+blob\s+(\S+)\t(.+)$/.exec(line) // "<mode> blob <oid>\t<path>"
+    if (m) upstream.set(m[2], m[1])
+  }
   const others = (await git(repo, ['ls-files', '--others', '--exclude-standard'])).out
     .split('\n').map((s) => s.trim()).filter(Boolean)
+  const collisions = others.filter((o) => upstream.has(o))
+
   const backupRoot = join(repo, '.git', `tangos-update-backup-${Date.now()}`)
   const moved: { path: string; identical: boolean }[] = []
-  for (const p of others) {
-    const up = await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}:${p}`])
-    if (up.code !== 0) continue // not on the incoming ref -> no collision
-    const local = await git(repo, ['hash-object', p])
+  for (let i = 0; i < collisions.length; i++) {
+    const path = collisions[i]
+    report(`Setting aside local files (${i + 1}/${collisions.length})`, 30 + Math.round(((i + 1) / collisions.length) * 35))
+    const local = (await git(repo, ['hash-object', path])).out.trim()
     try {
-      const dest = join(backupRoot, p)
+      const dest = join(backupRoot, path)
       mkdirSync(dirname(dest), { recursive: true })
-      renameSync(join(repo, p), dest)
-      moved.push({ path: p, identical: local.out.trim() === up.out.trim() })
+      renameSync(join(repo, path), dest)
+      moved.push({ path, identical: local === upstream.get(path) })
     } catch {
-      /* couldn't move it: leave it and let the rebase report the collision; we abort + restore below */
+      /* couldn't move it: the rebase will report the collision; we abort + restore below */
     }
   }
 
@@ -223,6 +237,7 @@ export async function rebasePull(
     try { rmSync(backupRoot, { recursive: true, force: true }) } catch { /* ignore */ }
   }
 
+  report('Applying the update', 75)
   const r = await git(repo, ['rebase', '--autostash', ref])
   if (r.code !== 0) {
     await git(repo, ['rebase', '--abort'])
@@ -232,6 +247,7 @@ export async function rebasePull(
 
   // Rebase landed. Identical backups are pure dups of what upstream just checked out -> discard.
   // Differing ones are kept so the contributor can compare/recover their version.
+  report('Finishing up', 95)
   const kept = moved.filter((m) => !m.identical)
   for (const m of moved) {
     if (m.identical) { try { unlinkSync(join(backupRoot, m.path)) } catch { /* ignore */ } }
@@ -242,6 +258,7 @@ export async function rebasePull(
   } else {
     try { rmSync(backupRoot, { recursive: true, force: true }) } catch { /* ignore */ }
   }
+  report('Done', 100)
   return { ok: true, err: '', note }
 }
 
