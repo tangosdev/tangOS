@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, Search, Plus, Minus, X, Database, Cloud, HardDrive, Users, ExternalLink } from 'lucide-react'
 import type { AtlasDb, AtlasFunction, BatchItem, GithubCredits } from '../../../shared/types'
 import ChaosViewer from '../chaos/ChaosViewer'
-import { getTheme } from '../chaos/themes'
 import { sortFns, SORT_LABELS, type SortKey } from '../atlas/sort'
 
 const pct = (n: number, d: number): string => (d ? `${((n / d) * 100).toFixed(1)}%` : '0%')
@@ -31,7 +30,6 @@ export default function AtlasView({
   const [moduleFilter, setModuleFilter] = useState<string | null>(null)
   const [sort, setSort] = useState<SortKey>('unmatched')
   const [colorBy, setColorBy] = useState<'status' | 'author'>('status')
-  const [viewerTheme, setViewerTheme] = useState('classic')
   const [authorFilter, setAuthorFilter] = useState<string | null>(null)
   const [showNearMiss, setShowNearMiss] = useState(true)
   const [selectedFn, setSelectedFn] = useState<AtlasFunction | null>(null)
@@ -47,7 +45,6 @@ export default function AtlasView({
       .viewerPrefsGet()
       .then((p) => {
         if (!alive) return
-        setViewerTheme(getTheme(p.theme).id) // sanitize unknown ids back to classic
         setColorBy(p.contributorColors ? 'author' : 'status')
       })
       .catch(() => {})
@@ -59,11 +56,6 @@ export default function AtlasView({
   const pickColorBy = (c: 'status' | 'author'): void => {
     setColorBy(c)
     void window.tangos.viewerPrefsSet({ contributorColors: c === 'author' }).catch(() => {})
-  }
-  const pickTheme = (id: string): void => {
-    const t = getTheme(id).id
-    setViewerTheme(t)
-    void window.tangos.viewerPrefsSet({ theme: t }).catch(() => {})
   }
 
   // data-file author key -> canonical GitHub login (dedups an email-derived key vs the GitHub login, etc.)
@@ -163,6 +155,15 @@ export default function AtlasView({
   }, [db, search, filter, moduleFilter, authorFilter, keyToLogin])
 
   const shown = useMemo(() => sortFns(filtered, sort).slice(0, 500), [filtered, sort])
+
+  // keep the selected function visible in the right-hand list
+  const listRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!selectedFn) return
+    listRef.current
+      ?.querySelector(`[data-fnid="${CSS.escape(selectedFn.id)}"]`)
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [selectedFn, shown])
 
   if (loading) return <div className="atlas center"><p className="hint">Loading Atlas…</p></div>
 
@@ -281,32 +282,7 @@ export default function AtlasView({
         authorResolve={keyToLogin}
         authorFilter={authorFilter}
         showNearMiss={showNearMiss}
-        theme={viewerTheme}
-        onTheme={pickTheme}
       />
-
-      <div className="treemap-legend">
-        {colorBy === 'status' ? (
-          <>
-            <span><i className="lg" style={{ background: getTheme(viewerTheme).colors.matched }} /> matched</span>
-            {showNearMiss && <span><i className="lg" style={{ background: getTheme(viewerTheme).colors.nearMiss }} /> near-miss</span>}
-            <span><i className="lg" style={{ background: getTheme(viewerTheme).colors.unmatched }} /> unmatched</span>
-            <label className="tm-check">
-              <input type="checkbox" checked={showNearMiss} onChange={(e) => setShowNearMiss(e.target.checked)} />
-              near-misses
-            </label>
-          </>
-        ) : (
-          <span className="hint" style={{ margin: 0 }}>each matched function colored by its author</span>
-        )}
-        <span className="hint" style={{ margin: 0 }}>· click to fly in · scroll to zoom · Esc backs out</span>
-        <div style={{ flex: 1 }} />
-        {moduleFilter && (
-          <button className="mini-btn" onClick={() => window.tangos.openModulePopout(moduleFilter)} title={`open ${moduleFilter} in its own window`}>
-            <ExternalLink size={12} style={{ verticalAlign: -2, marginRight: 4 }} /> pop out {moduleFilter}
-          </button>
-        )}
-      </div>
       </div>
 
       <div className="atlas-right">
@@ -371,14 +347,23 @@ export default function AtlasView({
             <option key={k} value={k}>sort: {SORT_LABELS[k]}</option>
           ))}
         </select>
+        <label className="tm-check" title="show near-misses in yellow on the map">
+          <input type="checkbox" checked={showNearMiss} onChange={(e) => setShowNearMiss(e.target.checked)} />
+          near-misses
+        </label>
         {moduleFilter && <button className="mini-btn" onClick={() => setModuleFilter(null)}>{moduleFilter} <X size={11} style={{ verticalAlign: -1 }} /></button>}
+        {moduleFilter && (
+          <button className="mini-btn" onClick={() => window.tangos.openModulePopout(moduleFilter)} title={`open ${moduleFilter} in its own window`}>
+            <ExternalLink size={12} style={{ verticalAlign: -2 }} />
+          </button>
+        )}
         <span className="hint" style={{ margin: 0 }}>showing {shown.length.toLocaleString()} of {filtered.length.toLocaleString()}</span>
       </div>
 
-      <div className="atlas-list aero-panel aero-scroll">
+      <div className="atlas-list aero-panel aero-scroll" ref={listRef}>
         {shown.map((f) => {
           return (
-            <div className="fn-row" key={f.id}>
+            <div className={`fn-row${selectedFn?.id === f.id ? ' sel' : ''}`} data-fnid={f.id} key={f.id}>
               <span className={`status-dot ${f.matched ? 'ok' : ''}`} style={f.matched ? {} : { background: 'var(--aero-unmatched)' }} />
               <span className="fn-name mono">{f.name}</span>
               <span className="fn-mod">{f.module}</span>

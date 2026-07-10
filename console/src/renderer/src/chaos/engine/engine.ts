@@ -9,7 +9,6 @@ import { Camera } from './camera'
 import { LodState } from './lod'
 import {
   fnColor,
-  isDimmed,
   paintFnLabels,
   paintGround,
   paintModuleBorders,
@@ -78,7 +77,7 @@ interface BakeCam {
 /** Owns the rAF loop and all mutable viewer state. React never sees a frame.
  *  Two layers: a baked base bitmap (tiles, borders, labels) re-baked only when
  *  the camera settles or data/options change, blitted with a delta transform
- *  while the camera flies; and a dynamic pass (ripples, bubbles, selection)
+ *  while the camera flies; and a dynamic pass (bubbles, selection, minimap)
  *  drawn over it each frame. The loop sleeps whenever nothing moves. */
 export class ChaosEngine {
   private readonly canvas: HTMLCanvasElement
@@ -118,10 +117,6 @@ export class ChaosEngine {
   private miniBase: HTMLCanvasElement | null = null
   private miniKey = ''
   private miniRect: Rect | null = null
-  /** Hover lift: the one block under the cursor rises; previous ones ease down. */
-  private hoverIx = -1
-  private hoverK = 0
-  private falling: Array<{ ix: number; k: number }> = []
 
   constructor(canvas: HTMLCanvasElement, cb: EngineCallbacks) {
     this.canvas = canvas
@@ -569,12 +564,10 @@ export class ChaosEngine {
     const band = this.lod.update(this.cam.z)
     const settled = this.cam.settled(now)
     if (settled && (this.needBake || !this.bakeMatches())) this.bake()
-    const liftsAnimating = this.updateLift(dt, settled)
     this.updateHover(now, settled)
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, canvas.width, canvas.height)
     this.blitBase()
-    if (settled) this.drawLifts()
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     this.bubble.draw(ctx, this.cam, now)
     this.drawSelection(now)
@@ -586,7 +579,6 @@ export class ChaosEngine {
     if (
       camMoving ||
       !settled ||
-      liftsAnimating ||
       this.bubble.needsFrame(now) ||
       this.pendingBubble ||
       this.travelAnim
@@ -674,11 +666,11 @@ export class ChaosEngine {
     }
   }
 
-  /** Bubble intent: the cursor must rest ~90ms (within a 4px jitter box) before a
-   *  name pops - modules at band 1, functions at band 2+. Hidden while moving. */
+  /** Bubble intent: the cursor must rest ~90ms (within a 4px jitter box) over a
+   *  function before its name pops - band 2+ only, nothing at the overview. */
   private updateHover(now: number, settled: boolean): void {
     this.pendingBubble = false
-    if (!this.world || !this.pointer.inside || !settled) {
+    if (!this.world || !this.pointer.inside || !settled || this.lod.band < 2) {
       this.bubble.hide(now)
       return
     }
@@ -694,168 +686,17 @@ export class ChaosEngine {
       return
     }
     const p = this.cam.screenToWorld(this.pointer.x, this.pointer.y)
-    if (this.lod.band === 1) {
-      const mod = this.world.hitMod(p.x, p.y)
-      if (!mod) {
-        this.bubble.hide(now)
-        return
-      }
-      if (this.bubble.currentText === mod.module) return
-      if (now - this.restSince >= 90) {
-        this.bubble.show(mod.module, mod.x + mod.w / 2, mod.y + mod.h / 2, now)
-      } else {
-        this.pendingBubble = true
-      }
+    const fn = this.world.hitFn(p.x, p.y)
+    if (!fn) {
+      this.bubble.hide(now)
+      return
+    }
+    if (this.bubble.currentText === fn.f.name) return
+    if (now - this.restSince >= 90) {
+      this.bubble.show(fn.f.name, fn.x + fn.w / 2, fn.y, now)
     } else {
-      const fn = this.world.hitFn(p.x, p.y)
-      if (!fn) {
-        this.bubble.hide(now)
-        return
-      }
-      if (this.bubble.currentText === fn.f.name) return
-      if (now - this.restSince >= 90) {
-        this.bubble.show(fn.f.name, fn.x + fn.w / 2, fn.y, now)
-      } else {
-        this.pendingBubble = true
-      }
+      this.pendingBubble = true
     }
-  }
-
-  /** Advance the hover lift: the block under the cursor rises (~120ms), anything
-   *  previously raised eases back down. Returns true while any lift animates. */
-  private updateLift(dt: number, settled: boolean): boolean {
-    if (!this.world || !settled) {
-      this.hoverIx = -1
-      this.hoverK = 0
-      this.falling.length = 0
-      return false
-    }
-    let ix = -1
-    const mini = this.miniRect
-    const overMini =
-      !!mini &&
-      this.pointer.x >= mini.x &&
-      this.pointer.x <= mini.x + mini.w &&
-      this.pointer.y >= mini.y &&
-      this.pointer.y <= mini.y + mini.h
-    if (this.pointer.inside && !overMini) {
-      const p = this.cam.screenToWorld(this.pointer.x, this.pointer.y)
-      const fn = this.world.hitFn(p.x, p.y)
-      if (fn) ix = this.world.byId.get(fn.f.id) ?? -1
-    }
-    if (ix !== this.hoverIx) {
-      if (this.hoverIx !== -1 && this.hoverK > 0) this.falling.push({ ix: this.hoverIx, k: this.hoverK })
-      this.hoverIx = ix
-      this.hoverK = 0
-      const resumeAt = this.falling.findIndex((f) => f.ix === ix)
-      if (resumeAt >= 0) {
-        this.hoverK = this.falling[resumeAt].k
-        this.falling.splice(resumeAt, 1)
-      }
-    }
-    if (this.hoverIx !== -1) this.hoverK = Math.min(1, this.hoverK + dt / 0.12)
-    let anyFalling = false
-    for (const f of this.falling) {
-      f.k -= dt / 0.15
-      if (f.k > 0) anyFalling = true
-    }
-    if (this.falling.length && !anyFalling) this.falling.length = 0
-    else this.falling = this.falling.filter((f) => f.k > 0)
-    return (this.hoverIx !== -1 && this.hoverK < 1) || this.falling.length > 0
-  }
-
-  /** Region-repaint the raised block(s): clear, ground, flat neighbors, then the
-   *  lifted tiles with shadow/offset/highlight, chrome on top - all clipped, so
-   *  it composes seamlessly against the baked base. */
-  private drawLifts(): void {
-    const { world, cam, ctx, dpr } = this
-    if (!world) return
-    const lifts = new Map<number, number>()
-    if (this.hoverIx !== -1 && this.hoverK > 0) lifts.set(this.hoverIx, this.hoverK)
-    for (const f of this.falling) if (!lifts.has(f.ix)) lifts.set(f.ix, f.k)
-    if (!lifts.size) return
-    let x0 = Infinity
-    let y0 = Infinity
-    let x1 = -Infinity
-    let y1 = -Infinity
-    for (const ix of lifts.keys()) {
-      const n = world.fns[ix]
-      const a = cam.worldToScreen(n.x, n.y)
-      const b = cam.worldToScreen(n.x + n.w, n.y + n.h)
-      x0 = Math.min(x0, a.x)
-      y0 = Math.min(y0, a.y)
-      x1 = Math.max(x1, b.x)
-      y1 = Math.max(y1, b.y)
-    }
-    const M = 12
-    const bx = Math.max(0, x0 - M)
-    const by = Math.max(0, y0 - M)
-    const bw = Math.min(this.cssW, x1 + M) - bx
-    const bh = Math.min(this.cssH, y1 + M) - by
-    if (bw <= 0 || bh <= 0) return
-    const v = this.paintView()
-    ctx.save()
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.beginPath()
-    ctx.rect(bx, by, bw, bh)
-    ctx.clip()
-    ctx.clearRect(bx, by, bw, bh)
-    const zy = cam.z * cam.sy
-    ctx.setTransform(
-      dpr * cam.z,
-      0,
-      0,
-      dpr * zy,
-      dpr * (cam.vw / 2 - cam.x * cam.z),
-      dpr * (cam.vh / 2 - cam.y * zy)
-    )
-    const tl = cam.screenToWorld(bx, by)
-    const br = cam.screenToWorld(bx + bw, by + bh)
-    const view = { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y }
-    // ground first, so the cleared region's tile gaps match the baked surround
-    const gx = Math.max(0, view.x)
-    const gy = Math.max(0, view.y)
-    const gw = Math.min(world.w, view.x + view.w) - gx
-    const gh = Math.min(world.h, view.y + view.h) - gy
-    if (gw > 0 && gh > 0) {
-      ctx.fillStyle = v.theme.colors.ground
-      ctx.fillRect(gx, gy, gw, gh)
-    }
-    const shave = 0.5 / cam.z
-    const idx = world.query(view, this.scratch)
-    for (const i of idx) {
-      if (lifts.has(i)) continue
-      const n = world.fns[i]
-      ctx.globalAlpha = isDimmed(n.f, v) ? 0.14 : 1
-      ctx.fillStyle = fnColor(n.f, v)
-      ctx.fillRect(n.x, n.y, Math.max(shave, n.w - shave), Math.max(shave, n.h - shave))
-    }
-    for (const [i, k] of lifts) {
-      const n = world.fns[i]
-      const wpx = n.w * cam.z
-      const hpx = n.h * zy
-      const s = 1 + Math.min(0.05, 8 / Math.max(20, wpx, hpx)) * k
-      const x = n.x + (n.w * (1 - s)) / 2
-      const yBase = n.y + (n.h * (1 - s)) / 2
-      const w2 = Math.max(shave, n.w * s - shave)
-      const h2 = Math.max(shave, n.h * s - shave)
-      const dimA = isDimmed(n.f, v) ? 0.14 : 1
-      ctx.globalAlpha = 0.18 * k * dimA
-      ctx.fillStyle = '#000000'
-      ctx.fillRect(x, yBase + (2 * k) / zy, w2, h2)
-      ctx.globalAlpha = dimA
-      ctx.fillStyle = fnColor(n.f, v)
-      ctx.fillRect(x, yBase - (3 * k) / zy, w2, h2)
-      ctx.globalAlpha = dimA * 0.12 * k
-      ctx.fillStyle = '#ffffff'
-      ctx.fillRect(x, yBase - (3 * k) / zy, w2, h2)
-    }
-    ctx.globalAlpha = 1
-    paintModuleBorders(ctx, world, v, 1 / cam.z)
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    paintFnLabels(ctx, world, view, v, cam, this.scratch)
-    paintModuleLabels(ctx, world, v, cam)
-    ctx.restore()
   }
 
   /** Selection bubble: double-stroke rounded outline. During travel the rect

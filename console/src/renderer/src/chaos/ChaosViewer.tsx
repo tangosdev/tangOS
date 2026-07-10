@@ -2,12 +2,11 @@ import { useEffect, useRef } from 'react'
 import type { AtlasDb, AtlasFunction } from '../../../shared/types'
 import { ChaosEngine } from './engine/engine'
 import { InputController } from './engine/input'
-import { THEMES } from './themes'
 
 /** The redesigned Chaos Viewer. Drop-in for the classic Treemap in AtlasView:
  *  same data/callback contract, rendering handled by the chaos engine. Overlay
- *  chrome: theme picker + contributor toggle bottom-left; the engine draws its
- *  own minimap top-right once zoomed in. */
+ *  chrome: the contributor-colors toggle bottom-left; the engine draws its own
+ *  minimap top-right once zoomed past the overview. */
 export default function ChaosViewer({
   db,
   moduleFilter,
@@ -19,9 +18,7 @@ export default function ChaosViewer({
   authorColors,
   authorResolve,
   authorFilter = null,
-  showNearMiss = true,
-  theme = 'classic',
-  onTheme
+  showNearMiss = true
 }: {
   db: AtlasDb
   moduleFilter: string | null
@@ -34,8 +31,6 @@ export default function ChaosViewer({
   authorResolve?: Map<string, string>
   authorFilter?: string | null
   showNearMiss?: boolean
-  theme?: string
-  onTheme?: (id: string) => void
 }): JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -90,9 +85,9 @@ export default function ChaosViewer({
       moduleFilter,
       showNearMiss,
       selectedId,
-      themeId: theme
+      themeId: 'classic'
     })
-  }, [colorBy, authorColors, authorResolve, authorFilter, moduleFilter, showNearMiss, selectedId, theme])
+  }, [colorBy, authorColors, authorResolve, authorFilter, moduleFilter, showNearMiss, selectedId])
 
   const refocus = (): void => canvasRef.current?.focus()
 
@@ -103,25 +98,8 @@ export default function ChaosViewer({
         tabIndex={0}
         style={{ display: 'block', cursor: 'pointer', borderRadius: 8, outline: 'none', touchAction: 'none' }}
       />
-      <div className="chaos-overlay bl">
-        {onTheme && (
-          <div className="seg">
-            {THEMES.map((t) => (
-              <button
-                key={t.id}
-                className={theme === t.id ? 'on' : ''}
-                title={`theme: ${t.name}`}
-                onClick={() => {
-                  onTheme(t.id)
-                  refocus()
-                }}
-              >
-                {t.name}
-              </button>
-            ))}
-          </div>
-        )}
-        {theme === 'classic' && onColorBy && (
+      {onColorBy && (
+        <div className="chaos-overlay bl">
           <div className="seg">
             <button
               className={colorBy === 'status' ? 'on' : ''}
@@ -142,8 +120,8 @@ export default function ChaosViewer({
               Contributor
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }

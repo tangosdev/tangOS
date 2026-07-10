@@ -1,10 +1,9 @@
-import type { FlatTheme } from './types'
+import type { Theme } from './types'
 
 /** The original Chaos Viewer look - colors copied verbatim from Treemap.tsx. */
-export const classic: FlatTheme = {
+export const classic: Theme = {
   id: 'classic',
   name: 'Classic',
-  mode: 'flat',
   colors: {
     matched: '#3fc45f',
     nearMiss: '#eab308',
