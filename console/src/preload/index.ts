@@ -124,6 +124,12 @@ const api = {
   setAutoPush: (on: boolean): Promise<boolean> => ipcRenderer.invoke('policy:setAutoPush', on),
   removeBatch: (id: string): Promise<Batch[]> => ipcRenderer.invoke('batch:remove', id),
   clearQueue: (agentName: string): Promise<Batch[]> => ipcRenderer.invoke('batch:clearQueue', agentName),
+  cancelGen: (): Promise<boolean> => ipcRenderer.invoke('batch:cancelGen'),
+  onGenOutput: (cb: (tail: string) => void): (() => void) => {
+    const l = (_e: unknown, tail: string): void => cb(tail)
+    ipcRenderer.on('gen:output', l)
+    return () => ipcRenderer.removeListener('gen:output', l)
+  },
   reorderBatch: (id: string, dir: 'up' | 'down'): Promise<Batch[]> =>
     ipcRenderer.invoke('batch:reorder', { id, dir }),
   clearDoneBatches: (): Promise<Batch[]> => ipcRenderer.invoke('batch:clearDone'),

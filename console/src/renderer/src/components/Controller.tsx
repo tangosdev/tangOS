@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Sparkles, Play, Square, ShoppingCart, ShieldCheck, AlertTriangle, GitBranch, GitPullRequest, BarChart2 } from 'lucide-react'
+import { Sparkles, Play, Square, ShoppingCart, ShieldCheck, AlertTriangle, GitBranch, GitPullRequest, BarChart2, FileText } from 'lucide-react'
 import type { AiAgent, ActivityRun, Batch } from '../../../shared/types'
 import { ROLE_NAMES, ROLE_PRESETS } from '../../../shared/types'
 import { aiColor } from '../aiColor'
@@ -59,6 +59,7 @@ export default function Controller({
   onToggleWrites,
   onToggleReview,
   onOpenDetail,
+  onOpenEncyclopedia,
   mcpControl
 }: {
   agents: AiAgent[]
@@ -75,12 +76,16 @@ export default function Controller({
   onToggleWrites: () => void
   onToggleReview: () => void
   onOpenDetail: (name: string) => void
+  onOpenEncyclopedia: () => void
   mcpControl: JSX.Element
 }): JSX.Element {
   const [busy, setBusy] = useState<Record<string, string>>({}) // name -> loading label
   const [sizes, setSizes] = useState<Record<string, number>>({}) // name -> batch size (-1 = infinite)
   const [notice, setNotice] = useState<string | null>(null) // gentle info toast (e.g. "no work for this role")
   const [statScope, setStatScope] = useState<'all' | 'run'>('all') // which tally the boxes show
+  const [genTail, setGenTail] = useState('') // the in-flight scheduler's streamed output (one gen at a time)
+  const [genLogOpen, setGenLogOpen] = useState(false)
+  useEffect(() => window.tangos.onGenOutput(setGenTail), [])
 
   // Latest run per agent in a single pass (instead of filter+sort over all runs per agent on
   // every output chunk - that was quadratic during a long scan and made the view lag/drop).
@@ -127,7 +132,10 @@ export default function Controller({
     } catch (e) {
       // Strip Electron's "Error invoking remote method 'ai:assign': Error:" IPC wrapper.
       const msg = String((e as Error).message ?? e).replace(/^Error invoking remote method '[^']+':\s*Error:\s*/i, '')
-      if (/^No work /i.test(msg)) {
+      if (/cancelled/i.test(msg)) {
+        setNotice('Batch generation cancelled.')
+        window.setTimeout(() => setNotice(null), 4000)
+      } else if (/^No work /i.test(msg)) {
         // Not a failure - just nothing to do for this role. Show a calm, dismissable notice.
         setNotice(msg.split('--- scheduler output ---')[0].trim())
         window.setTimeout(() => setNotice(null), 7000)
@@ -217,7 +225,20 @@ export default function Controller({
                       Generating batch… <Elapsed />
                     </span>
                     <span className="aib-loadsub">ranking targets by similarity - up to a minute on a cold start</span>
+                    {genLogOpen && (
+                      <pre className="aib-loadlog aero-scroll" ref={(el) => el && (el.scrollTop = el.scrollHeight)}>
+                        {genTail.split('\n').slice(-14).join('\n') || '(waiting for scheduler output…)'}
+                      </pre>
+                    )}
                     <span className="aib-loadbar" />
+                    <span className="aib-load-actions">
+                      <button className="mini-btn" onClick={() => setGenLogOpen((o) => !o)}>
+                        {genLogOpen ? 'Hide details' : 'Details'}
+                      </button>
+                      <button className="mini-btn stop" onClick={() => window.tangos.cancelGen()} title="Stop the scheduler - nothing is queued">
+                        <Square size={12} /> Cancel
+                      </button>
+                    </span>
                   </div>
                 )}
                 <div className="aib-top">
@@ -416,7 +437,15 @@ export default function Controller({
       )}
 
       <div className="ctl-footer">
-        <div className="ctl-foot-side" />
+        <div className="ctl-foot-side">
+          <button
+            className="tb-btn icononly"
+            onClick={onOpenEncyclopedia}
+            title="Encyclopedia - every tool this repo gives the AIs: what it does, its arguments, how it gets called"
+          >
+            <FileText size={14} />
+          </button>
+        </div>
         <div className="ctl-foot-mid" data-tour="policies">
           <button
             className={`tb-btn ${allowMutations ? 'warn' : ''}`}

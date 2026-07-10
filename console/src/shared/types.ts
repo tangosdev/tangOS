@@ -224,6 +224,8 @@ export interface PreflightItem {
   label: string
   ok: boolean
   detail: string
+  fix?: string // when !ok: one plain sentence saying how to fix it
+  fixCmd?: string // when !ok: a ready-to-copy command that does the fix (if one exists)
 }
 
 // ---- secure API-key vault (for tools that call an HTTP API, not MCP) --------

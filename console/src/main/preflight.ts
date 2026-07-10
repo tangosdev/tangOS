@@ -34,7 +34,12 @@ export async function preflight(repoPath: string, desc: TangosDescriptor): Promi
 
   {
     const r = await run(python, ['--version'], repoPath)
-    items.push({ id: 'python', label: 'Python', ok: r.code === 0, detail: r.code === 0 ? r.out.trim() : 'not found on PATH' })
+    items.push({
+      id: 'python', label: 'Python', ok: r.code === 0,
+      detail: r.code === 0 ? r.out.trim() : 'not found on PATH',
+      fix: 'Install Python 3 and let the installer add it to PATH, then hit re-check.',
+      fixCmd: process.platform === 'win32' ? 'winget install Python.Python.3.12' : undefined
+    })
   }
 
   if (req.pythonPackages?.length) {
@@ -49,7 +54,15 @@ export async function preflight(repoPath: string, desc: TangosDescriptor): Promi
         const one = await run(python, ['-c', `import ${imports[i]}`], repoPath)
         if (one.code !== 0) missing.push(req.pythonPackages[i])
       }
-      items.push({ id: 'pypkgs', label: 'Python packages', ok: false, detail: `missing: ${missing.join(', ') || 'unknown'}` })
+      const hasReqTxt = existsSync(join(repoPath, 'requirements.txt'))
+      items.push({
+        id: 'pypkgs', label: 'Python packages', ok: false,
+        detail: `missing: ${missing.join(', ') || 'unknown'}`,
+        fix: 'Run this in the repo folder, then re-check:',
+        fixCmd: hasReqTxt
+          ? `${python} -m pip install -r requirements.txt`
+          : `${python} -m pip install ${missing.join(' ') || req.pythonPackages.join(' ')}`
+      })
     }
   }
 
@@ -61,13 +74,24 @@ export async function preflight(repoPath: string, desc: TangosDescriptor): Promi
       const w = await run(process.platform === 'win32' ? 'where' : 'which', [name], repoPath)
       if (w.code === 0 && w.out.trim()) found = w.out.trim().split(/\r?\n/)[0]
     }
-    items.push({ id: 'compiler', label: `Compiler (${name})`, ok: !!found, detail: found ? `found: ${found}` : 'not found in repo tools/ or on PATH' })
+    items.push({
+      id: 'compiler', label: `Compiler (${name})`, ok: !!found,
+      detail: found ? `found: ${found}` : 'not found in repo tools/ or on PATH',
+      // No command can fetch a proprietary compiler; point at where it goes + where it comes from.
+      fix: `Put ${name} (and any license file it needs) in the repo's tools/${name}/ folder - it can't be auto-downloaded. The repo's setup notes say where to get it.`
+    })
   }
 
   if (req.rom) {
     const dirs = ['extracted', 'orig', 'baserom', 'build/extracted', 'expected']
     const found = dirs.find((d) => existsSync(join(repoPath, d)))
-    items.push({ id: 'rom', label: 'Extracted ROM', ok: !!found, detail: found ? `found: ${found}/` : 'no extracted ROM folder found' })
+    const hasUnpack = existsSync(join(repoPath, 'tools', 'unpack.py'))
+    items.push({
+      id: 'rom', label: 'Extracted ROM', ok: !!found,
+      detail: found ? `found: ${found}/` : 'no extracted ROM folder found',
+      fix: 'Extract your own legally-dumped ROM into the repo, then re-check.',
+      fixCmd: hasUnpack ? `${python} tools/unpack.py path/to/your-dump.nds` : undefined
+    })
   }
 
   return items

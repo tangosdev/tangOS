@@ -1,6 +1,30 @@
 import { useEffect, useState } from 'react'
-import { Check, X, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
+import { Check, X, RefreshCw, ChevronDown, ChevronUp, Copy } from 'lucide-react'
 import type { RepoState, PreflightItem } from '../../../shared/types'
+
+/** A failing requirement's how-to-fix line: the sentence plus a click-to-copy command when one exists. */
+function FixHint({ item }: { item: PreflightItem }): JSX.Element | null {
+  const [copied, setCopied] = useState(false)
+  if (item.ok || (!item.fix && !item.fixCmd)) return null
+  return (
+    <span className="req-fix">
+      {item.fix}
+      {item.fixCmd && (
+        <button
+          className="req-fix-cmd mono"
+          title="Copy this command"
+          onClick={async () => {
+            await window.tangos.copy(item.fixCmd!)
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1800)
+          }}
+        >
+          {item.fixCmd} {copied ? <Check size={11} /> : <Copy size={11} />}
+        </button>
+      )}
+    </span>
+  )
+}
 
 export default function Requirements({
   repo,
@@ -76,6 +100,7 @@ export default function Requirements({
               <span className="req-text">
                 <span className="req-label">{it.label}</span>
                 <span className="req-detail">{it.detail}</span>
+                <FixHint item={it} />
               </span>
             </li>
           ))}

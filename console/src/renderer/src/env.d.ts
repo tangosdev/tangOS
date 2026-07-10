@@ -95,6 +95,8 @@ export interface TangosApi {
   setAutoPush(on: boolean): Promise<boolean>
   removeBatch(id: string): Promise<Batch[]>
   clearQueue(agentName: string): Promise<Batch[]>
+  cancelGen(): Promise<boolean>
+  onGenOutput(cb: (tail: string) => void): () => void
   reorderBatch(id: string, dir: 'up' | 'down'): Promise<Batch[]>
   clearDoneBatches(): Promise<Batch[]>
   runTool(toolId: string, values: Record<string, unknown>): Promise<RunResult>

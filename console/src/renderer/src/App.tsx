@@ -5,7 +5,7 @@ import type {
 } from '../../shared/types'
 import RepoPicker from './components/RepoPicker'
 import DescriptorGate from './components/DescriptorGate'
-import ToolPalette from './components/ToolPalette'
+import Encyclopedia from './components/Encyclopedia'
 import McpBubble from './components/McpBubble'
 import Requirements from './components/Requirements'
 import Controller from './components/Controller'
@@ -63,6 +63,7 @@ export default function App(): JSX.Element {
   const [reloadNote, setReloadNote] = useState<string | null>(null)
   const [refreshNonce, setRefreshNonce] = useState(0) // top-bar refresh: re-check repo staleness + app update
   const [bugOpen, setBugOpen] = useState(false)
+  const [encyOpen, setEncyOpen] = useState(false) // the tools Encyclopedia overlay (footer paper button)
   const popRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef<HTMLDivElement>(null)
 
@@ -279,10 +280,12 @@ export default function App(): JSX.Element {
         onToggleWrites={toggleMutations}
         onToggleReview={toggleSafeMode}
         onOpenDetail={setDetailName}
+        onOpenEncyclopedia={() => setEncyOpen(true)}
         mcpControl={mcpPill}
       />
       <div className="right-rail aero-scroll">
-        <ToolPalette repo={repo!} allowMutations={allowMutations} enabledIds={enabledIds} onSetEnabled={setEnabled} />
+        {/* The tool list moved to the Chaos Codex tab (it's reference material, not controls);
+            the rail now leads with what a new contributor actually needs: setup status. */}
         <div className="req-slot below">
           <Requirements repo={repo!} onStatus={setReqAllSet} />
         </div>
@@ -393,6 +396,15 @@ export default function App(): JSX.Element {
         <TangoTour onDone={() => window.tangos.markTourSeen()} />
       )}
       {detailAgent && <AiDetail agent={detailAgent} runs={runs} onClose={() => setDetailName(null)} />}
+      {encyOpen && repo?.descriptor && (
+        <Encyclopedia
+          repo={repo}
+          allowMutations={allowMutations}
+          enabledIds={enabledIds}
+          onSetEnabled={setEnabled}
+          onClose={() => setEncyOpen(false)}
+        />
+      )}
       {splash && <Splash label={splash} />}
       {bugOpen && <BugReport repoName={repo?.descriptor?.project?.title} onClose={() => setBugOpen(false)} />}
       {reloadNote && <div className="reload-toast aero-glass">{reloadNote}</div>}

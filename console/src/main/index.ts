@@ -102,6 +102,10 @@ function serializeGen<T>(fn: () => Promise<T>): Promise<T> {
   genChain = run.catch(() => {}) // a failed generation must not wedge the queue
   return run
 }
+// The in-flight batch generation (one at a time - see serializeGen): its kill switch, a cancel
+// flag, and the scheduler's streamed output tail, so the UI's overlay can offer Cancel and a
+// peek at what the scheduler is actually doing instead of a black-box spinner.
+const genLive = { kill: null as (() => void) | null, cancelled: false, tail: '' }
 
 // Auto-push: when Writes AND Review are both on, matched work is committed to the work branch,
 // pushed to a per-session remote branch, and surfaced as ONE rolling PR (the repo's PR rules /
@@ -1138,6 +1142,10 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
     timedOut = true
     schedKill?.()
   }, SCHED_TIMEOUT_MS)
+  genLive.kill = null
+  genLive.cancelled = false
+  genLive.tail = ''
+  mainWindow?.webContents.send('gen:output', '') // reset the overlay's peek from any previous run
   let res: RunResult
   try {
     res = await runTool({
@@ -1153,11 +1161,20 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
       extraEnv: secretsEnv(),
       onSpawn: ({ kill }) => {
         schedKill = kill
+        genLive.kill = kill
+      },
+      // Stream the scheduler's output to the generating box's overlay ("peek the operational
+      // details") so a long corpus rank isn't a black box.
+      onOutput: (chunk) => {
+        genLive.tail = (genLive.tail + chunk).slice(-4000)
+        mainWindow?.webContents.send('gen:output', genLive.tail)
       }
     })
   } finally {
     clearTimeout(timer)
+    genLive.kill = null
   }
+  if (genLive.cancelled) throw new Error('Batch generation cancelled.')
   if (timedOut) {
     throw new Error(
       `the similarity scheduler (${sched.id}) ran longer than 5 minutes and was stopped. ` +
@@ -1413,6 +1430,14 @@ ipcMain.handle('ai:stop', (_e, agentName: string) => {
   driveStopRequested.add(agentName) // end the queue walk after the current batch is killed below
   driveKills.get(agentName)?.() // kill an in-flight driver early; matches found so far are kept
   pushState()
+  return true
+})
+
+// Cancel the in-flight batch generation (the overlay's Cancel button). Kills the scheduler
+// process; genDraft then surfaces a calm "cancelled" instead of a scary produced-no-worklist error.
+ipcMain.handle('batch:cancelGen', () => {
+  genLive.cancelled = true
+  genLive.kill?.()
   return true
 })
 
