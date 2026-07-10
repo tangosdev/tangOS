@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
-  Batch, BatchDraft, BatchItem, AtlasDb, Review, GithubCredits, ConnectedClient, SecretsInfo,
+  Batch, BatchDraft, BatchItem, AtlasDb, AtlasSource, Review, GithubCredits, ConnectedClient, SecretsInfo,
   AiAgent, RepoUpdateStatus, AppUpdateInfo, ViewerPrefs
 } from '../shared/types'
 
@@ -34,6 +34,8 @@ const api = {
   atlasCurrent: (): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:current'),
   atlasGenerate: (): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:generate'),
   recentAdds: (sinceHours?: number): Promise<string[]> => ipcRenderer.invoke('atlas:recentAdds', sinceHours),
+  atlasSource: (req: { id: string; srcPath?: string }): Promise<AtlasSource | null> =>
+    ipcRenderer.invoke('atlas:source', req),
   viewerPrefsGet: (): Promise<ViewerPrefs> => ipcRenderer.invoke('viewer:getPrefs'),
   viewerPrefsSet: (p: Partial<ViewerPrefs>): Promise<ViewerPrefs> => ipcRenderer.invoke('viewer:setPrefs', p),
   openModulePopout: (module: string): Promise<void> => ipcRenderer.invoke('atlas:popout', module),

@@ -1,6 +1,7 @@
 import type { AtlasDb, AtlasFunction } from '../../../../shared/types'
 import { buildWorld } from '../layout'
 import type { FnNode, World } from '../layout'
+import { SourceCache } from '../sourceCache'
 import { getTheme } from '../themes'
 import type { Rect } from '../types'
 import { clamp, easeInOutCubic } from './anim'
@@ -16,6 +17,7 @@ import {
   paintTiles
 } from './render/classic'
 import type { PaintView } from './render/classic'
+import { paintSelectedCode } from './render/code'
 
 export interface EngineCallbacks {
   onModule: (m: string | null) => void
@@ -117,6 +119,7 @@ export class ChaosEngine {
   private miniBase: HTMLCanvasElement | null = null
   private miniKey = ''
   private miniRect: Rect | null = null
+  private readonly sources = new SourceCache()
 
   constructor(canvas: HTMLCanvasElement, cb: EngineCallbacks) {
     this.canvas = canvas
@@ -128,6 +131,10 @@ export class ChaosEngine {
     this.ctx = ctx
     this.base = base
     this.baseCtx = baseCtx
+    this.sources.onReady = () => {
+      this.needBake = true
+      this.wake()
+    }
   }
 
   resize(cssW: number, cssH: number, dpr: number): void {
@@ -154,6 +161,7 @@ export class ChaosEngine {
   }
 
   setData(db: AtlasDb): void {
+    if (this.db !== db) this.sources.clear()
     this.db = db
     this.rebuild()
   }
@@ -199,6 +207,7 @@ export class ChaosEngine {
         this.lastEmittedModule = fn.f.module // pre-acknowledge the moduleFilter echo
         this.cb.onFunction(fn.f)
       }
+      this.sources.request(fn.f) // prefetch so the text is ready when the dive lands
       this.flightTarget = { kind: 'fn', id: fn.f.id }
       const dur = this.cam.flyToRect(fn, FN_PAD, now)
       const from = prevIx != null ? this.world.fns[prevIx] : fn
@@ -318,6 +327,7 @@ export class ChaosEngine {
       this.lastEmittedModule = target.f.module // pre-acknowledge the moduleFilter echo
       this.cb.onFunction(target.f)
     }
+    this.sources.request(target.f)
     this.flightTarget = { kind: 'fn', id: target.f.id }
     const dur = this.cam.flyToRect(target, FN_PAD, now)
     this.travelAnim = {
@@ -525,10 +535,11 @@ export class ChaosEngine {
     paintGround(c, this.world, v)
     paintTiles(c, this.world, view, v, this.scratch, 1 / cam.z)
     paintModuleBorders(c, this.world, v, 1 / cam.z)
-    // labels render at constant screen size - separate passes in screen coords
+    // labels + the selected function's text render at constant screen size
     c.setTransform(dpr, 0, 0, dpr, ovX * dpr, ovY * dpr)
     paintFnLabels(c, this.world, view, v, cam, this.scratch)
     paintModuleLabels(c, this.world, v, cam)
+    paintSelectedCode(c, this.world, cam, this.sources, this.opts.selectedId)
     this.bakeCam = { x: cam.x, y: cam.y, z: cam.z, sy: cam.sy, vw: cam.vw, vh: cam.vh, ovX, ovY }
     this.needBake = false
     this.lastBakeMs = performance.now() - t0

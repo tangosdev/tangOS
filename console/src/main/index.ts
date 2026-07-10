@@ -1,7 +1,7 @@
 import './appName' // MUST be first: renames the data folder + migrates it before anything reads userData
 import { app, BrowserWindow, Menu, ipcMain, dialog, shell, clipboard, globalShortcut } from 'electron'
 import { dumpDebug, debugDir } from './debug'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve, relative, isAbsolute } from 'node:path'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, watch, existsSync, unlinkSync, mkdirSync, type FSWatcher } from 'node:fs'
@@ -34,7 +34,7 @@ import { initAutoUpdate, checkForAppUpdate, quitAndInstallUpdate } from './updat
 import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
-  Review, RunResult, AtlasDb, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
+  Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
   ViewerPrefs
 } from '../shared/types'
 
@@ -1019,6 +1019,47 @@ ipcMain.handle('atlas:current', () => {
 })
 
 ipcMain.handle('atlas:loadLive', (_e, force?: boolean) => loadLiveDb(!!force))
+
+// Source lines for the selected function at dive zoom. srcPath (repo-relative) is read
+// with a path-traversal guard; unmatched functions fall back to a disasm text field on
+// the chaos-db row when the generator provides one. Best-effort: null instead of throwing.
+const SOURCE_LINE_CAP = 400
+ipcMain.handle('atlas:source', (_e, req: { id: string; srcPath?: string }): AtlasSource | null => {
+  const repo = state.repoPath
+  if (!repo || !req || typeof req.id !== 'string') return null
+  if (typeof req.srcPath === 'string' && req.srcPath) {
+    try {
+      const root = resolve(repo)
+      const p = resolve(root, req.srcPath)
+      // win32 paths compare case-insensitively (repo picker casing is not stable)
+      const norm = (s: string): string => (process.platform === 'win32' ? s.toLowerCase() : s)
+      const rel = relative(norm(root), norm(p))
+      if (rel && !rel.startsWith('..') && !isAbsolute(rel) && existsSync(p)) {
+        const lines = readFileSync(p, 'utf8').split(/\r?\n/)
+        return {
+          lines: lines.slice(0, SOURCE_LINE_CAP),
+          truncated: lines.length > SOURCE_LINE_CAP,
+          kind: 'src',
+          path: req.srcPath
+        }
+      }
+    } catch {
+      /* fall through to the chaos-db row */
+    }
+  }
+  try {
+    const db = atlasCache.repo === repo ? atlasCache.live ?? atlasCache.local : null
+    const row = db?.functions.find((f) => f.id === req.id) as unknown as Record<string, unknown> | undefined
+    const disasm = row && typeof row.disasm === 'string' ? row.disasm : null
+    if (disasm) {
+      const lines = disasm.split(/\r?\n/)
+      return { lines: lines.slice(0, SOURCE_LINE_CAP), truncated: lines.length > SOURCE_LINE_CAP, kind: 'disasm' }
+    }
+  } catch {
+    /* no source available */
+  }
+  return null
+})
 
 ipcMain.handle('viewer:getPrefs', (): ViewerPrefs => viewerPrefs)
 
