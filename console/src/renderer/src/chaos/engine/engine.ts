@@ -159,7 +159,17 @@ export class ChaosEngine {
     this.canvas.style.width = `${cssW}px`
     this.canvas.style.height = `${cssH}px`
     this.cam.setViewport(cssW, cssH)
-    this.rebuild()
+    if (this.world) {
+      // NEVER relayout on panel changes - the world is frozen once built, so
+      // tiles cannot shift or resize mid-interaction. Only the viewport,
+      // zoom clamps, and LOD thresholds re-derive; flights keep flying.
+      this.lod.compute(this.world, cssW, cssH)
+      this.cam.setWorld(this.world.w, this.world.h, this.lod.zMax())
+      this.needBake = true
+      this.invalidate()
+    } else {
+      this.rebuild()
+    }
   }
 
   setData(db: AtlasDb): void {
