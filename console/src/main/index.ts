@@ -53,6 +53,7 @@ interface AppState {
   reviews: Review[]
   reportsEnabled: boolean
   tourSeen: boolean
+  updateNoteSeen: string // id of the last "Tango says" update note the user has read
   useAgents: boolean // run drivers with parallel workers (and allow concurrent drives)
   agentFanout: number // functions per sub-agent an MCP AI spawns in agents mode (batch/this = agent count)
   autoLand: boolean // after a drive, bank + verify (crackloop land) the matches into the repo
@@ -72,6 +73,7 @@ const state: AppState = {
   reviews: [],
   reportsEnabled: false,
   tourSeen: false,
+  updateNoteSeen: '',
   useAgents: false,
   agentFanout: 8,
   autoLand: true,
@@ -548,6 +550,7 @@ function saveSettings(): void {
         agentBestDiv: aiStats.serializeBestDiv(),
         reportsEnabled: state.reportsEnabled,
         tourSeen: state.tourSeen,
+        updateNoteSeen: state.updateNoteSeen,
         useAgents: state.useAgents,
         agentFanout: state.agentFanout,
         autoLand: state.autoLand,
@@ -570,6 +573,7 @@ function loadSettings(): {
   agentBestDiv?: Record<string, number>
   reportsEnabled?: boolean
   tourSeen?: boolean
+  updateNoteSeen?: string
   useAgents?: boolean
   agentFanout?: number
   autoLand?: boolean
@@ -824,6 +828,7 @@ function fullState() {
     agents: agentsSnapshot(),
     reportsEnabled: state.reportsEnabled,
     tourSeen: state.tourSeen,
+    updateNoteSeen: state.updateNoteSeen,
     useAgents: state.useAgents,
     agentFanout: state.agentFanout,
     autoLand: state.autoLand,
@@ -2005,6 +2010,14 @@ ipcMain.handle('tour:replay', () => {
   pushState()
   return true
 })
+// "Tango says" update note: remember which announcement the user has read so the
+// unread-mail badge stays until they open it, then never comes back for that note.
+ipcMain.handle('tango:noteSeen', (_e, id: string) => {
+  state.updateNoteSeen = typeof id === 'string' ? id : ''
+  saveSettings()
+  pushState()
+  return true
+})
 
 ipcMain.handle('review:merge', async () => {
   if (!state.repoPath || !state.baseBranch) throw new Error('nothing to merge')
@@ -2298,6 +2311,7 @@ app.whenReady().then(() => {
   aiStats.remapKeys(normalizeName) // fold old per-model/per-session stat keys into one family box
   state.reportsEnabled = saved.reportsEnabled ?? false
   state.tourSeen = saved.tourSeen ?? false
+  state.updateNoteSeen = saved.updateNoteSeen ?? ''
   state.useAgents = saved.useAgents ?? false
   state.agentFanout = saved.agentFanout ?? 8
   state.autoLand = saved.autoLand ?? true

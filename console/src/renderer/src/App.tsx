@@ -21,6 +21,7 @@ import WindowControls from './components/WindowControls'
 import BugReport from './components/BugReport'
 import RepoUpdateBanner from './components/RepoUpdateBanner'
 import AppUpdateBanner from './components/AppUpdateBanner'
+import { UPDATE_NOTE } from './updateNote'
 
 const THEMES = ['aero', 'sunset', 'deepsea', 'bubblegum', 'mint', 'hal']
 const APP_LABEL: Record<AppView, string> = { console: 'Chaos Controller', atlas: 'Chaos Viewer' }
@@ -59,6 +60,7 @@ export default function App(): JSX.Element {
   }>({ enabled: false, on: false, state: 'idle' })
   const [looping, setLooping] = useState<string[]>([])
   const [tourSeen, setTourSeen] = useState(true) // assume seen until state loads, to avoid a flash
+  const [updateNoteSeen, setUpdateNoteSeen] = useState(UPDATE_NOTE.id) // assume seen until state loads
   const [detailName, setDetailName] = useState<string | null>(null)
   const [reloadNote, setReloadNote] = useState<string | null>(null)
   const [refreshNonce, setRefreshNonce] = useState(0) // top-bar refresh: re-check repo staleness + app update
@@ -107,6 +109,7 @@ export default function App(): JSX.Element {
       setAutoPush(st.autoPush)
       setLooping(st.looping)
       setTourSeen(st.tourSeen)
+      setUpdateNoteSeen(st.updateNoteSeen)
     })
     ;(async () => {
       const s = await window.tangos.getState()
@@ -126,6 +129,7 @@ export default function App(): JSX.Element {
       setAutoPush(s.autoPush)
       setLooping(s.looping)
       setTourSeen(s.tourSeen)
+      setUpdateNoteSeen(s.updateNoteSeen)
       setRuns((await window.tangos.activitySnapshot()).slice(-MAX_RUNS))
     })()
     return () => {
@@ -393,7 +397,9 @@ export default function App(): JSX.Element {
       {body}
 
       {showControls && reviews.length > 0 && <ReviewPanel reviews={reviews} baseBranch={baseBranch} />}
-      {showControls && view === 'console' && tourSeen && <TangoHelper firstRun={false} />}
+      {showControls && view === 'console' && tourSeen && (
+        <TangoHelper firstRun={false} note={updateNoteSeen === UPDATE_NOTE.id ? null : UPDATE_NOTE} />
+      )}
       {showControls && view === 'console' && !tourSeen && (
         <TangoTour onDone={() => window.tangos.markTourSeen()} />
       )}

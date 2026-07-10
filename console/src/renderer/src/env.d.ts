@@ -18,6 +18,7 @@ type FullState = {
   agents: AiAgent[]
   reportsEnabled: boolean
   tourSeen: boolean
+  updateNoteSeen: string
   useAgents: boolean
   agentFanout: number
   autoLand: boolean
@@ -81,6 +82,7 @@ export interface TangosApi {
   getTour(): Promise<{ target?: string; title: string; body: string; emotion: string }[]>
   openTour(): Promise<boolean>
   markTourSeen(): Promise<boolean>
+  markUpdateNoteSeen(id: string): Promise<boolean>
   replayTour(): Promise<boolean>
   mergeReview(): Promise<boolean>
   discardReview(): Promise<boolean>

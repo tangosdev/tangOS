@@ -18,6 +18,7 @@ type FullState = {
   agents: AiAgent[]
   reportsEnabled: boolean
   tourSeen: boolean
+  updateNoteSeen: string
   useAgents: boolean
   agentFanout: number
   autoLand: boolean
@@ -106,6 +107,7 @@ const api = {
     ipcRenderer.invoke('tour:get'),
   openTour: (): Promise<boolean> => ipcRenderer.invoke('tour:open'),
   markTourSeen: (): Promise<boolean> => ipcRenderer.invoke('tour:seen'),
+  markUpdateNoteSeen: (id: string): Promise<boolean> => ipcRenderer.invoke('tango:noteSeen', id),
   replayTour: (): Promise<boolean> => ipcRenderer.invoke('tour:replay'),
   mergeReview: (): Promise<boolean> => ipcRenderer.invoke('review:merge'),
   discardReview: (): Promise<boolean> => ipcRenderer.invoke('review:discard'),
