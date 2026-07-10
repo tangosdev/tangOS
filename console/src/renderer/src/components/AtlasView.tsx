@@ -43,10 +43,28 @@ export default function AtlasView({
     let alive = true
     // functions matched (src added to origin/main) in the last 24h - drives the green ▲ per contributor
     window.tangos.recentAdds(24).then((s) => alive && setRecentStems(new Set(s))).catch(() => {})
+    window.tangos
+      .viewerPrefsGet()
+      .then((p) => {
+        if (!alive) return
+        setViewerTheme(getTheme(p.theme).id) // sanitize unknown ids back to classic
+        setColorBy(p.contributorColors ? 'author' : 'status')
+      })
+      .catch(() => {})
     return () => {
       alive = false
     }
   }, [])
+
+  const pickColorBy = (c: 'status' | 'author'): void => {
+    setColorBy(c)
+    void window.tangos.viewerPrefsSet({ contributorColors: c === 'author' }).catch(() => {})
+  }
+  const pickTheme = (id: string): void => {
+    const t = getTheme(id).id
+    setViewerTheme(t)
+    void window.tangos.viewerPrefsSet({ theme: t }).catch(() => {})
+  }
 
   // data-file author key -> canonical GitHub login (dedups an email-derived key vs the GitHub login, etc.)
   const keyToLogin = useMemo(() => new Map(Object.entries(gh?.keyToLogin ?? {})), [gh])
@@ -256,13 +274,13 @@ export default function AtlasView({
         }}
         selectedId={selectedFn?.id}
         colorBy={colorBy}
-        onColorBy={setColorBy}
+        onColorBy={pickColorBy}
         authorColors={authorColors}
         authorResolve={keyToLogin}
         authorFilter={authorFilter}
         showNearMiss={showNearMiss}
         theme={viewerTheme}
-        onTheme={setViewerTheme}
+        onTheme={pickTheme}
       />
 
       <div className="treemap-legend">

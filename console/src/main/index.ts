@@ -34,7 +34,8 @@ import { initAutoUpdate, checkForAppUpdate, quitAndInstallUpdate } from './updat
 import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
-  Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus
+  Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
+  ViewerPrefs
 } from '../shared/types'
 
 const DEFAULT_PORT = 4808
@@ -530,6 +531,8 @@ function currentRuntime(): TangosRuntime {
 // Remember the last-opened repo + each agent's assigned role + reasoning effort across sessions.
 let agentRoles: Record<string, string[]> = {}
 let agentEfforts: Record<string, string> = {}
+// Chaos Viewer prefs (theme + contributor colors); unknown theme ids are sanitized renderer-side.
+let viewerPrefs: ViewerPrefs = { theme: 'classic', contributorColors: false }
 function settingsFile(): string {
   return join(app.getPath('userData'), 'tangos-settings.json')
 }
@@ -549,6 +552,7 @@ function saveSettings(): void {
         agentFanout: state.agentFanout,
         autoLand: state.autoLand,
         autoPushEnabled: state.autoPushEnabled,
+        viewerPrefs,
         // Whether the MCP server is on RIGHT NOW = whether the user last left it on. The next
         // launch auto-starts it (update restarts kept killing agents' connection point).
         mcpRunning: !!mcp.url
@@ -570,6 +574,7 @@ function loadSettings(): {
   agentFanout?: number
   autoLand?: boolean
   autoPushEnabled?: boolean
+  viewerPrefs?: Partial<ViewerPrefs>
   mcpRunning?: boolean
 } {
   try {
@@ -1054,6 +1059,17 @@ ipcMain.handle('atlas:source', (_e, req: { id: string; srcPath?: string }): Atla
     /* no source available */
   }
   return null
+})
+
+ipcMain.handle('viewer:getPrefs', (): ViewerPrefs => viewerPrefs)
+
+ipcMain.handle('viewer:setPrefs', (_e, p: Partial<ViewerPrefs>): ViewerPrefs => {
+  viewerPrefs = {
+    theme: typeof p?.theme === 'string' ? p.theme : viewerPrefs.theme,
+    contributorColors: typeof p?.contributorColors === 'boolean' ? p.contributorColors : viewerPrefs.contributorColors
+  }
+  saveSettings()
+  return viewerPrefs
 })
 
 // Function names matched (src file added to origin/main) within the last `sinceHours` (default 24),
@@ -2286,6 +2302,13 @@ app.whenReady().then(() => {
   state.agentFanout = saved.agentFanout ?? 8
   state.autoLand = saved.autoLand ?? true
   state.autoPushEnabled = saved.autoPushEnabled ?? false
+  viewerPrefs = {
+    theme: typeof saved.viewerPrefs?.theme === 'string' ? saved.viewerPrefs.theme : viewerPrefs.theme,
+    contributorColors:
+      typeof saved.viewerPrefs?.contributorColors === 'boolean'
+        ? saved.viewerPrefs.contributorColors
+        : viewerPrefs.contributorColors
+  }
   setReportsEnabled(state.reportsEnabled)
   ensureTips()
   ensureTour()

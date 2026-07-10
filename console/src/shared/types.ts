@@ -359,6 +359,13 @@ export interface AtlasSource {
   path?: string
 }
 
+/** Chaos Viewer preferences persisted in tangos-settings.json. The renderer's
+ *  theme registry sanitizes unknown theme ids back to classic. */
+export interface ViewerPrefs {
+  theme: string
+  contributorColors: boolean
+}
+
 // ---- safe writes (dedicated work branch + diff review) ---------------------
 
 export interface ReviewFile {
