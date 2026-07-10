@@ -1329,9 +1329,9 @@ html, body, #root { background: transparent !important; }
 
 /* Tango helper: bottom-right mascot holding a floating tips panel */
 .tango-helper {
-  /* sit higher off the bottom, and BELOW the topbar's stacking context (z-index 100) so the
-     Settings / MCP popovers open in front of Tango instead of him covering them */
-  position: fixed; right: 96px; bottom: 52px; z-index: 90; pointer-events: none;
+  /* centered in the collapsed right-rail gap (~228px wide, mascot 148px), and BELOW the
+     topbar's stacking context (z-index 100) so the Settings / MCP popovers open in front */
+  position: fixed; right: 40px; bottom: 52px; z-index: 90; pointer-events: none;
   /* rise up with a single overshoot: quick bounce up, settle down, then stationary */
   animation: tangoRise 720ms cubic-bezier(.2, 1.5, .4, 1) both;
 }
@@ -1341,9 +1341,10 @@ html, body, #root { background: transparent !important; }
 
 /* only the box drifts, and gently (mascot stays still until a future state change) */
 .tango-tips {
-  pointer-events: auto; width: 292px; z-index: 2;
+  /* narrow + tall so the box lives inside the right-rail gap instead of overlapping the panel */
+  pointer-events: auto; width: 212px; z-index: 2;
   /* sit fully above the mascot's head (small gap) instead of overlapping it */
-  position: absolute; bottom: calc(100% + 6px); left: 50%; margin-left: -146px;
+  position: absolute; bottom: calc(100% + 6px); left: 50%; margin-left: -106px;
   border-radius: 15px; overflow: hidden; background: #fbfff6; border: 2px solid #5ec22e;
   box-shadow: 0 12px 34px rgba(30,70,20,0.3);
   animation: tangoBoxFloat 5s ease-in-out infinite;
@@ -1360,7 +1361,7 @@ html, body, #root { background: transparent !important; }
   background: rgba(255,255,255,0.35);
 }
 .tt-x:hover { background: rgba(255,255,255,0.6); }
-.tt-body { padding: 12px 14px; color: #2c3d22; }
+.tt-body { padding: 12px 14px; color: #2c3d22; min-height: 132px; }
 .tt-body b { display: block; font-size: 14px; margin-bottom: 4px; color: #1f3d10; }
 .tt-body p { margin: 0; font-size: 12.5px; line-height: 1.5; }
 .tt-nav { display: flex; align-items: center; gap: 8px; padding: 4px 10px 10px; }
