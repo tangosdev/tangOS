@@ -1,18 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
-import { X, Plus } from 'lucide-react'
+import { X, Plus, Check } from 'lucide-react'
 import Treemap from './Treemap'
 import WindowControls from './WindowControls'
 import { sortFns, SORT_LABELS, type SortKey } from '../atlas/sort'
 import type { AtlasDb, AtlasFunction } from '../../../shared/types'
 
-function addToBatch(f: AtlasFunction): void {
-  window.tangos.addDraftItem({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module, module: f.module, addr: f.addr, size: f.size, srcPath: f.srcPath })
-}
-
 export default function ModulePopout({ module }: { module: string }): JSX.Element {
   const [db, setDb] = useState<AtlasDb | null>(null)
   const [sel, setSel] = useState<AtlasFunction | null>(null)
   const [sort, setSort] = useState<SortKey>('unmatched')
+  // Refs added from THIS popout, so the button confirms visually - the cart itself lives in the
+  // main window, which is usually behind this one ("nothing happens" otherwise, even when it works).
+  const [added, setAdded] = useState<Set<string>>(new Set())
+
+  function addToBatch(f: AtlasFunction): void {
+    window.tangos.addDraftItem({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module, module: f.module, addr: f.addr, size: f.size, srcPath: f.srcPath })
+    setAdded((s) => new Set(s).add(f.name))
+  }
 
   useEffect(() => {
     document.title = `tangOS · ${module}`
@@ -91,9 +95,19 @@ export default function ModulePopout({ module }: { module: string }): JSX.Elemen
                   <button
                     className="aero-button"
                     style={{ marginTop: 12 }}
+                    disabled={added.has(sel.name)}
                     onClick={() => addToBatch(sel)}
                   >
-                    <Plus size={14} style={{ verticalAlign: -2, marginRight: 6 }} /> Add to batch
+                    {added.has(sel.name) ? (
+                      <>
+                        <Check size={14} style={{ verticalAlign: -2, marginRight: 6 }} /> In the cart - assign it from
+                        the Controller
+                      </>
+                    ) : (
+                      <>
+                        <Plus size={14} style={{ verticalAlign: -2, marginRight: 6 }} /> Add to batch
+                      </>
+                    )}
                   </button>
                 )}
               </div>
@@ -114,11 +128,16 @@ export default function ModulePopout({ module }: { module: string }): JSX.Elemen
                     <span className="fn-name mono">{f.name}</span>
                     <span className="fn-size">{f.size}b</span>
                     <span className="fn-add2" onClick={(e) => e.stopPropagation()}>
-                      {!f.matched && (
-                        <button className="bubble-btn" title="Add to batch" onClick={() => addToBatch(f)}>
-                          <Plus size={13} strokeWidth={2.5} />
-                        </button>
-                      )}
+                      {!f.matched &&
+                        (added.has(f.name) ? (
+                          <button className="bubble-btn" disabled title="In the batch cart - assign it from the Controller">
+                            <Check size={13} strokeWidth={2.5} />
+                          </button>
+                        ) : (
+                          <button className="bubble-btn" title="Add to batch" onClick={() => addToBatch(f)}>
+                            <Plus size={13} strokeWidth={2.5} />
+                          </button>
+                        ))}
                     </span>
                   </div>
                 )

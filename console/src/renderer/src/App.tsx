@@ -81,6 +81,14 @@ export default function App(): JSX.Element {
     // awaited subscribe has happened, so the listener can't be removed and a second one leaks -
     // every activity/state event then fires twice (the doubled live-viewer output).
     const unsubActivity = window.tangos.onActivity(applyActivity)
+    // Popout windows relay their "Add to batch" clicks here (draft:addItem -> draft:add). This
+    // subscription is what receives them - it was dropped in the v3.0.0 redesign, which silently
+    // broke every popout add: the relay fired into a window with no listener.
+    const unsubDraft = window.tangos.onDraftAdd((item) => {
+      addToCart(item)
+      setReloadNote(`Added ${item.ref} to the batch cart`)
+      window.setTimeout(() => setReloadNote(null), 2200)
+    })
     const unsubState = window.tangos.onState((st) => {
       setRepo(st.repo)
       setMcp(st.mcp)
@@ -121,6 +129,7 @@ export default function App(): JSX.Element {
     })()
     return () => {
       unsubActivity()
+      unsubDraft()
       unsubState()
       unsubReload()
       unsubDebug()
