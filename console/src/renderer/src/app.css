@@ -1131,6 +1131,12 @@ html, body, #root { background: transparent !important; }
 .ency {
   width: min(880px, 92vw); height: min(86vh, 900px); display: flex; flex-direction: column;
   padding: 14px 16px;
+  /* opaque so the reference text is readable - not glassy over the Controller behind it
+     (same treatment as .ai-detail) */
+  background:
+    linear-gradient(180deg, rgba(var(--aero-gloss-rgb) / 0.6) 0%, rgba(var(--aero-gloss-rgb) / 0.05) 44%, var(--aero-panel) 100%),
+    var(--aero-bg);
+  backdrop-filter: none; -webkit-backdrop-filter: none;
 }
 .ency-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; flex: none; }
 .ency-head h2 { margin: 0; }
