@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { AtlasDb, AtlasFunction } from '../../../shared/types'
 import { ChaosEngine } from './engine/engine'
+import { InputController } from './engine/input'
 
 /** The redesigned Chaos Viewer. Drop-in for the classic Treemap in AtlasView:
  *  same data/callback contract, rendering handled by the chaos engine. */
@@ -44,6 +45,8 @@ export default function ChaosViewer({
       onFunction: (f) => cbRef.current.onFunction(f)
     })
     engineRef.current = engine
+    const input = new InputController(canvas, engine)
+    input.attach()
     let t: ReturnType<typeof setTimeout> | null = null
     const apply = (): void => {
       engine.resize(
@@ -61,6 +64,7 @@ export default function ChaosViewer({
     return () => {
       if (t) clearTimeout(t)
       ro.disconnect()
+      input.detach()
       engine.destroy()
       engineRef.current = null
     }
@@ -83,31 +87,12 @@ export default function ChaosViewer({
     })
   }, [colorBy, authorColors, authorResolve, authorFilter, moduleFilter, showNearMiss, selectedId, theme])
 
-  function canvasPos(e: React.MouseEvent): { x: number; y: number } | null {
-    const cvs = canvasRef.current
-    if (!cvs) return null
-    const r = cvs.getBoundingClientRect()
-    return { x: e.clientX - r.left, y: e.clientY - r.top }
-  }
-
-  function onClick(e: React.MouseEvent): void {
-    const p = canvasPos(e)
-    if (p) engineRef.current?.click(p.x, p.y)
-  }
-
-  function onPointerMove(e: React.PointerEvent): void {
-    const p = canvasPos(e)
-    if (p) engineRef.current?.pointerMove(p.x, p.y)
-  }
-
   return (
     <div className="atlas-treemap aero-panel fill" ref={wrapRef} style={{ position: 'relative' }}>
       <canvas
         ref={canvasRef}
-        onClick={onClick}
-        onPointerMove={onPointerMove}
-        onPointerLeave={() => engineRef.current?.pointerLeave()}
-        style={{ display: 'block', cursor: 'pointer', borderRadius: 8 }}
+        tabIndex={0}
+        style={{ display: 'block', cursor: 'pointer', borderRadius: 8, outline: 'none', touchAction: 'none' }}
       />
     </div>
   )

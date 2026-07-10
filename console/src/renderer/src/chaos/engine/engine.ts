@@ -2,15 +2,18 @@ import type { AtlasDb, AtlasFunction } from '../../../../shared/types'
 import { buildWorld } from '../layout'
 import type { World } from '../layout'
 import { getTheme } from '../themes'
+import { clamp } from './anim'
 import { NameBubble } from './bubbles'
 import { Camera } from './camera'
+import { LodState } from './lod'
 import { RippleField, rippleBounds, rippleLift } from './ripple'
-import { fnColor, isDimmed, paintClassicBase, paintModuleChrome } from './render/classic'
+import { fnColor, isDimmed, paintLabels, paintModuleBorders, paintTiles } from './render/classic'
 import type { PaintView } from './render/classic'
 
 export interface EngineCallbacks {
   onModule: (m: string | null) => void
   onFunction: (f: AtlasFunction) => void
+  onBand?: (band: 1 | 2 | 3) => void
 }
 
 export interface ViewOptions {
@@ -39,10 +42,21 @@ const DEFAULT_OPTS: ViewOptions = {
   themeId: 'classic'
 }
 
+interface BakeCam {
+  x: number
+  y: number
+  z: number
+  vw: number
+  vh: number
+  ovX: number
+  ovY: number
+}
+
 /** Owns the rAF loop and all mutable viewer state. React never sees a frame.
- *  Rendering is two layers: a baked base bitmap (tiles, borders, labels) redrawn
- *  only when data/options/camera change, and a dynamic pass (selection, later
- *  ripples/bubbles) drawn over the blit. The loop sleeps whenever nothing moves. */
+ *  Two layers: a baked base bitmap (tiles, borders, labels) re-baked only when
+ *  the camera settles or data/options change, blitted with a delta transform
+ *  while the camera flies; and a dynamic pass (ripples, bubbles, selection)
+ *  drawn over it each frame. The loop sleeps whenever nothing moves. */
 export class ChaosEngine {
   private readonly canvas: HTMLCanvasElement
   private readonly ctx: CanvasRenderingContext2D
@@ -50,7 +64,11 @@ export class ChaosEngine {
   private readonly baseCtx: CanvasRenderingContext2D
   private readonly cb: EngineCallbacks
   private readonly cam = new Camera()
+  private readonly lod = new LodState()
   private readonly scratch: number[] = []
+  private readonly ripples = new RippleField()
+  private readonly bubble = new NameBubble()
+  private readonly pointer = { x: 0, y: 0, lastT: 0, inside: false }
   private db: AtlasDb | null = null
   private world: World | null = null
   private opts: ViewOptions = { ...DEFAULT_OPTS }
@@ -58,17 +76,18 @@ export class ChaosEngine {
   private cssH = 0
   private dpr = 1
   private needBake = true
+  private bakeCam: BakeCam | null = null
   private rafId: number | null = null
   private disposed = false
+  private lastFrameT = 0
   private lastBakeMs = 0
   private lastFrameMs = 0
-  private readonly ripples = new RippleField()
-  private readonly bubble = new NameBubble()
-  private readonly pointer = { x: 0, y: 0, lastT: 0, inside: false }
   private restX = 0
   private restY = 0
   private restSince = 0
   private pendingBubble = false
+  private lastEmittedModule: string | null = null
+  private lastBand: 1 | 2 | 3 = 1
 
   constructor(canvas: HTMLCanvasElement, cb: EngineCallbacks) {
     this.canvas = canvas
@@ -91,8 +110,6 @@ export class ChaosEngine {
     this.canvas.height = Math.round(cssH * dpr)
     this.canvas.style.width = `${cssW}px`
     this.canvas.style.height = `${cssH}px`
-    this.base.width = this.canvas.width
-    this.base.height = this.canvas.height
     this.cam.setViewport(cssW, cssH)
     this.rebuild()
   }
@@ -115,14 +132,29 @@ export class ChaosEngine {
       'themeId'
     ]
     if (bakeKeys.some((k) => prev[k] !== this.opts[k])) this.needBake = true
+    if ('moduleFilter' in next && next.moduleFilter !== prev.moduleFilter) {
+      // externally requested focus (toolbar chip, list selection, detail-bar close)
+      if (this.opts.moduleFilter !== this.lastEmittedModule) this.externalFocus(this.opts.moduleFilter)
+      this.lastEmittedModule = this.opts.moduleFilter
+    }
     this.invalidate()
   }
 
-  /** Click in canvas CSS coordinates. Function hit wins; otherwise module toggle -
-   *  same semantics as the classic Treemap. */
+  /** Click in canvas CSS coordinates. Band 1: fly into the module. Band 2+:
+   *  select the function (same upward semantics as the classic Treemap). */
   click(cssX: number, cssY: number): void {
     if (!this.world) return
     const p = this.cam.screenToWorld(cssX, cssY)
+    if (this.lod.band === 1) {
+      const mod = this.world.hitMod(p.x, p.y)
+      if (mod) {
+        this.lastEmittedModule = mod.module
+        this.cb.onModule(mod.module)
+        this.cam.flyToRect(mod, 0.06, performance.now())
+        this.wake()
+      }
+      return
+    }
     const fn = this.world.hitFn(p.x, p.y)
     if (fn) {
       this.cb.onFunction(fn.f)
@@ -136,7 +168,7 @@ export class ChaosEngine {
   pointerMove(cssX: number, cssY: number): void {
     const now = performance.now()
     const pt = this.pointer
-    if (pt.inside) {
+    if (pt.inside && this.lod.band === 1 && this.cam.settled(now)) {
       const dt = Math.max(1, now - pt.lastT)
       const speed = (Math.hypot(cssX - pt.x, cssY - pt.y) / dt) * 1000
       const w = this.cam.screenToWorld(cssX, cssY)
@@ -160,6 +192,26 @@ export class ChaosEngine {
     this.wake()
   }
 
+  wheel(cssX: number, cssY: number, deltaY: number): void {
+    this.cam.wheelZoomAt(cssX, cssY, deltaY, performance.now())
+    this.bubble.hide(performance.now())
+    this.wake()
+  }
+
+  panBy(dxCss: number, dyCss: number): void {
+    const now = performance.now()
+    this.cam.panBy(dxCss, dyCss, now)
+    this.bubble.hide(now)
+    this.ripples.clear()
+    this.wake()
+  }
+
+  /** Returns true when the key was consumed. */
+  key(k: string): boolean {
+    if (k === 'Escape') return this.escapeOut()
+    return false
+  }
+
   invalidate(): void {
     this.wake()
   }
@@ -168,6 +220,40 @@ export class ChaosEngine {
     this.disposed = true
     if (this.rafId != null) cancelAnimationFrame(this.rafId)
     this.rafId = null
+  }
+
+  private escapeOut(): boolean {
+    if (!this.world) return false
+    const now = performance.now()
+    if (this.lod.band === 3) {
+      const dom = this.world.hitMod(this.cam.x, this.cam.y)
+      if (dom) {
+        this.cam.flyToRect(dom, 0.06, now)
+        this.wake()
+        return true
+      }
+    }
+    if (this.lod.band >= 2) {
+      this.cam.flyToRect({ x: 0, y: 0, w: this.world.w, h: this.world.h }, 0, now)
+      this.wake()
+      return true
+    }
+    return false
+  }
+
+  private externalFocus(m: string | null): void {
+    if (!this.world) return
+    const now = performance.now()
+    if (m) {
+      const mod = this.world.mods.find((x) => x.module === m)
+      if (!mod) return
+      const dom = this.world.hitMod(this.cam.x, this.cam.y)
+      if (this.lod.band >= 2 && dom && dom.module === m) return
+      this.cam.flyToRect(mod, 0.06, now)
+    } else if (this.lod.band > 1) {
+      this.cam.flyToRect({ x: 0, y: 0, w: this.world.w, h: this.world.h }, 0, now)
+    }
+    this.wake()
   }
 
   private wake(): void {
@@ -180,8 +266,23 @@ export class ChaosEngine {
 
   private rebuild(): void {
     if (!this.db || this.cssW <= 0 || this.cssH <= 0) return
+    const prevBand = this.lod.band
+    const anchorModule = this.opts.moduleFilter
+    const anchorFn = this.opts.selectedId
     this.world = buildWorld(this.db, this.cssW, this.cssH)
-    this.cam.fitWorld(this.world.w, this.world.h)
+    this.lod.compute(this.world, this.cssW, this.cssH)
+    this.cam.setWorld(this.world.w, this.world.h, this.lod.zMax())
+    const fnIx = anchorFn != null ? this.world.byId.get(anchorFn) : undefined
+    if (prevBand === 3 && fnIx != null) {
+      this.cam.jumpToRect(this.world.fns[fnIx], 0.35)
+    } else if (prevBand >= 2 && anchorModule) {
+      const mod = this.world.mods.find((m) => m.module === anchorModule)
+      if (mod) this.cam.jumpToRect(mod, 0.06)
+      else this.cam.fitWorld()
+    } else {
+      this.cam.fitWorld()
+    }
+    this.lod.update(this.cam.z)
     this.needBake = true
     this.invalidate()
   }
@@ -198,65 +299,151 @@ export class ChaosEngine {
     }
   }
 
+  private bakeMatches(): boolean {
+    const b = this.bakeCam
+    return !!b && b.x === this.cam.x && b.y === this.cam.y && b.z === this.cam.z
+  }
+
   private bake(): void {
     if (!this.world) return
     const t0 = performance.now()
-    const c = this.baseCtx
     const { cam, dpr } = this
+    const ovX = cam.overscanX
+    const ovY = cam.overscanY
+    const bw = Math.round((this.cssW + 2 * ovX) * dpr)
+    const bh = Math.round((this.cssH + 2 * ovY) * dpr)
+    if (this.base.width !== bw || this.base.height !== bh) {
+      this.base.width = bw
+      this.base.height = bh
+    }
+    const c = this.baseCtx
     c.setTransform(1, 0, 0, 1, 0, 0)
-    c.clearRect(0, 0, this.base.width, this.base.height)
+    c.clearRect(0, 0, bw, bh)
+    const vr = cam.viewRect()
+    const view = {
+      x: vr.x - ovX / cam.z,
+      y: vr.y - ovY / cam.z,
+      w: vr.w + (2 * ovX) / cam.z,
+      h: vr.h + (2 * ovY) / cam.z
+    }
+    const v = this.paintView()
     c.setTransform(
       dpr * cam.z,
       0,
       0,
       dpr * cam.z,
-      dpr * (cam.vw / 2 - cam.x * cam.z),
-      dpr * (cam.vh / 2 - cam.y * cam.z)
+      dpr * (ovX + cam.vw / 2 - cam.x * cam.z),
+      dpr * (ovY + cam.vh / 2 - cam.y * cam.z)
     )
-    paintClassicBase(c, this.world, cam.viewRect(), this.paintView(), this.scratch)
+    paintTiles(c, this.world, view, v, this.scratch)
+    paintModuleBorders(c, this.world, v, 1 / cam.z)
+    // labels render at constant screen size - a separate pass in screen coords
+    c.setTransform(dpr, 0, 0, dpr, ovX * dpr, ovY * dpr)
+    paintLabels(c, this.world, view, v, cam, this.scratch)
+    this.bakeCam = { x: cam.x, y: cam.y, z: cam.z, vw: cam.vw, vh: cam.vh, ovX, ovY }
     this.needBake = false
     this.lastBakeMs = performance.now() - t0
+  }
+
+  /** Blit the (possibly stale) base with the delta between its bake camera and
+   *  the live camera - camera motion costs one drawImage per frame. */
+  private blitBase(): void {
+    const bk = this.bakeCam
+    if (!bk) return
+    const { ctx, cam, dpr } = this
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    const s = cam.z / bk.z
+    const dx = (bk.x - cam.x) * cam.z + cam.vw / 2 - (bk.ovX + bk.vw / 2) * s
+    const dy = (bk.y - cam.y) * cam.z + cam.vh / 2 - (bk.ovY + bk.vh / 2) * s
+    ctx.drawImage(this.base, dx, dy, (bk.vw + 2 * bk.ovX) * s, (bk.vh + 2 * bk.ovY) * s)
   }
 
   private frame(): void {
     if (this.disposed) return
     const now = performance.now()
-    if (this.needBake) this.bake()
-    const ripplesActive = this.ripples.step(now)
-    this.updateHover(now)
+    const dt = clamp((now - this.lastFrameT) / 1000, 0, 0.033)
+    this.lastFrameT = now
     const { ctx, canvas } = this
+    if (!this.world) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      return
+    }
+    const camMoving = this.cam.update(dt, now)
+    const band = this.lod.update(this.cam.z)
+    if (band !== this.lastBand) {
+      this.lastBand = band
+      this.cb.onBand?.(band)
+    }
+    const settled = this.cam.settled(now)
+    if (settled && (this.needBake || !this.bakeMatches())) this.bake()
+    const ripplesActive = this.ripples.step(now)
+    this.updateHover(now, settled)
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.drawImage(this.base, 0, 0)
-    if (ripplesActive) this.drawRipples(now)
+    this.blitBase()
+    if (ripplesActive && band === 1 && settled) this.drawRipples(now)
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     this.bubble.draw(ctx, this.cam, now)
     this.drawSelection()
+    this.emitFocus(settled, band)
     this.lastFrameMs = performance.now() - now
     if (window.chaosPerf) this.drawPerf()
     // keep frames coming only while something is alive; otherwise the loop sleeps
-    if (ripplesActive || this.bubble.needsFrame(now) || this.pendingBubble) this.wake()
+    if (camMoving || !settled || ripplesActive || this.bubble.needsFrame(now) || this.pendingBubble) {
+      this.wake()
+    }
   }
 
-  /** Bubble intent: the cursor must rest ~90ms (within a 4px jitter box) over a
-   *  module before its name pops; a new module retargets after the same rest. */
-  private updateHover(now: number): void {
+  /** While the camera rests at band 2+, the module under the camera center is the
+   *  focus - emitted upward so the toolbar/list follow the viewport. Band 1 clears. */
+  private emitFocus(settled: boolean, band: 1 | 2 | 3): void {
+    if (!settled || !this.world) return
+    if (band >= 2) {
+      const dom = this.world.hitMod(this.cam.x, this.cam.y)
+      if (dom && dom.module !== this.lastEmittedModule) {
+        this.lastEmittedModule = dom.module
+        this.cb.onModule(dom.module)
+      }
+    } else if (this.lastEmittedModule) {
+      this.lastEmittedModule = null
+      this.cb.onModule(null)
+    }
+  }
+
+  /** Bubble intent: the cursor must rest ~90ms (within a 4px jitter box) before a
+   *  name pops - modules at band 1, functions at band 2+. Hidden while moving. */
+  private updateHover(now: number, settled: boolean): void {
     this.pendingBubble = false
-    if (!this.world || !this.pointer.inside) {
+    if (!this.world || !this.pointer.inside || !settled) {
       this.bubble.hide(now)
       return
     }
     const p = this.cam.screenToWorld(this.pointer.x, this.pointer.y)
-    const mod = this.world.hitMod(p.x, p.y)
-    if (!mod) {
-      this.bubble.hide(now)
-      return
-    }
-    if (this.bubble.currentText === mod.module) return
-    if (now - this.restSince >= 90) {
-      this.bubble.show(mod.module, mod.x + mod.w / 2, mod.y + mod.h / 2, now)
+    if (this.lod.band === 1) {
+      const mod = this.world.hitMod(p.x, p.y)
+      if (!mod) {
+        this.bubble.hide(now)
+        return
+      }
+      if (this.bubble.currentText === mod.module) return
+      if (now - this.restSince >= 90) {
+        this.bubble.show(mod.module, mod.x + mod.w / 2, mod.y + mod.h / 2, now)
+      } else {
+        this.pendingBubble = true
+      }
     } else {
-      this.pendingBubble = true
+      const fn = this.world.hitFn(p.x, p.y)
+      if (!fn) {
+        this.bubble.hide(now)
+        return
+      }
+      if (this.bubble.currentText === fn.f.name) return
+      if (now - this.restSince >= 90) {
+        this.bubble.show(fn.f.name, fn.x + fn.w / 2, fn.y, now)
+      } else {
+        this.pendingBubble = true
+      }
     }
   }
 
@@ -316,7 +503,9 @@ export class ChaosEngine {
       }
     }
     ctx.globalAlpha = 1
-    paintModuleChrome(ctx, world, v)
+    paintModuleBorders(ctx, world, v, 1 / cam.z)
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    paintLabels(ctx, world, view, v, cam, this.scratch)
     ctx.restore()
   }
 
@@ -345,7 +534,7 @@ export class ChaosEngine {
     const ctx = this.ctx
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     ctx.font = '10px Consolas, monospace'
-    const text = `bake ${this.lastBakeMs.toFixed(1)}ms frame ${this.lastFrameMs.toFixed(1)}ms`
+    const text = `z ${this.cam.z.toFixed(2)} band ${this.lod.band} bake ${this.lastBakeMs.toFixed(1)}ms frame ${this.lastFrameMs.toFixed(1)}ms`
     const wpx = ctx.measureText(text).width
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
     ctx.fillRect(this.cssW - wpx - 12, this.cssH - 18, wpx + 8, 14)

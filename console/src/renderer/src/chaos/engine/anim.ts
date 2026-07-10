@@ -16,3 +16,8 @@ export function easeOutBack(t: number): number {
 export function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - t, 3)
 }
+
+export function smoothstep(e0: number, e1: number, x: number): number {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1)
+  return t * t * (3 - 2 * t)
+}

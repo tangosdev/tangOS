@@ -1,4 +1,6 @@
 import type { AtlasFunction } from '../../../../../shared/types'
+import { smoothstep } from '../anim'
+import type { Camera } from '../camera'
 import type { World } from '../../layout'
 import type { Rect } from '../../types'
 import type { Theme } from '../../themes/types'
@@ -56,33 +58,55 @@ export function paintTiles(
   ctx.globalAlpha = 1
 }
 
-/** Module borders + labels, world space. Visual parity with Treemap.tsx. */
-export function paintModuleChrome(ctx: CanvasRenderingContext2D, world: World, v: PaintView): void {
+/** Module borders, world space. invZ keeps stroke widths constant on screen. */
+export function paintModuleBorders(ctx: CanvasRenderingContext2D, world: World, v: PaintView, invZ: number): void {
   for (const m of world.mods) {
     const sel = v.moduleFilter === m.module
     ctx.strokeStyle = sel ? v.theme.colors.moduleStroke : 'rgba(13,58,92,0.55)'
-    ctx.lineWidth = sel ? 2.5 : 1
-    ctx.strokeRect(m.x + 0.5, m.y + 0.5, Math.max(0, m.w - 1), Math.max(0, m.h - 1))
-    if (m.w > 30 && m.h > 12) {
-      ctx.font = LABEL_FONT
-      ctx.lineJoin = 'round'
-      ctx.lineWidth = 3
-      ctx.strokeStyle = 'rgba(255,255,255,0.9)'
-      ctx.strokeText(m.module, m.x + 4, m.y + 12)
-      ctx.fillStyle = v.theme.colors.moduleStroke
-      ctx.fillText(m.module, m.x + 4, m.y + 12)
-    }
+    ctx.lineWidth = (sel ? 2.5 : 1) * invZ
+    ctx.strokeRect(m.x + 0.5 * invZ, m.y + 0.5 * invZ, Math.max(0, m.w - invZ), Math.max(0, m.h - invZ))
   }
 }
 
-/** The full static base: tiles then module chrome. */
-export function paintClassicBase(
+/** Labels at constant screen size: module names always (when their rect is large
+ *  enough on screen), function names fading in once a tile projects tall enough.
+ *  The ctx transform must map CSS px (dpr applied); positions are projected. */
+export function paintLabels(
   ctx: CanvasRenderingContext2D,
   world: World,
   view: Rect,
   v: PaintView,
+  cam: Camera,
   scratch: number[]
 ): void {
-  paintTiles(ctx, world, view, v, scratch)
-  paintModuleChrome(ctx, world, v)
+  ctx.font = LABEL_FONT
+  ctx.lineJoin = 'round'
+  for (const i of world.query(view, scratch)) {
+    const n = world.fns[i]
+    const hpx = n.h * cam.z
+    if (hpx < 40) continue
+    const wpx = n.w * cam.z
+    if (wpx < 50) continue
+    const alpha = smoothstep(40, 70, hpx) * (isDimmed(n.f, v) ? 0.14 : 1)
+    if (alpha < 0.05) continue
+    const p = cam.worldToScreen(n.x, n.y)
+    ctx.globalAlpha = alpha
+    ctx.lineWidth = 3
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+    ctx.strokeText(n.f.name, p.x + 4, p.y + 13, wpx - 8)
+    ctx.fillStyle = v.theme.colors.moduleStroke
+    ctx.fillText(n.f.name, p.x + 4, p.y + 13, wpx - 8)
+  }
+  ctx.globalAlpha = 1
+  for (const m of world.mods) {
+    const wpx = m.w * cam.z
+    const hpx = m.h * cam.z
+    if (wpx <= 30 || hpx <= 12) continue
+    const p = cam.worldToScreen(m.x, m.y)
+    ctx.lineWidth = 3
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+    ctx.strokeText(m.module, p.x + 4, p.y + 12, Math.max(20, wpx - 8))
+    ctx.fillStyle = v.theme.colors.moduleStroke
+    ctx.fillText(m.module, p.x + 4, p.y + 12, Math.max(20, wpx - 8))
+  }
 }
