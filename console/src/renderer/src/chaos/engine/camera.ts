@@ -2,8 +2,6 @@ import { clamp, easeInOutCubic } from './anim'
 import type { Pt, Rect } from '../types'
 
 const WHEEL_FACTOR = 1.0015
-const GESTURE_MS = 150
-const SPRING_OMEGA = 14
 const OVERSCAN = 0.15
 
 interface Fly {
@@ -19,14 +17,15 @@ interface Fly {
 }
 
 /** Continuous camera over the treemap world. z = screen CSS px per world unit.
- *  Wheel zoom eases toward a target with the world point under the cursor held
- *  fixed; flights tween (x, y, logZ) with a zoom dip so long pans read as
+ *  Wheel zoom is INSTANT (each tick applies immediately, anchored to the
+ *  cursor, hard-clamped to the full-map fit); flights (click dives, Escape,
+ *  external focus) tween (x, y, logZ) with a zoom dip so long pans read as
  *  "up over the terrain, then back down". */
 export class Camera {
   x = 0
   y = 0
   z = 1
-  /** Vertical view squash: 1 = straight down, <1 tilts the ground plane (board mode). */
+  /** Vertical view squash: 1 = straight down, <1 tilts the ground plane. */
   sy = 1
   vw = 1
   vh = 1
@@ -36,48 +35,11 @@ export class Camera {
   private zMax = 64
   private zOverrideMin: number | null = null
   private zOverrideMax: number | null = null
-  private zTarget = 1
-  private zVel = 0
-  private anchorWX = 0
-  private anchorWY = 0
-  private anchorSX = 0
-  private anchorSY = 0
-  private gestureUntil = -1e9
   private lastNudge = -1e9
   private fly: Fly | null = null
 
   get fitZ(): number {
     return Math.min(this.vw / this.worldW, this.vh / this.worldH)
-  }
-
-  private get zLo(): number {
-    return this.zOverrideMin ?? this.zMin
-  }
-
-  private get zHi(): number {
-    return this.zOverrideMax ?? this.zMax
-  }
-
-  /** Board mode narrows the zoom range so terrain cells stay 16-64 px. Pass nulls
-   *  to restore the world-derived clamps. */
-  setZoomOverride(min: number | null, max: number | null): void {
-    this.zOverrideMin = min
-    this.zOverrideMax = max
-    this.fly = null
-    this.z = clamp(this.z, this.zLo, this.zHi)
-    this.zTarget = clamp(this.zTarget, this.zLo, this.zHi)
-    this.zVel = 0
-    this.clampPan()
-  }
-
-  jumpTo(x: number, y: number, z: number): void {
-    this.fly = null
-    this.z = clamp(z, this.zLo, this.zHi)
-    this.zTarget = this.z
-    this.zVel = 0
-    this.x = x
-    this.y = y
-    this.clampPan()
   }
 
   get overscanX(): number {
@@ -86,6 +48,18 @@ export class Camera {
 
   get overscanY(): number {
     return Math.round(this.vh * OVERSCAN)
+  }
+
+  get flying(): boolean {
+    return !!this.fly
+  }
+
+  private get zLo(): number {
+    return this.zOverrideMin ?? this.zMin
+  }
+
+  private get zHi(): number {
+    return this.zOverrideMax ?? this.zMax
   }
 
   setViewport(vw: number, vh: number): void {
@@ -99,7 +73,23 @@ export class Camera {
     this.zMin = this.fitZ
     this.zMax = Math.max(zMax, this.fitZ * 2)
     this.z = clamp(this.z, this.zLo, this.zHi)
-    this.zTarget = clamp(this.zTarget, this.zLo, this.zHi)
+    this.clampPan()
+  }
+
+  /** Pass nulls to restore the world-derived clamps. */
+  setZoomOverride(min: number | null, max: number | null): void {
+    this.zOverrideMin = min
+    this.zOverrideMax = max
+    this.fly = null
+    this.z = clamp(this.z, this.zLo, this.zHi)
+    this.clampPan()
+  }
+
+  jumpTo(x: number, y: number, z: number): void {
+    this.fly = null
+    this.z = clamp(z, this.zLo, this.zHi)
+    this.x = x
+    this.y = y
     this.clampPan()
   }
 
@@ -115,8 +105,6 @@ export class Camera {
     )
     this.fly = null
     this.z = z
-    this.zTarget = z
-    this.zVel = 0
     this.x = r.x + r.w / 2
     this.y = r.y + r.h / 2
     this.clampPan()
@@ -138,23 +126,18 @@ export class Camera {
     const panWorld = Math.hypot(x1 - this.x, y1 - this.y)
     const dip = 0.35 * Math.min(1, (panWorld * Math.min(this.z, z1)) / this.vw)
     this.fly = { x0: this.x, y0: this.y, lz0, x1, y1, lz1, t0: now, dur, dip }
-    this.zTarget = z1
-    this.zVel = 0
     this.lastNudge = now
     return dur
   }
 
+  /** Wheel zoom: instant, cursor-anchored, clamped - never undershoots the fit. */
   wheelZoomAt(sx: number, sy: number, deltaY: number, now: number): void {
     this.fly = null
-    this.zTarget = clamp(this.zTarget * Math.pow(WHEEL_FACTOR, -deltaY), this.zLo, this.zHi)
-    if (now > this.gestureUntil || Math.hypot(sx - this.anchorSX, sy - this.anchorSY) > 3) {
-      const w = this.screenToWorld(sx, sy)
-      this.anchorWX = w.x
-      this.anchorWY = w.y
-    }
-    this.anchorSX = sx
-    this.anchorSY = sy
-    this.gestureUntil = now + GESTURE_MS
+    const w = this.screenToWorld(sx, sy)
+    this.z = clamp(this.z * Math.pow(WHEEL_FACTOR, -deltaY), this.zLo, this.zHi)
+    this.x = w.x - (sx - this.vw / 2) / this.z
+    this.y = w.y - (sy - this.vh / 2) / (this.z * this.sy)
+    this.clampPan()
     this.lastNudge = now
   }
 
@@ -166,55 +149,26 @@ export class Camera {
     this.lastNudge = now
   }
 
-  /** Advance springs/tweens. Returns true while the camera is in motion. */
-  update(dt: number, now: number): boolean {
-    if (this.fly) {
-      const f = this.fly
-      const t = clamp((now - f.t0) / f.dur, 0, 1)
-      const e = easeInOutCubic(t)
-      this.x = f.x0 + (f.x1 - f.x0) * e
-      this.y = f.y0 + (f.y1 - f.y0) * e
-      const lz = f.lz0 + (f.lz1 - f.lz0) * e - f.dip * Math.sin(Math.PI * t)
-      this.z = Math.exp(lz)
-      if (t >= 1) {
-        this.fly = null
-        this.z = Math.exp(f.lz1)
-        this.zTarget = this.z
-        this.zVel = 0
-      }
-      this.clampPan()
-      return true
+  /** Advance the flight tween. Returns true while the camera is in motion. */
+  update(now: number): boolean {
+    if (!this.fly) return false
+    const f = this.fly
+    const t = clamp((now - f.t0) / f.dur, 0, 1)
+    const e = easeInOutCubic(t)
+    this.x = f.x0 + (f.x1 - f.x0) * e
+    this.y = f.y0 + (f.y1 - f.y0) * e
+    const lz = f.lz0 + (f.lz1 - f.lz0) * e - f.dip * Math.sin(Math.PI * t)
+    this.z = clamp(Math.exp(lz), this.zLo, this.zHi)
+    if (t >= 1) {
+      this.fly = null
+      this.z = clamp(Math.exp(f.lz1), this.zLo, this.zHi)
     }
-    const dz = this.zTarget - this.z
-    if (Math.abs(dz) > this.z * 5e-4 || Math.abs(this.zVel) > this.z * 5e-4) {
-      const a = SPRING_OMEGA * SPRING_OMEGA * dz - 2 * SPRING_OMEGA * this.zVel
-      this.zVel += a * dt
-      this.z += this.zVel * dt
-      if (Math.abs(this.zTarget - this.z) < this.z * 5e-4 && Math.abs(this.zVel) < this.z * 5e-4) {
-        this.z = this.zTarget
-        this.zVel = 0
-      }
-      if (now < this.gestureUntil + 400) {
-        this.x = this.anchorWX - (this.anchorSX - this.vw / 2) / this.z
-        this.y = this.anchorWY - (this.anchorSY - this.vh / 2) / this.z
-      }
-      this.clampPan()
-      return true
-    }
-    return false
-  }
-
-  get flying(): boolean {
-    return !!this.fly
+    this.clampPan()
+    return true
   }
 
   settled(now: number): boolean {
-    return (
-      !this.fly &&
-      Math.abs(this.zTarget - this.z) < this.z * 1e-3 &&
-      Math.abs(this.zVel) < this.z * 1e-3 &&
-      now - this.lastNudge > 90
-    )
+    return !this.fly && now - this.lastNudge > 90
   }
 
   worldToScreen(wx: number, wy: number): Pt {

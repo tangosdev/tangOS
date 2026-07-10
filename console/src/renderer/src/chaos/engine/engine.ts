@@ -102,7 +102,6 @@ export class ChaosEngine {
   private bakeCam: BakeCam | null = null
   private rafId: number | null = null
   private disposed = false
-  private lastFrameT = 0
   private lastBakeMs = 0
   private lastFrameMs = 0
   private restX = 0
@@ -452,6 +451,7 @@ export class ChaosEngine {
     this.worldGen++
     this.lod.compute(this.world, this.cssW, this.cssH)
     this.cam.setWorld(this.world.w, this.world.h, this.lod.zMax())
+    this.travelAnim = null // old-world coordinates would strand the ring
     if (prev) {
       this.cam.jumpTo(relX * this.world.w, relY * this.world.h, relZ * this.cam.fitZ)
       this.resumeFlight()
@@ -562,15 +562,13 @@ export class ChaosEngine {
   private frame(): void {
     if (this.disposed) return
     const now = performance.now()
-    const dt = clamp((now - this.lastFrameT) / 1000, 0, 0.033)
-    this.lastFrameT = now
     const { ctx, canvas } = this
     if (!this.world) {
       ctx.setTransform(1, 0, 0, 1, 0, 0)
       ctx.clearRect(0, 0, canvas.width, canvas.height)
       return
     }
-    const camMoving = this.cam.update(dt, now)
+    const camMoving = this.cam.update(now)
     if (this.flightTarget && !this.cam.flying) this.flightTarget = null
     const band = this.lod.update(this.cam.z)
     const settled = this.cam.settled(now)
