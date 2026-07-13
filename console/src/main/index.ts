@@ -1347,7 +1347,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   if (!items.length) {
     throw new Error(
       droppedMatched
-        ? `Every candidate for this batch is already matched on main (${droppedMatched} skipped) - your clone is behind. Hit Update, then generate again.`
+        ? `Every candidate for this batch is already matched on main (${droppedMatched} skipped) - your clone is behind. Hit Refresh, then generate again.`
         : 'scheduler returned no functions'
     )
   }
