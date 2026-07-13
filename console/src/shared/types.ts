@@ -196,6 +196,8 @@ export interface ConnectedClient {
 export const ROLE_PRESETS: Record<string, string> = {
   'Main matcher':
     'You are the MAIN MATCHER. Schedule with coddog/worklist, write C, verify with match/fdiff, and bank confirmed byte matches. Favor breadth and steady throughput.',
+  'Finisher':
+    'You are the FINISHER. coddog has run dry - the easy similarity-anchored work is done and it will only hand out one target at a time. Your batch comes straight from worklist: unmatched functions with no matched sibling to lean on. Match each one from the disasm, callees, pool slots, and signatures in its record, verify with match/fdiff, and bank confirmed byte matches. This is the endgame tail; work it patiently.',
   'Long sweep':
     'You are the LONG SWEEP. Take on the large/hard functions others skip. Run the sweep/clone/paramclone tiers and grind near-misses patiently with the refine tools.',
   'Draft checker':

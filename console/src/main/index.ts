@@ -1151,6 +1151,12 @@ function genPlanFor(role: string | undefined, count: number): { schedId: string;
       // include_attempted so a driven refiner keeps working the near-miss pool instead of drying
       // up to ~1 target once refine_wl's ledger has seen everything close.
       return { schedId: 'refine_wl', values: { limit: count, include_attempted: true } }
+    case 'Finisher':
+      // coddog dries up to ~1 target once the similarity-anchored pool is worked through. worklist
+      // pulls the remaining unmatched tail regardless of siblings (easiest-first for hit rate),
+      // shipping full disasm/callees/pool context so the agent can match straight from the asm.
+      // NOTE: worklist streams JSONL to stdout (no `out` arg) - genDraft reads that channel below.
+      return { schedId: 'worklist', values: { easy: true, limit: count } }
     default:
       return { schedId: 'coddog', values: { limit: count } }
   }
@@ -1196,6 +1202,10 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
       (t) => t.readOnly && t.args?.some((a) => a.name === 'out') && t.args?.some((a) => a.name === 'limit')
     )
   if (!sched) throw new Error('this repo has no similarity scheduler (coddog) in tangos.json')
+  // Most schedulers (coddog/refine_wl) write their worklist JSONL to a temp `out` file; some
+  // (worklist, for the Finisher role) stream it to stdout and take no `out` arg. Detect which so
+  // we read the right channel and never hand a tool an `out` flag it would reject.
+  const schedWritesFile = sched.args?.some((a) => a.name === 'out') ?? false
 
   const outPath = join(app.getPath('temp'), `tangos-batch-${randomUUID()}.jsonl`)
   // The scheduler ranks the whole corpus every run (coddog disassembles + scores thousands of
@@ -1216,7 +1226,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   try {
     res = await runTool({
       tool: sched,
-      values: { ...plan.values, out: outPath },
+      values: schedWritesFile ? { ...plan.values, out: outPath } : plan.values,
       runtime: currentRuntime(),
       source: 'user',
       repoPath: state.repoPath,
@@ -1249,7 +1259,17 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   }
 
   let lines: string[] = []
-  try {
+  if (!schedWritesFile) {
+    // Stdout scheduler (worklist): the JSONL worklist IS the tool's stdout, not a temp file. Keep
+    // only JSON-object lines so any "[tangos] ... ok" header / blank lines are ignored.
+    lines = (res.output || '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{'))
+    if (!lines.length) {
+      const tail = (res.output || '').trim().slice(-800) || '(the scheduler produced no output at all)'
+      throw new Error(
+        `No work for the "${role ?? 'selected'}" role right now - the scheduler surfaced no unmatched functions.\n\n--- scheduler output ---\n${tail}`
+      )
+    }
+  } else try {
     lines = readFileSync(outPath, 'utf8').split('\n').filter((l) => l.trim())
   } catch {
     // No worklist file -> the scheduler crashed/exited early. Surface the REAL cause (on a fresh
