@@ -2,7 +2,7 @@
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
   Batch, BatchDraft, BatchItem, AtlasDb, AtlasSource, Review, GithubCredits, ConnectedClient, SecretsInfo,
-  AiAgent, RepoUpdateStatus, AppUpdateInfo, ViewerPrefs
+  AiAgent, RepoUpdateStatus, AppUpdateInfo, ViewerPrefs, BackgroundPrefs
 } from '../../shared/types'
 
 type FullState = {
@@ -45,6 +45,8 @@ export interface TangosApi {
   atlasSource(req: { id: string; srcPath?: string }): Promise<AtlasSource | null>
   viewerPrefsGet(): Promise<ViewerPrefs>
   viewerPrefsSet(p: Partial<ViewerPrefs>): Promise<ViewerPrefs>
+  bgPrefsGet(): Promise<BackgroundPrefs>
+  bgPrefsSet(p: Partial<BackgroundPrefs>): Promise<BackgroundPrefs>
   openModulePopout(module: string): Promise<void>
   addDraftItem(item: BatchItem): Promise<void>
   onDraftAdd(cb: (item: BatchItem) => void): () => void

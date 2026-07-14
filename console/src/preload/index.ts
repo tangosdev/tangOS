@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
   Batch, BatchDraft, BatchItem, AtlasDb, AtlasSource, Review, GithubCredits, ConnectedClient, SecretsInfo,
-  AiAgent, RepoUpdateStatus, AppUpdateInfo, ViewerPrefs
+  AiAgent, RepoUpdateStatus, AppUpdateInfo, ViewerPrefs, BackgroundPrefs
 } from '../shared/types'
 
 type FullState = {
@@ -39,6 +39,8 @@ const api = {
     ipcRenderer.invoke('atlas:source', req),
   viewerPrefsGet: (): Promise<ViewerPrefs> => ipcRenderer.invoke('viewer:getPrefs'),
   viewerPrefsSet: (p: Partial<ViewerPrefs>): Promise<ViewerPrefs> => ipcRenderer.invoke('viewer:setPrefs', p),
+  bgPrefsGet: (): Promise<BackgroundPrefs> => ipcRenderer.invoke('bg:getPrefs'),
+  bgPrefsSet: (p: Partial<BackgroundPrefs>): Promise<BackgroundPrefs> => ipcRenderer.invoke('bg:setPrefs', p),
   openModulePopout: (module: string): Promise<void> => ipcRenderer.invoke('atlas:popout', module),
   addDraftItem: (item: BatchItem): Promise<void> => ipcRenderer.invoke('draft:addItem', item),
   onDraftAdd: (cb: (item: BatchItem) => void): (() => void) => {

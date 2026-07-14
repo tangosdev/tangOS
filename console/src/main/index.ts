@@ -35,7 +35,7 @@ import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
   Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
-  ViewerPrefs
+  ViewerPrefs, BackgroundPrefs
 } from '../shared/types'
 
 const DEFAULT_PORT = 4808
@@ -535,6 +535,8 @@ let agentRoles: Record<string, string[]> = {}
 let agentEfforts: Record<string, string> = {}
 // Chaos Viewer prefs (theme + contributor colors); unknown theme ids are sanitized renderer-side.
 let viewerPrefs: ViewerPrefs = { theme: 'classic', contributorColors: false }
+// Animated gradient-background pref (on by default); the palette follows the active theme.
+let bgPrefs: BackgroundPrefs = { enabled: true }
 function settingsFile(): string {
   return join(app.getPath('userData'), 'tangos-settings.json')
 }
@@ -556,6 +558,7 @@ function saveSettings(): void {
         autoLand: state.autoLand,
         autoPushEnabled: state.autoPushEnabled,
         viewerPrefs,
+        bgPrefs,
         // Whether the MCP server is on RIGHT NOW = whether the user last left it on. The next
         // launch auto-starts it (update restarts kept killing agents' connection point).
         mcpRunning: !!mcp.url
@@ -579,6 +582,7 @@ function loadSettings(): {
   autoLand?: boolean
   autoPushEnabled?: boolean
   viewerPrefs?: Partial<ViewerPrefs>
+  bgPrefs?: Partial<BackgroundPrefs>
   mcpRunning?: boolean
 } {
   try {
@@ -1075,6 +1079,14 @@ ipcMain.handle('viewer:setPrefs', (_e, p: Partial<ViewerPrefs>): ViewerPrefs => 
   }
   saveSettings()
   return viewerPrefs
+})
+
+ipcMain.handle('bg:getPrefs', (): BackgroundPrefs => bgPrefs)
+
+ipcMain.handle('bg:setPrefs', (_e, p: Partial<BackgroundPrefs>): BackgroundPrefs => {
+  bgPrefs = { enabled: typeof p?.enabled === 'boolean' ? p.enabled : bgPrefs.enabled }
+  saveSettings()
+  return bgPrefs
 })
 
 // Function names matched (src file added to origin/main) within the last `sinceHours` (default 24),
@@ -2348,6 +2360,7 @@ app.whenReady().then(() => {
         ? saved.viewerPrefs.contributorColors
         : viewerPrefs.contributorColors
   }
+  bgPrefs = { enabled: typeof saved.bgPrefs?.enabled === 'boolean' ? saved.bgPrefs.enabled : bgPrefs.enabled }
   setReportsEnabled(state.reportsEnabled)
   ensureTips()
   ensureTour()

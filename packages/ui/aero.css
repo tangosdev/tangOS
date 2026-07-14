@@ -8,7 +8,7 @@
   --aero-bg-rgb: 124 196 242;         --aero-bg: #7cc4f2;
   --aero-primary-rgb: 0 153 224;      --aero-primary: #0099e0;
   --aero-accent-rgb: 127 196 0;       --aero-accent: #7FC400;
-  --aero-gloss-rgb: 255 255 255;      --aero-gloss: #ffffff;
+  --aero-gloss-rgb: 234 244 253;      --aero-gloss: #eaf4fd;
   --aero-text-rgb: 13 58 92;          --aero-text: #0d3a5c;
   --aero-muted-rgb: 72 116 156;       --aero-muted: #48749c;
   --aero-matched-rgb: 63 196 95;      --aero-matched: #3fc45f;
@@ -33,6 +33,11 @@ html[data-theme='sunset'] {
   --aero-matched-rgb: 61 186 122;     --aero-matched: #3dba7a;
   --aero-unmatched-rgb: 222 189 189;  --aero-unmatched: #debdbd;
   --aero-danger-rgb: 200 50 60;       --aero-danger: #c8323c;
+  /* Warm, tinted glass so panels/inputs read as peach, not glaring white. */
+  --aero-gloss-rgb: 250 208 172;      --aero-gloss: #fad0ac;
+  --aero-panel: rgba(255, 234, 214, 0.5);
+  --aero-border: rgba(255, 214, 182, 0.72);
+  --aero-glass: rgba(255, 230, 208, 0.4);
   --body-bg:
     radial-gradient(ellipse 800px 380px at 75% -5%, rgba(255,240,200,0.9), transparent 60%),
     linear-gradient(180deg, #ffd9a0 0%, #ffab7b 40%, #f3808f 72%, #a86bc9 100%);
@@ -40,7 +45,7 @@ html[data-theme='sunset'] {
 }
 
 html[data-theme='deepsea'] {
-  --aero-bg-rgb: 8 42 64;             --aero-bg: #082a40;
+  --aero-bg-rgb: 5 22 38;             --aero-bg: #051626;
   --aero-primary-rgb: 36 211 238;     --aero-primary: #24d3ee;
   --aero-accent-rgb: 45 224 138;      --aero-accent: #2de08a;
   --aero-text-rgb: 217 242 255;       --aero-text: #d9f2ff;
@@ -48,12 +53,15 @@ html[data-theme='deepsea'] {
   --aero-matched-rgb: 45 224 138;     --aero-matched: #2de08a;
   --aero-unmatched-rgb: 61 86 107;    --aero-unmatched: #3d566b;
   --aero-danger-rgb: 255 91 91;       --aero-danger: #ff5b5b;
-  --aero-panel: rgba(10, 36, 54, 0.66);
-  --aero-border: rgba(140, 220, 255, 0.28);
-  --aero-glass: rgba(20, 50, 72, 0.5);
+  /* Dark, low-luminance gloss so every glass fill/highlight (panels, dropdowns, buttons) stays
+     deep blue - no white shine, and the select/input fills don't glow brighter than the panel. */
+  --aero-gloss-rgb: 20 44 70;         --aero-gloss: #142c46;
+  --aero-panel: rgba(7, 24, 42, 0.74);
+  --aero-border: rgba(120, 190, 230, 0.22);
+  --aero-glass: rgba(10, 32, 52, 0.55);
   --body-bg:
-    radial-gradient(ellipse 900px 400px at 70% -10%, rgba(60,160,220,0.35), transparent 60%),
-    linear-gradient(180deg, #0b3350 0%, #082a40 45%, #06202f 100%);
+    radial-gradient(ellipse 900px 400px at 70% -10%, rgba(20,70,110,0.28), transparent 60%),
+    linear-gradient(180deg, #06202f 0%, #04141f 50%, #020c15 100%);
   color-scheme: dark;
 }
 
@@ -66,41 +74,37 @@ html[data-theme='bubblegum'] {
   --aero-matched-rgb: 52 199 123;     --aero-matched: #34c77b;
   --aero-unmatched-rgb: 226 197 219;  --aero-unmatched: #e2c5db;
   --aero-danger-rgb: 220 60 90;       --aero-danger: #dc3c5a;
+  /* Pink-tinted glass. */
+  --aero-gloss-rgb: 252 214 240;      --aero-gloss: #fcd6f0;
+  --aero-panel: rgba(255, 233, 247, 0.5);
+  --aero-border: rgba(255, 210, 238, 0.72);
+  --aero-glass: rgba(255, 230, 246, 0.4);
   --body-bg:
     radial-gradient(ellipse 800px 380px at 20% -5%, rgba(255,255,255,0.8), transparent 60%),
     linear-gradient(180deg, #ffd6ec 0%, #ffaed9 45%, #c3b1f7 100%);
   color-scheme: light;
 }
 
-html[data-theme='mint'] {
-  --aero-bg-rgb: 197 240 224;         --aero-bg: #c5f0e0;
-  --aero-primary-rgb: 16 163 127;     --aero-primary: #10a37f;
-  --aero-accent-rgb: 56 189 248;      --aero-accent: #38bdf8;
-  --aero-text-rgb: 15 62 51;          --aero-text: #0f3e33;
-  --aero-muted-rgb: 74 128 112;       --aero-muted: #4a8070;
-  --aero-matched-rgb: 16 185 129;     --aero-matched: #10b981;
-  --aero-unmatched-rgb: 186 211 202;  --aero-unmatched: #bad3ca;
+/* Lemon-lime: keyed to the cyberlime gradient (cyan base, lemon + lime blobs). Primary is a
+   deep-enough lime that white button text stays legible; accent is lemon yellow. */
+html[data-theme='lemonlime'] {
+  --aero-bg-rgb: 212 242 126;         --aero-bg: #d4f27e;
+  --aero-primary-rgb: 90 160 0;       --aero-primary: #5aa000;
+  --aero-accent-rgb: 230 210 0;       --aero-accent: #e6d200;
+  --aero-text-rgb: 44 61 6;           --aero-text: #2c3d06;
+  --aero-muted-rgb: 111 138 56;       --aero-muted: #6f8a38;
+  --aero-matched-rgb: 79 176 0;       --aero-matched: #4fb000;
+  --aero-unmatched-rgb: 207 220 170;  --aero-unmatched: #cfdcaa;
   --aero-danger-rgb: 220 76 70;       --aero-danger: #dc4c46;
+  /* Lemon-lime-tinted glass. */
+  --aero-gloss-rgb: 238 255 196;      --aero-gloss: #eeffc4;
+  --aero-panel: rgba(240, 250, 208, 0.5);
+  --aero-border: rgba(214, 238, 168, 0.72);
+  --aero-glass: rgba(236, 249, 202, 0.4);
   --body-bg:
-    radial-gradient(ellipse 900px 400px at 80% -8%, rgba(255,255,255,0.95), transparent 60%),
-    linear-gradient(180deg, #eafff6 0%, #bdeeda 55%, #8fd9c2 100%);
+    radial-gradient(ellipse 900px 400px at 80% -8%, rgba(255,255,255,0.9), transparent 60%),
+    linear-gradient(180deg, #f2ffb4 0%, #c6f04e 52%, #6fe6c8 100%);
   color-scheme: light;
-}
-
-html[data-theme='hal'] {
-  --aero-bg-rgb: 10 6 7;              --aero-bg: #0a0607;
-  --aero-primary-rgb: 255 47 36;      --aero-primary: #ff2f24;
-  --aero-accent-rgb: 255 149 66;      --aero-accent: #ff9542;
-  --aero-text-rgb: 245 230 227;       --aero-text: #f5e6e3;
-  --aero-muted-rgb: 172 128 122;      --aero-muted: #ac807a;
-  --aero-matched-rgb: 255 59 47;      --aero-matched: #ff3b2f;
-  --aero-unmatched-rgb: 58 56 60;     --aero-unmatched: #3a383c;
-  --aero-danger-rgb: 255 47 36;       --aero-danger: #ff2f24;
-  --aero-panel: rgba(22, 10, 10, 0.72);
-  --aero-border: rgba(255, 80, 60, 0.28);
-  --aero-glass: rgba(34, 12, 10, 0.55);
-  --body-bg: #000000;
-  color-scheme: dark;
 }
 
 /* ---- base ------------------------------------------------------------- */
@@ -124,7 +128,7 @@ code, pre, .mono {
                     var(--aero-panel) 100%);
   border: 1px solid var(--aero-border);
   border-radius: 18px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.6);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.14), inset 0 1px 0 rgba(var(--aero-gloss-rgb) / 0.6);
   backdrop-filter: blur(18px) saturate(1.1);
   -webkit-backdrop-filter: blur(18px) saturate(1.1);
 }
@@ -147,9 +151,9 @@ code, pre, .mono {
   font-weight: 600;
   color: #fff;
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.45) 0%, rgba(255,255,255,0.05) 48%, transparent 49%),
+    linear-gradient(180deg, rgba(var(--aero-gloss-rgb) / 0.45) 0%, rgba(var(--aero-gloss-rgb) / 0.05) 48%, transparent 49%),
     linear-gradient(180deg, rgb(var(--aero-primary-rgb)) 0%, rgb(var(--aero-primary-rgb) / 0.82) 100%);
-  box-shadow: 0 3px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.7);
+  box-shadow: 0 3px 10px rgba(0,0,0,0.18), inset 0 1px 0 rgba(var(--aero-gloss-rgb) / 0.7);
   transition: transform 0.08s ease, filter 0.15s ease;
 }
 .aero-button:hover { filter: brightness(1.07); }
@@ -158,13 +162,13 @@ code, pre, .mono {
 
 .aero-button.ghost {
   color: var(--aero-text);
-  background: rgba(255,255,255,0.32);
+  background: rgba(var(--aero-gloss-rgb) / 0.32);
   border-color: var(--aero-border);
 }
 .aero-button.danger {
   border-color: rgba(var(--aero-danger-rgb) / 0.6);
   background:
-    linear-gradient(180deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0.05) 48%, transparent 49%),
+    linear-gradient(180deg, rgba(var(--aero-gloss-rgb) / 0.4) 0%, rgba(var(--aero-gloss-rgb) / 0.05) 48%, transparent 49%),
     linear-gradient(180deg, rgb(var(--aero-danger-rgb)) 0%, rgb(var(--aero-danger-rgb) / 0.82) 100%);
 }
 

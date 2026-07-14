@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Settings2, FolderOpen, RefreshCw, MessageCircle, Bug } from 'lucide-react'
 import type {
-  RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchItem, Review, AiAgent
+  RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchItem, Review, AiAgent, BackgroundPrefs
 } from '../../shared/types'
 import RepoPicker from './components/RepoPicker'
 import DescriptorGate from './components/DescriptorGate'
@@ -21,9 +21,11 @@ import WindowControls from './components/WindowControls'
 import BugReport from './components/BugReport'
 import RepoUpdateBanner from './components/RepoUpdateBanner'
 import AppUpdateBanner from './components/AppUpdateBanner'
+import GradientBackground from './components/GradientBackground'
+import { paletteForTheme } from './components/gradientThemes'
 import { UPDATE_NOTE } from './updateNote'
 
-const THEMES = ['aero', 'sunset', 'deepsea', 'bubblegum', 'mint', 'hal']
+const THEMES = ['aero', 'sunset', 'deepsea', 'bubblegum', 'lemonlime']
 const APP_LABEL: Record<AppView, string> = { console: 'Chaos Controller', atlas: 'Chaos Viewer' }
 const MAX_RUNS = 200 // cap the live run history the renderer holds (bus keeps its own 300)
 
@@ -66,6 +68,7 @@ export default function App(): JSX.Element {
   const [refreshNonce, setRefreshNonce] = useState(0) // top-bar refresh: re-check repo staleness + app update
   const [bugOpen, setBugOpen] = useState(false)
   const [encyOpen, setEncyOpen] = useState(false) // the tools Encyclopedia overlay (footer paper button)
+  const [bgPrefs, setBgPrefs] = useState<BackgroundPrefs>({ enabled: true })
   const popRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef<HTMLDivElement>(null)
 
@@ -147,7 +150,12 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     window.tangos.appVersion().then(setVersion).catch(() => {})
+    window.tangos.bgPrefsGet().then(setBgPrefs).catch(() => {})
   }, [])
+
+  async function updateBgPrefs(p: Partial<BackgroundPrefs>): Promise<void> {
+    setBgPrefs(await window.tangos.bgPrefsSet(p))
+  }
 
   useEffect(() => {
     if (!mcpOpen) return
@@ -313,6 +321,7 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app">
+      {bgPrefs.enabled && <GradientBackground palette={paletteForTheme(theme)} />}
       <div className="topbar">
         <div className="tb-left">
           <div className="brand">
@@ -372,6 +381,8 @@ export default function App(): JSX.Element {
                     useAgents={useAgents}
                     agentFanout={agentFanout}
                     autoLand={autoLand}
+                    bgPrefs={bgPrefs}
+                    onBgPrefs={updateBgPrefs}
                   />
                 )}
               </div>

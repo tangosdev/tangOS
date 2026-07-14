@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { FolderOpen, Bug, ChevronRight, Trash2 } from 'lucide-react'
-import type { RepoState } from '../../../shared/types'
+import type { RepoState, BackgroundPrefs } from '../../../shared/types'
 import KeyVault from './KeyVault'
 
 /** Clear-all-stats with an inline two-click confirm (no native dialog): the first click arms it,
@@ -53,7 +53,9 @@ export default function Settings({
   reportsEnabled,
   useAgents,
   agentFanout,
-  autoLand
+  autoLand,
+  bgPrefs,
+  onBgPrefs
 }: {
   repo: RepoState | null
   theme: string
@@ -64,6 +66,8 @@ export default function Settings({
   useAgents: boolean
   agentFanout: number
   autoLand: boolean
+  bgPrefs: BackgroundPrefs
+  onBgPrefs: (p: Partial<BackgroundPrefs>) => void
 }): JSX.Element {
   const fanout = agentFanout ?? 8
   return (
@@ -84,6 +88,20 @@ export default function Settings({
           </option>
         ))}
       </select>
+
+      <label className="settings-check" style={{ marginTop: 10 }}>
+        <input
+          type="checkbox"
+          checked={bgPrefs.enabled}
+          onChange={(e) => onBgPrefs({ enabled: e.target.checked })}
+        />
+        <span>Animate the background</span>
+      </label>
+      <Info>
+        Turns the theme&apos;s background into a drifting blurred mesh-gradient with soft glass bubbles
+        behind the panels. Off falls back to the flat theme background. Motion is kept calm and pauses
+        when the window is hidden.
+      </Info>
 
       <div className="section-title" style={{ marginTop: 14 }}>Throughput</div>
       <label className="settings-check">

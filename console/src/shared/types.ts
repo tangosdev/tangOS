@@ -370,6 +370,13 @@ export interface ViewerPrefs {
   contributorColors: boolean
 }
 
+/** Animated gradient-background preference persisted in tangos-settings.json. Whether the
+ *  theme background drifts (mesh-gradient + bubbles) vs. renders flat; the palette itself
+ *  follows the active theme (see paletteForTheme). */
+export interface BackgroundPrefs {
+  enabled: boolean
+}
+
 // ---- safe writes (dedicated work branch + diff review) ---------------------
 
 export interface ReviewFile {
