@@ -1195,6 +1195,13 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   font-size: 12px; line-height: 1; color: inherit; opacity: 0.7;
 }
 .aib-queue-clear:hover { opacity: 1; }
+/* Clear-queue control relocated into the button row (the top "in queue" chip is gone). */
+.aib-clearq {
+  flex: none; border: 1px solid rgba(var(--aero-primary-rgb), 0.4);
+  background: rgba(var(--aero-primary-rgb), 0.12); color: rgb(var(--aero-primary-rgb));
+  border-radius: 8px; padding: 0 9px; cursor: pointer; font-size: 14px; line-height: 1;
+}
+.aib-clearq:hover { background: rgba(var(--aero-primary-rgb), 0.22); }
 /* Drive/Stop on its own full-width row at the bottom of the box */
 .aib-drive-row { display: flex; margin-top: 6px; }
 .aib-drive-row .mini-btn { flex: 1; justify-content: center; }

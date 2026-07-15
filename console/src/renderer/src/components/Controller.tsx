@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Sparkles, Play, Square, ShoppingCart, ShieldCheck, AlertTriangle, GitBranch, GitPullRequest, BarChart2, FileText } from 'lucide-react'
 import type { AiAgent, ActivityRun, Batch } from '../../../shared/types'
-import { ROLE_NAMES, ROLE_PRESETS } from '../../../shared/types'
+import { ROLE_NAMES, ROLE_PRESETS, ROLE_STRENGTH } from '../../../shared/types'
 import { aiColor } from '../aiColor'
 import { recommendRole } from '../roleRec'
 import { effortSpec, currentEffort } from '../efforts'
@@ -239,7 +239,11 @@ export default function Controller({
             const canDrive = a.kind === 'api' && queueRemaining > 0 && !isLooping && !driving && !busy[a.name] && !live
             const generating = busy[a.name] === 'Generating batch'
             const rawSize = sizes[a.name] // undefined = empty (use recommended); -1 = loop
-            const loopSel = rawSize === -1
+            // Reflect the ACTUAL loop state, not just the local ∞ toggle: an MCP agent the main
+            // process has in its loop set stays "looping" in the UI even if the local sizes state
+            // reset (or the loop was started elsewhere), so the box can't show "Add to queue" while
+            // it loops. Scoped to MCP - API agents drive/stop through their own row.
+            const loopSel = rawSize === -1 || (a.kind === 'mcp' && isLooping)
             const rec = recommendRole(a)
             return (
               <div
@@ -284,24 +288,7 @@ export default function Controller({
                     {a.name}
                   </span>
                   {a.kind === 'api' && <span className="aib-kind">API</span>}
-                  {isLooping && <span className="aib-kind loop" title="Pulling batches continuously">∞</span>}
-                  {queueRemaining > 0 && (
-                    <span
-                      className="aib-queue"
-                      title={`${queueRemaining} function(s) lined up for this AI to pull${queuedBatches ? ` (${queuedBatches} batch(es) waiting)` : ' (in the batch being worked now)'}`}
-                    >
-                      {queueRemaining} in queue
-                      {queuedBatches > 0 && (
-                        <button
-                          className="aib-queue-clear"
-                          title="Clear the queue (waiting batches only - a batch being worked isn't touched)"
-                          onClick={() => window.tangos.clearQueue(a.name)}
-                        >
-                          ×
-                        </button>
-                      )}
-                    </span>
-                  )}
+                  {isLooping && <span className="aib-kind loop" title="Matching continuously">∞</span>}
                   <span className="aib-matches">
                     {st.totalMatches}
                     <small> matched</small>
@@ -371,7 +358,8 @@ export default function Controller({
                       {ROLE_NAMES.filter((r) => r !== 'Unassigned' && !a.roles.includes(r)).map((r) => (
                         <option key={r} value={r}>
                           {r}
-                          {r === rec.role ? ' (recommended)' : ''}
+                          {ROLE_STRENGTH[r] ? ` (${ROLE_STRENGTH[r]})` : ''}
+                          {r === rec.role ? ' - recommended' : ''}
                         </option>
                       ))}
                     </select>
@@ -427,18 +415,47 @@ export default function Controller({
                     >
                       ∞
                     </button>
-                    <button
-                      className="mini-btn"
-                      disabled={generating}
-                      onClick={() => assign(a.name, a.roles[0])}
-                      title={
-                        loopSel
-                          ? 'Start continuous mode: this AI keeps pulling recommended batches from its queue until stopped'
-                          : 'Generate a role-fit batch of this size and add it to the queue - press again to line up more'
-                      }
-                    >
-                      <Sparkles size={12} /> {loopSel ? 'Start pulling' : 'Add recommended to queue'}
-                    </button>
+                    {a.kind === 'mcp' && isLooping ? (
+                      // A looping MCP agent self-serves its own work, so there's nothing to "add" -
+                      // the button becomes Stop. This does NOT signal or interrupt the agent: it just
+                      // stops the console from queuing a NEW batch once the current one finishes.
+                      <button
+                        className="mini-btn stop"
+                        onClick={() => window.tangos.stopAi(a.name)}
+                        title="Stop looping - no new batch is queued once the current one finishes. The agent isn't signalled or interrupted; it just stops getting fed."
+                      >
+                        <Square size={12} /> Stop
+                      </button>
+                    ) : (
+                      <button
+                        className="mini-btn"
+                        disabled={generating}
+                        onClick={() => assign(a.name, a.roles[0])}
+                        title={
+                          loopSel
+                            ? 'Start matching: this AI keeps pulling role-fit batches and working them until stopped'
+                            : 'Generate a role-fit batch of this size and add it to the queue - press again to line up more'
+                        }
+                      >
+                        {/* Infinite mode is a plain start button (no count - it never stops). Fixed mode
+                            shows how many are lined up right on the button, so there is no top-of-box chip. */}
+                        <Sparkles size={12} />{' '}
+                        {loopSel
+                          ? 'Start matching'
+                          : queueRemaining > 0
+                            ? `Add to queue (${queueRemaining})`
+                            : 'Add to queue'}
+                      </button>
+                    )}
+                    {!loopSel && queuedBatches > 0 && (
+                      <button
+                        className="aib-clearq"
+                        title="Clear the queue (waiting batches only - the batch being worked isn't touched)"
+                        onClick={() => window.tangos.clearQueue(a.name)}
+                      >
+                        ×
+                      </button>
+                    )}
                   </div>
                   {cartCount > 0 && (
                     <button className="mini-btn custom" onClick={() => onAssignCart(a.name)} title="Add the functions you picked in the Chaos Viewer to this AI's queue">
