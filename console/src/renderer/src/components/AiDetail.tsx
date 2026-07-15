@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { X, FolderOpen, ChevronRight } from 'lucide-react'
+import { X, FolderOpen, ChevronRight, Copy, Check } from 'lucide-react'
 import type { AiAgent, ActivityRun } from '../../../shared/types'
 import { aiColor } from '../aiColor'
 import { recommendRole } from '../roleRec'
@@ -93,6 +93,13 @@ export default function AiDetail({
   // pane is empty almost always - the "why doesn't the live show up" bug.
   const latest = running ?? mine[0]
   const [openRun, setOpenRun] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  function copyLive(): void {
+    if (!latest?.output) return
+    void window.tangos.copy(latest.output)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1400)
+  }
 
   return (
     <div className="ai-detail-scrim" onClick={onClose}>
@@ -185,9 +192,24 @@ export default function AiDetail({
 
         {latest && (
           <>
-            <div className="section-title">
+            <div className="section-title" style={{ display: 'flex', alignItems: 'center' }}>
               <span className={`status-dot ${latest.status}`} style={{ verticalAlign: -1, marginRight: 6 }} />
               {running ? 'Live' : 'Latest'} - {latest.label}
+              <button
+                onClick={copyLive}
+                disabled={!latest.output}
+                title="Copy the full output"
+                style={{
+                  marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4,
+                  fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 6,
+                  border: '1px solid var(--aero-border)', background: 'rgba(var(--aero-gloss-rgb) / 0.55)',
+                  color: 'var(--aero-muted)', cursor: latest.output ? 'pointer' : 'default',
+                  opacity: latest.output ? 1 : 0.45
+                }}
+              >
+                {copied ? <Check size={12} /> : <Copy size={12} />}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
             </div>
             <pre className="aid-live aero-scroll" ref={(el) => el && (el.scrollTop = el.scrollHeight)}>
               {latest.output || (running ? '(starting…)' : '(no output)')}
