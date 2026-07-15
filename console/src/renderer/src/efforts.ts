@@ -18,7 +18,8 @@ const CATALOG: Record<string, EffortSpec> = {
   GLM: { options: ['off'], default: 'off', note: 'thinking off: the refine driver emits code directly, and reasoning starves its token budget' },
   GPT: { options: ['minimal', 'low', 'medium', 'high'], default: 'medium', note: 'reasoning_effort' },
   Grok: { options: ['low', 'high'], default: 'high', note: 'grok reasoning_effort' },
-  DeepSeek: { options: ['chat', 'reasoner'], default: 'reasoner', note: 'V3 chat vs R1 reasoner' }
+  DeepSeek: { options: ['chat', 'reasoner'], default: 'reasoner', note: 'V3 chat vs R1 reasoner' },
+  Nemotron: { options: ['off'], default: 'off', note: 'local LM Studio (model nemo): reasons internally, the driver reads the answer' }
 }
 
 const FALLBACK: EffortSpec = { options: ['low', 'medium', 'high'], default: 'medium' }
@@ -31,6 +32,7 @@ export function familyOf(a: Pick<AiAgent, 'provider' | 'name'>): string {
   if (/glm|zhipu/.test(n)) return 'GLM'
   if (/grok/.test(n)) return 'Grok'
   if (/deepseek/.test(n)) return 'DeepSeek'
+  if (/nemotron|nemo/.test(n)) return 'Nemotron'
   if (/gpt|o1|o3|o4|chatgpt|openai/.test(n)) return 'GPT'
   return 'default'
 }

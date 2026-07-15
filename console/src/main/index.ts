@@ -768,15 +768,18 @@ function agentPrompt(): string {
 }
 
 // Stored API keys that surface a provider as an AI in the controller, mapped to its name.
-// Claude (Opus/Fable/Sonnet) + GLM + DeepSeek are console-drivable (glm_refine driver); the rest
-// appear as available AIs. One key can back several provider boxes: the Anthropic key drives three
-// distinct model boxes (Opus, Fable, Sonnet) that run and score independently.
+// Claude (Opus/Fable/Sonnet) + GLM + DeepSeek + Nemotron (local LM Studio) are console-drivable
+// (glm_refine driver); the rest appear as available AIs. One key can back several provider boxes:
+// the Anthropic key drives three distinct model boxes (Opus, Fable, Sonnet) that run and score
+// independently. Nemotron's key is a local nominal one - LM Studio ignores it, so the stored value
+// just acts as the provider's on/off switch (a stored key = box appears + is drivable).
 const LLM_KEYS: Record<string, string[]> = {
   ANTHROPIC_API_KEY: ['Opus', 'Fable', 'Sonnet'],
   GLM_API_KEY: ['GLM'],
   DEEPSEEK_API_KEY: ['DeepSeek'],
   GROK_API_KEY: ['Grok'],
-  OPENAI_API_KEY: ['ChatGPT']
+  OPENAI_API_KEY: ['ChatGPT'],
+  NEMOTRON_API_KEY: ['Nemotron']
 }
 // Providers currently being driven by the console (Phase D populates this).
 const apiDriving = new Set<string>()
@@ -1651,6 +1654,36 @@ async function enrichTarget(item: BatchItem): Promise<string | null> {
   )
 }
 
+// Nemotron runs on a LOCAL LM Studio server (localhost:1234). Ping /v1/models before driving so a
+// stopped server surfaces as a plain "start it" message instead of a raw connection error deep
+// inside glm_refine - AND return the model id that's actually loaded. The id is not stable: the
+// launcher aliases it "nemo" (--identifier nemo), but a GUI/default load reports the full
+// "nemotron-3-nano-30b-a3b", so a hardcoded "nemo" 400s half the time. Discover it instead, skipping
+// any embedding model LM Studio keeps loaded alongside the chat one. Short timeout - it's localhost.
+async function nemotronModelId(): Promise<string> {
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(), 2500)
+  let ids: string[]
+  try {
+    const r = await fetch('http://localhost:1234/v1/models', { signal: ac.signal })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    const body = (await r.json()) as { data?: { id?: string }[] }
+    ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id)
+  } catch {
+    throw new Error(
+      "Nemotron isn't reachable at localhost:1234 - start LM Studio first (run Start-Nemotron.ps1 in C:\\Users\\bmanu\\Documents\\Nemotron-3), then try again."
+    )
+  } finally {
+    clearTimeout(timer)
+  }
+  const chat = ids.find((id) => !/embed/i.test(id))
+  if (!chat)
+    throw new Error(
+      `LM Studio is up at localhost:1234 but no chat model is loaded${ids.length ? ` (only: ${ids.join(', ')})` : ''} - load Nemotron via Start-Nemotron.ps1, then try again.`
+    )
+  return chat
+}
+
 // Console-drive a keyed API provider on its assigned batch: write a worklist and run the
 // model driver (glm_refine, Anthropic-dialect) tagged as that AI, then fold the reported
 // landed matches + token usage into its stats.
@@ -1680,6 +1713,16 @@ async function driveBatch(agentName: string): Promise<void> {
     // the dropdown DISPLAYS "reasoner" (the family default) without ever writing agentEfforts, so
     // requiring === 'reasoner' silently drove deepseek-chat while the UI said reasoner.
     driverEnv.GLM_MODEL = agentEfforts['DeepSeek'] === 'chat' ? 'deepseek-chat' : 'deepseek-reasoner'
+  } else if (agentName === 'Nemotron') {
+    // Local Nemotron-3 via LM Studio's OpenAI-compatible server on localhost:1234. Same driver path
+    // as DeepSeek - OpenAI /chat/completions dialect, answer in `content` (its reasoning goes to
+    // reasoning_content, which glm_refine ignores). The local server ignores the key, but glm_refine
+    // requires GLM_API_KEY set, so fall back to a nominal value. The health-check doubles as model
+    // discovery: it fails fast with a clear message if the server is down and returns the loaded id.
+    driverEnv.GLM_MODEL = await nemotronModelId()
+    driverEnv.GLM_API_KEY = env.NEMOTRON_API_KEY || 'lm-studio'
+    driverEnv.GLM_BASE_URL = 'http://localhost:1234/v1'
+    driverEnv.GLM_DIALECT = 'openai'
   } else {
     throw new Error(`${agentName} has no console driver yet (idle-only)`)
   }
@@ -1688,7 +1731,9 @@ async function driveBatch(agentName: string): Promise<void> {
   // the model by effort (chat vs reasoner) and the reasoner thinks on its own, so both pass 'off'.
   const effortDefault: Record<string, string> = { Opus: 'high', Fable: 'high', Sonnet: 'high' }
   driverEnv.TANGOS_EFFORT =
-    agentName === 'GLM' || agentName === 'DeepSeek' ? 'off' : agentEfforts[agentName] ?? effortDefault[agentName] ?? ''
+    agentName === 'GLM' || agentName === 'DeepSeek' || agentName === 'Nemotron'
+      ? 'off'
+      : agentEfforts[agentName] ?? effortDefault[agentName] ?? ''
   const batch = state.batches.find((b) => b.targetAgent === agentName && b.status !== 'done')
   if (!batch) throw new Error(`no batch assigned to ${agentName} - assign one first`)
   // Build the driver worklist with FULL context. Prefer coddog's preserved enriched row (from
@@ -1743,8 +1788,10 @@ async function driveBatch(agentName: string): Promise<void> {
   }
   // GLM's default endpoint is z.ai's Coding Plan, which is ~single-concurrency: parallel workers
   // just 429 each other into a slow retry grind (function 1 lands, the rest hang). Drive it
-  // sequentially. Anthropic (Claude) handles concurrency, so it still gets parallel under "Use agents".
-  const jobs = agentName === 'GLM' ? 1 : state.useAgents ? 3 : 1
+  // sequentially. Nemotron is one local LM Studio model on one GPU - parallel requests just queue
+  // and multiply latency, so it's serial too. Anthropic (Claude) handles concurrency, so it still
+  // gets parallel under "Use agents".
+  const jobs = agentName === 'GLM' || agentName === 'Nemotron' ? 1 : state.useAgents ? 3 : 1
   batch.status = 'active'
   apiDriving.add(agentName)
   aiStats.setCurrent(agentName, {

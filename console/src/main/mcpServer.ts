@@ -52,6 +52,7 @@ export function normalizeName(raw?: string): string {
   if (n.includes('claude')) return 'Claude'
   if (n.includes('grok')) return 'Grok'
   if (n.includes('deepseek')) return 'DeepSeek'
+  if (n.includes('nemotron') || n.includes('nemo')) return 'Nemotron'
   if (n.includes('glm') || n.includes('zhipu') || n.includes('z.ai')) return 'GLM'
   if (n.includes('gemini')) return 'Gemini'
   if (n.includes('gpt') || n.includes('openai') || n.includes('codex') || n.includes('chatgpt') || /\bo[1345]\b/.test(n))
