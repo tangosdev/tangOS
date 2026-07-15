@@ -386,7 +386,14 @@ export default function AtlasView({
       <div className="atlas-list aero-panel aero-scroll" ref={listRef}>
         {shown.map((f) => {
           return (
-            <div className={`fn-row${selectedFn?.id === f.id ? ' sel' : ''}`} data-fnid={f.id} key={f.id}>
+            <div
+              className={`fn-row${selectedFn?.id === f.id ? ' sel' : ''}`}
+              data-fnid={f.id}
+              key={f.id}
+              style={{ cursor: 'pointer' }}
+              title="Fly to this function on the map"
+              onClick={() => setSelectedFn(f)}
+            >
               <span className={`status-dot ${f.matched ? 'ok' : ''}`} style={f.matched ? {} : { background: 'var(--aero-unmatched)' }} />
               <span className="fn-name mono">{f.name}</span>
               <span className="fn-mod">{f.module}</span>
@@ -397,7 +404,7 @@ export default function AtlasView({
                   <button
                     className="bubble-btn added"
                     title="Remove from batch"
-                    onClick={() => onRemove(f.name)}
+                    onClick={(e) => { e.stopPropagation(); onRemove(f.name) }}
                   >
                     <Minus size={14} strokeWidth={2.5} />
                   </button>
@@ -405,7 +412,7 @@ export default function AtlasView({
                   <button
                     className="bubble-btn"
                     title="Add to batch"
-                    onClick={() => onAdd({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module, module: f.module, addr: f.addr, size: f.size, srcPath: f.srcPath })}
+                    onClick={(e) => { e.stopPropagation(); onAdd({ id: `${Date.now()}-${f.name}`, ref: f.name, label: f.module, module: f.module, addr: f.addr, size: f.size, srcPath: f.srcPath }) }}
                   >
                     <Plus size={14} strokeWidth={2.5} />
                   </button>

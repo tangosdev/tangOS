@@ -111,6 +111,9 @@ export class ChaosEngine {
   private restSince = 0
   private pendingBubble = false
   private lastEmittedModule: string | null = null
+  // Like lastEmittedModule but for the SELECTION: the id we last selected via a canvas click/travel,
+  // so setOptions can tell an external list-click (dive to it) from the echo of our own click (ignore).
+  private lastEmittedSelectedId: string | null = null
   private travelAnim: { from: Rect; to: Rect; t0: number; dur: number } | null = null
   private lastTravelAt = 0
   /** What the camera is currently flying toward - re-issued after a rebuild so
@@ -190,7 +193,38 @@ export class ChaosEngine {
       if (this.opts.moduleFilter !== this.lastEmittedModule) this.externalFocus(this.opts.moduleFilter)
       this.lastEmittedModule = this.opts.moduleFilter
     }
+    if ('selectedId' in next && next.selectedId !== prev.selectedId) {
+      // A function chosen OUTSIDE the canvas (the right-hand list) - dive to it. Skip the echo of our
+      // own canvas click/travel, which already flew (lastEmittedSelectedId pre-acknowledges it).
+      if (next.selectedId && next.selectedId !== this.lastEmittedSelectedId)
+        this.focusFunction(next.selectedId, prev.selectedId)
+      this.lastEmittedSelectedId = next.selectedId ?? null
+    }
     this.invalidate()
+  }
+
+  /** Fly to a function chosen OUTSIDE the canvas (the right-hand list). Mirrors the click dive minus
+   *  the hit-test and the onFunction echo - the selection is already set. `fromId` is the previously
+   *  selected function so the selection bubble tweens over on the same clock. */
+  focusFunction(id: string, fromId?: string): void {
+    if (!this.world) return
+    const ix = this.world.byId.get(id)
+    if (ix == null) return
+    const fn = this.world.fns[ix]
+    const now = performance.now()
+    this.lastEmittedModule = fn.f.module // pre-acknowledge the moduleFilter echo, like click()
+    this.sources.request(fn.f) // prefetch so the text is ready when the dive lands
+    this.flightTarget = { kind: 'fn', id: fn.f.id }
+    const dur = this.cam.flyToRect(fn, FN_PAD, now)
+    const fromIx = fromId != null ? this.world.byId.get(fromId) : undefined
+    const from = fromIx != null ? this.world.fns[fromIx] : fn
+    this.travelAnim = {
+      from: { x: from.x, y: from.y, w: from.w, h: from.h },
+      to: { x: fn.x, y: fn.y, w: fn.w, h: fn.h },
+      t0: now,
+      dur
+    }
+    this.wake()
   }
 
   /** Click in canvas CSS coordinates: minimap clicks jump; otherwise the click
@@ -211,6 +245,7 @@ export class ChaosEngine {
       const prevIx = this.opts.selectedId != null ? this.world.byId.get(this.opts.selectedId) : undefined
       if (fn.f.id !== this.opts.selectedId) {
         this.lastEmittedModule = fn.f.module // pre-acknowledge the moduleFilter echo
+        this.lastEmittedSelectedId = fn.f.id // ...and the selectedId echo, so setOptions won't re-fly
         this.cb.onFunction(fn.f)
       }
       this.sources.request(fn.f) // prefetch so the text is ready when the dive lands
@@ -333,6 +368,7 @@ export class ChaosEngine {
     this.lastTravelAt = now
     if (target.f.id !== this.opts.selectedId) {
       this.lastEmittedModule = target.f.module // pre-acknowledge the moduleFilter echo
+      this.lastEmittedSelectedId = target.f.id // ...and the selectedId echo, so setOptions won't re-fly
       this.cb.onFunction(target.f)
     }
     this.sources.request(target.f)
