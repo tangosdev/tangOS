@@ -2,7 +2,7 @@
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
   Batch, BatchDraft, BatchItem, AtlasDb, AtlasSource, Review, GithubCredits, ConnectedClient, SecretsInfo,
-  AiAgent, RepoUpdateStatus, AppUpdateInfo, ViewerPrefs, BackgroundPrefs
+  AiAgent, RepoUpdateStatus, SyncPreview, AppUpdateInfo, ViewerPrefs, BackgroundPrefs
 } from '../../shared/types'
 
 type FullState = {
@@ -113,6 +113,10 @@ export interface TangosApi {
   repoPull(): Promise<{ ok: boolean; err?: string; behind?: number; note?: string }>
   onRepoPullProgress(cb: (p: { label: string; pct: number }) => void): () => void
   repoPushWorkPr(): Promise<{ ok: boolean; url?: string; error?: string }>
+  repoSyncPreview(): Promise<SyncPreview>
+  repoBackup(): Promise<{ ok: boolean; path?: string; files?: number; error?: string }>
+  repoSync(): Promise<{ ok: boolean; branch?: string; head?: string; error?: string }>
+  onRepoSyncProgress(cb: (p: { label: string; pct: number }) => void): () => void
   minimizeWin(): Promise<void>
   maximizeToggle(): Promise<boolean>
   closeWin(): Promise<void>

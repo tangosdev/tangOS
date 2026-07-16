@@ -1,7 +1,17 @@
 import { spawn } from 'node:child_process'
-import { join, dirname } from 'node:path'
-import { readFileSync, unlinkSync, mkdirSync, renameSync, rmSync } from 'node:fs'
+import { join, dirname, basename } from 'node:path'
+import {
+  readFileSync,
+  writeFileSync,
+  copyFileSync,
+  existsSync,
+  unlinkSync,
+  mkdirSync,
+  renameSync,
+  rmSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
+import type { SyncPreview } from '../shared/types'
 
 export const WORK_BRANCH = 'tangos/work'
 
@@ -415,4 +425,101 @@ export async function discardWorkBranch(repo: string, base: string): Promise<voi
   if (co.code !== 0) throw new Error(`could not check out ${base}: ${co.err.trim()}`)
   const del = await git(repo, ['branch', '-D', WORK_BRANCH])
   if (del.code !== 0) throw new Error(`could not delete ${WORK_BRANCH}: ${del.err.trim()}`)
+}
+
+// ---- Hard "Sync repo": reset the checkout to origin/<default>, minus the gitignored setup --------
+
+/** What a hard sync would throw away, so the confirm can name real numbers. Fetches first so
+ *  behind/ahead reflect true origin. Untracked count excludes gitignored files (porcelain omits
+ *  them here), matching `git clean -fd` which keeps the extracted ROM / deps / .env. */
+export async function syncPreview(repo: string): Promise<SyncPreview> {
+  await fetchRemote(repo)
+  const db = await defaultBranch(repo)
+  const branch = await currentBranch(repo)
+  const ab = await aheadBehind(repo, db)
+  const r = await git(repo, ['status', '--porcelain=v1', '-uall', '-z'])
+  let localChanges = 0
+  let untracked = 0
+  if (r.code === 0) {
+    for (const tok of r.out.split('\0')) {
+      if (tok.length < 4) continue
+      if (tok.slice(0, 2) === '??') untracked++
+      else localChanges++
+    }
+  }
+  return { branch, defaultBranch: db, behind: ab?.behind ?? 0, ahead: ab?.ahead ?? 0, localChanges, untracked }
+}
+
+/** Copy every at-risk working-tree file (modified tracked + untracked non-ignored) and bundle all
+ *  local branch tips into a timestamped sibling backup folder, so a hard sync is undoable. `stamp`
+ *  is passed in - main owns the clock. Ignored setup files aren't copied (the sync keeps them). */
+export async function backupBeforeSync(
+  repo: string,
+  stamp: string
+): Promise<{ path: string; files: number; bundle: boolean }> {
+  const dest = join(dirname(repo), `${basename(repo)}-backup-${stamp}`)
+  mkdirSync(join(dest, 'files'), { recursive: true })
+  const r = await git(repo, ['status', '--porcelain=v1', '-uall', '-z'])
+  let files = 0
+  if (r.code === 0) {
+    for (const tok of r.out.split('\0')) {
+      if (tok.length < 4) continue
+      const xy = tok.slice(0, 2)
+      if (xy[0] === 'D' || xy[1] === 'D') continue // a deletion - reset restores it from history
+      const rel = tok.slice(3)
+      const src = join(repo, rel)
+      if (!existsSync(src)) continue // a rename's old-path token, or already gone
+      const to = join(dest, 'files', rel)
+      try {
+        mkdirSync(dirname(to), { recursive: true })
+        copyFileSync(src, to)
+        files++
+      } catch {
+        /* skip unreadable file */
+      }
+    }
+  }
+  const bundlePath = join(dest, 'local-commits.bundle')
+  const bundle = (await git(repo, ['bundle', 'create', bundlePath, '--branches', '--tags'])).code === 0
+  writeFileSync(
+    join(dest, 'RESTORE.txt'),
+    [
+      'tangOS Console - pre-sync backup',
+      `taken ${stamp} from ${repo}`,
+      '',
+      'files/                 working-tree copies of everything the sync deleted or reverted',
+      'local-commits.bundle   all local branch tips at backup time',
+      '',
+      'Restore a file:   copy it back from files/ into the repo.',
+      'Restore commits:  git fetch "local-commits.bundle" "refs/heads/*:refs/heads/recovered/*"',
+      '                  then check out or cherry-pick what you need.',
+      ''
+    ].join('\n')
+  )
+  return { path: dest, files, bundle }
+}
+
+/** Hard-reset the checkout to origin/<default> and remove untracked (non-ignored) files - the
+ *  "fresh clone" state, minus the gitignored setup (extracted ROM, deps, .env) which is kept.
+ *  Destructive: discards local commits, uncommitted changes, and custom/untracked files. */
+export async function syncToOrigin(
+  repo: string,
+  onProgress?: (label: string, pct: number) => void
+): Promise<{ ok: boolean; branch: string; head: string; err?: string }> {
+  if (!(await remoteSlug(repo))) return { ok: false, branch: '', head: '', err: 'no GitHub "origin" remote to sync from' }
+  onProgress?.('Fetching origin', 15)
+  if (!(await fetchRemote(repo))) return { ok: false, branch: '', head: '', err: 'git fetch origin failed - check your connection' }
+  const db = await defaultBranch(repo)
+  onProgress?.(`Resetting to origin/${db}`, 55)
+  // -f discards local working-tree changes; -B resets (or creates) the local default branch to
+  // origin's and switches to it, so we land on a clean default branch wherever HEAD started.
+  const co = await git(repo, ['checkout', '-f', '-B', db, `origin/${db}`])
+  if (co.code !== 0) return { ok: false, branch: db, head: '', err: `checkout failed: ${(co.err || co.out).trim()}` }
+  await git(repo, ['reset', '--hard', `origin/${db}`]) // belt-and-suspenders in case of an odd state
+  onProgress?.('Removing untracked files', 80)
+  const clean = await git(repo, ['clean', '-fd']) // -d dirs, NO -x: keep gitignored setup
+  if (clean.code !== 0) return { ok: false, branch: db, head: '', err: `clean failed: ${clean.err.trim()}` }
+  const head = (await git(repo, ['rev-parse', '--short', 'HEAD'])).out.trim()
+  onProgress?.('Done', 100)
+  return { ok: true, branch: db, head }
 }

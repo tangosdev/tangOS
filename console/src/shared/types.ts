@@ -143,6 +143,17 @@ export interface RepoUpdateStatus {
   error?: string
 }
 
+/** What a hard "Sync repo" (reset to origin + clean) would throw away, so the confirm is concrete. */
+export interface SyncPreview {
+  branch: string
+  defaultBranch: string
+  behind: number // new upstream commits you'd gain
+  ahead: number // local commits on this branch that a reset would discard
+  localChanges: number // tracked files modified/staged that a hard reset would revert
+  untracked: number // untracked non-ignored files that clean -fd would remove (setup files are kept)
+  error?: string
+}
+
 /** App auto-update state, surfaced in the top banner so a running install can tell a newer
  *  release is out. 'dev' = unpackaged (the updater is a no-op there); 'none' = up to date;
  *  'error' = the check failed (offline, rate-limited, or no releases yet). */

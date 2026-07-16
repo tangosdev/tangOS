@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { FolderOpen, Bug, ChevronRight, Trash2 } from 'lucide-react'
 import type { RepoState, BackgroundPrefs } from '../../../shared/types'
 import KeyVault from './KeyVault'
+import SyncRepo from './SyncRepo'
 
 /** Clear-all-stats with an inline two-click confirm (no native dialog): the first click arms it,
  *  a second within 4s wipes. Keeps a stray click from nuking every tally. */
@@ -79,6 +80,13 @@ export default function Settings({
         <FolderOpen size={14} style={{ flex: 'none', opacity: 0.7 }} />
         <span className="path">{repo?.path ?? 'Choose a repo folder…'}</span>
       </button>
+      <SyncRepo repo={repo} />
+      <Info>
+        <b>Sync repo</b> hard-resets this checkout to match <code>origin</code> - the fresh-clone state -
+        throwing away local edits, custom/untracked files, and unpushed commits. Use it when your clone
+        has drifted behind main and batches keep coming up short. Your extracted ROM, dependencies, and{' '}
+        <code>.env</code> are kept, and the <b>Back up first</b> button saves everything it would delete.
+      </Info>
 
       <div className="section-title" style={{ marginTop: 14 }}>Theme</div>
       <select className="theme-select" value={theme} onChange={(e) => onTheme(e.target.value)} style={{ width: '100%' }}>

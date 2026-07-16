@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
   Batch, BatchDraft, BatchItem, AtlasDb, AtlasSource, Review, GithubCredits, ConnectedClient, SecretsInfo,
-  AiAgent, RepoUpdateStatus, AppUpdateInfo, ViewerPrefs, BackgroundPrefs
+  AiAgent, RepoUpdateStatus, SyncPreview, AppUpdateInfo, ViewerPrefs, BackgroundPrefs
 } from '../shared/types'
 
 type FullState = {
@@ -157,6 +157,17 @@ const api = {
     return () => ipcRenderer.removeListener('repo:pullProgress', l)
   },
   repoPushWorkPr: (): Promise<{ ok: boolean; url?: string; error?: string }> => ipcRenderer.invoke('repo:pushWorkPr'),
+  // Hard "Sync repo" (reset to origin + clean): preview, optional backup, then the destructive run.
+  repoSyncPreview: (): Promise<SyncPreview> => ipcRenderer.invoke('repo:syncPreview'),
+  repoBackup: (): Promise<{ ok: boolean; path?: string; files?: number; error?: string }> =>
+    ipcRenderer.invoke('repo:backup'),
+  repoSync: (): Promise<{ ok: boolean; branch?: string; head?: string; error?: string }> =>
+    ipcRenderer.invoke('repo:sync'),
+  onRepoSyncProgress: (cb: (p: { label: string; pct: number }) => void): (() => void) => {
+    const l = (_e: unknown, p: { label: string; pct: number }): void => cb(p)
+    ipcRenderer.on('repo:syncProgress', l)
+    return () => ipcRenderer.removeListener('repo:syncProgress', l)
+  },
 
   minimizeWin: (): Promise<void> => ipcRenderer.invoke('win:minimize'),
   maximizeToggle: (): Promise<boolean> => ipcRenderer.invoke('win:maximizeToggle'),

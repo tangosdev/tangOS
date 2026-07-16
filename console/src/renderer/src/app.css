@@ -1191,6 +1191,30 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 .aid-scope .stat-scope { margin-right: 0; }
 /* armed "Clear all stats" confirm */
 .mini-btn.danger { background: rgba(220,38,38,0.15); border-color: rgba(220,38,38,0.6); color: #b91c1c; }
+.mini-btn.danger:hover:not(:disabled) { background: rgba(220,38,38,0.24); }
+/* "Sync repo" destructive-reset control (Settings > Decomp repo). */
+.sync-repo { margin-top: 8px; }
+.sync-repo-card {
+  display: flex; flex-direction: column; gap: 8px; flex-wrap: wrap;
+  padding: 10px; border-radius: 10px;
+  background: rgba(234,179,8,0.10); border: 1px solid rgba(234,179,8,0.45);
+}
+.sync-repo-warn { display: flex; gap: 7px; align-items: flex-start; font-size: 12px; line-height: 1.4; color: var(--aero-text); }
+.sync-repo-warn svg { flex: none; color: #b45309; margin-top: 1px; }
+.sync-repo-warn code, .sync-repo-counts code { background: rgba(0,0,0,0.07); padding: 0 4px; border-radius: 4px; }
+.sync-repo-counts { font-size: 12px; line-height: 1.4; color: var(--aero-text); }
+.sync-repo-counts .muted { color: var(--aero-muted); }
+.sync-repo-msg { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; flex-wrap: wrap; }
+.sync-repo-msg.ok { color: #15803d; }
+.sync-repo-msg.err { color: #b91c1c; }
+.sync-repo-msg svg { flex: none; }
+.sync-repo-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.linkish {
+  background: none; border: none; padding: 0; cursor: pointer;
+  font: inherit; font-size: 11.5px; font-weight: 600; color: rgb(var(--aero-primary-rgb));
+}
+.linkish:hover:not(:disabled) { text-decoration: underline; }
+.linkish:disabled { opacity: 0.5; cursor: default; }
 /* contributors legend: green ▲ + count matched in the last 24h */
 .contrib-recent { margin-left: 4px; font-size: 10px; font-weight: 700; color: #16a34a; letter-spacing: -0.5px; }
 /* per-AI queue chip in the box header: how much work is lined up, with a clear-queue x */

@@ -26,7 +26,8 @@ import {
   remoteSlug, defaultBranch, currentBranch,
   pushSubsetToBranch, changedSrcFiles,
   isDirty, aheadBehind, unmergedAhead, fetchRemote, rebasePull, pushToBranch, gitUserName,
-  recentlyAddedSrc, fetchBase, upstreamState
+  recentlyAddedSrc, fetchBase, upstreamState,
+  syncPreview, backupBeforeSync, syncToOrigin
 } from './gitsafe'
 import { ensurePullRequest, resolvePushTarget, type PushTarget } from './pullRequests'
 import { writeBugReport } from './bugReport'
@@ -35,7 +36,7 @@ import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
   Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
-  ViewerPrefs, BackgroundPrefs
+  SyncPreview, ViewerPrefs, BackgroundPrefs
 } from '../shared/types'
 
 const DEFAULT_PORT = 4808
@@ -2320,6 +2321,48 @@ ipcMain.handle('repo:pull', async (): Promise<{ ok: boolean; err?: string; behin
   }
   const ab = res.ok ? await aheadBehind(repo, db) : null
   return { ok: res.ok, err: res.ok ? undefined : res.err, behind: ab?.behind, note: res.note }
+})
+
+// Hard "Sync repo": preview what a reset-to-origin would discard, so the confirm shows real numbers.
+ipcMain.handle('repo:syncPreview', async (): Promise<SyncPreview> => {
+  const repo = state.repoPath
+  if (!repo || !(await isGitRepo(repo)))
+    return { branch: '', defaultBranch: 'main', behind: 0, ahead: 0, localChanges: 0, untracked: 0, error: 'not a git checkout' }
+  try {
+    return await syncPreview(repo)
+  } catch (e) {
+    return { branch: '', defaultBranch: 'main', behind: 0, ahead: 0, localChanges: 0, untracked: 0, error: String(e) }
+  }
+})
+
+// Back up everything a sync would destroy (working-tree changes, untracked files, local commits)
+// into a timestamped sibling folder, so the destructive sync is undoable.
+ipcMain.handle('repo:backup', async (): Promise<{ ok: boolean; path?: string; files?: number; error?: string }> => {
+  const repo = state.repoPath
+  if (!repo || !(await isGitRepo(repo))) return { ok: false, error: 'not a git checkout' }
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
+    const r = await backupBeforeSync(repo, stamp)
+    return { ok: true, path: r.path, files: r.files }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+})
+
+// The destructive part: fetch + reset --hard origin/<default> + clean -fd (keeps gitignored setup).
+// Gets the checkout back to a fresh-clone src tree. On success, drop caches so the atlas + matched
+// set re-derive from the now-current tree.
+ipcMain.handle('repo:sync', async (): Promise<{ ok: boolean; branch?: string; head?: string; error?: string }> => {
+  const repo = state.repoPath
+  if (!repo || !(await isGitRepo(repo))) return { ok: false, error: 'not a git checkout' }
+  const r = await syncToOrigin(repo, (label, pct) => mainWindow?.webContents.send('repo:syncProgress', { label, pct }))
+  if (r.ok) {
+    atlasCache = { repo: null }
+    reloadDescriptor('manual')
+    scheduleAtlasRegen()
+    pushState()
+  }
+  return { ok: r.ok, branch: r.branch, head: r.head, error: r.err }
 })
 
 // Diverged clone (local commits the remote lacks, can't fast-forward): push those commits to a
