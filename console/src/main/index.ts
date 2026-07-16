@@ -444,6 +444,21 @@ function afterRun(
   if (ok && typeof values.func === 'string') void noteMatchAndPush(client?.name, [values.func])
 }
 
+// A looping agent only ever has ONE reassign generating at a time. Both the batch-completion path
+// (advanceLoopingBatches) and the next_batch-poll path (kickLoopReassign) funnel through here, so a
+// completion and a poll landing together can't kick two overlapping scheduler runs (double batches).
+const loopReassigning = new Set<string>()
+function reassignLoop(agentName: string): void {
+  if (loopReassigning.has(agentName)) return // a fresh batch is already being generated for it
+  loopReassigning.add(agentName)
+  const role = agentRoles[agentName]?.[0]
+  void assignToAgent(agentName, role ?? 'Unassigned', roleBatchSize(role), true)
+    .catch((e) =>
+      report('batch', { event: 'loop-reassign-failed', agent: agentName, error: String((e as Error)?.message ?? e) })
+    )
+    .finally(() => loopReassigning.delete(agentName))
+}
+
 /** Continuous mode (looping agents): retire any targeted batch whose items are all worked THROUGH -
  *  matched OR attempted-and-moved-on - and queue the next. Shared by markItemWorked/markItemDone so a
  *  loop advances once the agent has ground through a batch, not only when every target byte-matched. */
@@ -457,10 +472,31 @@ function advanceLoopingBatches(): void {
       agentLoop.has(b.targetAgent)
     ) {
       b.status = 'done'
-      const role = agentRoles[b.targetAgent]?.[0]
-      void assignToAgent(b.targetAgent, role ?? 'Unassigned', roleBatchSize(role), true).catch(() => {})
+      reassignLoop(b.targetAgent)
     }
   }
+}
+
+/** A looping agent polled next_batch with nothing queued for it. If it's sitting on an ACTIVE batch,
+ *  it's telling us it's done with that batch even though some targets never got worked - symbol drift,
+ *  an unmatchable target, or it simply moved on - which is exactly why advanceLoopingBatches (needs
+ *  every item worked) never retired it. Retire the stuck batch and generate the next, so an infinite
+ *  agent can never strand itself on a batch it couldn't fully clear. A genuinely dry queue (nothing
+ *  active) is left alone here - that path refills on batch completion, not on every empty poll. */
+function kickLoopReassign(agentName: string): void {
+  if (!agentLoop.has(agentName)) return
+  const active = state.batches.find((b) => b.status === 'active' && b.targetAgent === agentName)
+  if (!active) return
+  active.status = 'done'
+  report('batch', {
+    event: 'loop-retire-stuck',
+    batchId: active.id,
+    agent: agentName,
+    worked: active.items.filter((i) => i.worked || i.done).length,
+    total: active.items.length
+  })
+  pushState()
+  reassignLoop(agentName)
 }
 
 /** Flag a target WORKED (an agent attempted it, hit or miss) across any batch that lists it. Drives
@@ -542,6 +578,10 @@ function notifyBatchWaiters(): void {
 function waitForBatch(agentName: string | undefined, timeoutMs: number): Promise<Batch | null> {
   const now = pullNextBatch(agentName)
   if (now) return Promise.resolve(now)
+  // Nothing queued, but if this is a looping agent sitting on a batch it's evidently finished with
+  // (it's asking for more), retire that batch and generate the next. Without this the loop stalls
+  // whenever the agent leaves targets unworked (symbol drift) so "every item worked" never trips.
+  if (agentName) kickLoopReassign(agentName)
   return new Promise((resolve) => {
     const w: BatchWaiter = {
       agentName,
@@ -1840,11 +1880,16 @@ async function driveBatch(agentName: string): Promise<void> {
       aiStats.recordMatch(agentName, ok, item?.size, name)
       // a "div=N" line: compiled draft, close but not matching - counts only if it beats the best div
       if (!ok) aiStats.recordNearMiss(agentName, name, Number(m[4].replace('div=', '')), item?.size)
-      if (ok && item) item.done = true
+      // Every target the driver reaches is WORKED (it advances the analyzed bar) whether it matched,
+      // near-missed, or dead-ended; a hit additionally marks it done.
+      if (item) {
+        item.worked = true
+        if (ok) item.done = true
+      }
       aiStats.setCurrent(agentName, {
         task: batch.title,
         batchId: batch.id,
-        progress: { done: batch.items.filter((i) => i.done).length, total: batch.items.length }
+        progress: { done: batch.items.filter((i) => i.worked || i.done).length, total: batch.items.length }
       })
       pushState() // climb the bar mid-run
     }
@@ -1892,7 +1937,10 @@ async function driveBatch(agentName: string): Promise<void> {
         recorded.add(r.name)
         const item = batch.items.find((i) => i.ref === r.name)
         aiStats.recordMatch(agentName, !!r.matched, item?.size, r.name)
-        if (r.matched && item) item.done = true
+        if (item) {
+          item.worked = true
+          if (r.matched) item.done = true
+        }
       }
       tin = out.tokensIn ?? out.inputTokens ?? 0
       tout = out.tokensOut ?? out.outputTokens ?? (out.tokensPerLanded ? out.tokensPerLanded * landed.length : 0)

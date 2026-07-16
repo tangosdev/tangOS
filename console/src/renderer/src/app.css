@@ -563,8 +563,11 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 /* ---- splash (app-switch whoosh) ---- */
 .splash {
   position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; overflow: hidden;
-  background: radial-gradient(ellipse 900px 500px at 50% -10%, rgba(255,255,255,0.85), transparent 60%),
-    linear-gradient(180deg, #8fd0f8 0%, #5cb2ec 42%, #b7e372 100%);
+  /* match .app's rounded corners so an app switch stays beveled, never flashing square */
+  border-radius: 16px;
+  /* the app's animated GradientBackground (rendered as the splash's first child) fills it now,
+     replacing the old hardcoded blue->green gradient so the splash tracks the active theme */
+  background: transparent;
   animation: splashSeq 1750ms ease-in-out forwards;
 }
 @keyframes splashSeq { 0% { opacity: 0; } 20% { opacity: 1; } 60% { opacity: 1; } 100% { opacity: 0; } }
@@ -904,7 +907,9 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 .ai-box:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.13); }
 .ai-box.off { opacity: 0.5; filter: grayscale(0.6); }
 .aib-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.aib-name { font-weight: 800; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aib-name { font-weight: 800; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; min-width: 0; }
+/* Role chips now live in the header row; they hold their size while the name ellipsizes. */
+.aib-top .role-chip { flex: none; }
 .aib-kind {
   font-size: 9px; font-weight: 800; letter-spacing: 0.05em; padding: 1px 6px; border-radius: 999px; flex: none;
   color: rgb(var(--aero-primary-rgb)); background: rgba(var(--aero-primary-rgb) / 0.14); border: 1px solid rgba(var(--aero-primary-rgb) / 0.3);
@@ -933,6 +938,8 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 .aib-stats .muted { color: var(--aero-muted); font-weight: 500; }
 .aib-actions { display: flex; flex-direction: column; gap: 7px; }
 .aib-actions .agent-role { width: 100%; }
+/* While running, the whole cluster collapses to one full-width Stop. */
+.aib-stop { width: 100%; justify-content: center; }
 /* Multi-role chips: an AI can hold several roles at once. */
 .aib-roles { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
 .role-chip {
@@ -948,7 +955,7 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 .role-x:hover { color: #ef4444; background: rgba(239,68,68,0.14); }
 .aib-roles .agent-role.add { width: auto; flex: 1 1 auto; min-width: 92px; font-size: 11px; padding: 3px 6px; }
 /* Reasoning-effort selector: compact, pinned to the right of the (growing) add-role dropdown. */
-.aib-roles .agent-effort { font: inherit; font-size: 11px; padding: 3px 6px; border-radius: 8px; border: 1px solid var(--aero-border); background: rgba(var(--aero-gloss-rgb) / 0.55); color: var(--aero-text); flex: 0 0 auto; min-width: 66px; }
+.aib-roles .agent-effort { font: inherit; font-size: 11px; padding: 3px 6px; border-radius: 8px; border: 1px solid var(--aero-border); background: rgba(var(--aero-gloss-rgb) / 0.55); color: var(--aero-text); flex: 0 0 88px; width: 88px; }
 .aib-btns { display: flex; gap: 7px; align-items: stretch; }
 .aib-btns .mini-btn { flex: 1 1 0; justify-content: center; }
 .aib-size {

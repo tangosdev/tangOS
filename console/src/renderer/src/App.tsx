@@ -424,7 +424,7 @@ export default function App(): JSX.Element {
           onClose={() => setEncyOpen(false)}
         />
       )}
-      {splash && <Splash label={splash} />}
+      {splash && <Splash label={splash} palette={paletteForTheme(theme)} />}
       {bugOpen && <BugReport repoName={repo?.descriptor?.project?.title} onClose={() => setBugOpen(false)} />}
       {reloadNote && <div className="reload-toast aero-glass">{reloadNote}</div>}
       {version && <div className="app-version" title="Running version">v{version}</div>}

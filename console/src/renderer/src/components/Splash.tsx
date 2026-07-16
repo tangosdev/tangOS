@@ -1,8 +1,11 @@
 import { useMemo } from 'react'
 import { randomPose } from '../tangoFrames'
+import GradientBackground from './GradientBackground'
 
-/** A brief tangOS "whoosh" - rising bubbles + wordmark + a random Tango - shown over an app switch. */
-export default function Splash({ label }: { label?: string }): JSX.Element {
+/** A brief tangOS "whoosh" - the app's animated gradient background + rising bubbles + wordmark + a
+ *  random Tango - shown over an app switch. `palette` matches the active theme so the splash looks
+ *  like the app you're switching into. */
+export default function Splash({ label, palette }: { label?: string; palette: string }): JSX.Element {
   // Fresh pose each mount, i.e. each swap (Splash remounts every switch).
   const pose = useMemo(() => randomPose(), [])
   const bubbles = useMemo(
@@ -18,6 +21,7 @@ export default function Splash({ label }: { label?: string }): JSX.Element {
   )
   return (
     <div className="splash">
+      <GradientBackground palette={palette} />
       <div className="splash-bubbles">
         {bubbles.map((b, i) => (
           <span

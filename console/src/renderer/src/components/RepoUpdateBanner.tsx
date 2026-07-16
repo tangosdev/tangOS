@@ -31,6 +31,14 @@ export default function RepoUpdateBanner({
     setMsg(null)
   }, [repo.path, repo.isGit])
 
+  // Auto-dismiss any transient message (success OR failure) after 10s. A "Couldn't auto-update"
+  // error used to sit in the banner forever; now every message clears itself.
+  useEffect(() => {
+    if (!msg) return
+    const t = setTimeout(() => setMsg(null), 10000)
+    return () => clearTimeout(t)
+  }, [msg])
+
   // (Re-)check on repo change AND whenever the refresh nonce bumps. repo:updateStatus does a real
   // git fetch first, so if a PR merged upstream while the app was open, one refresh clears the
   // "behind"/"diverged" banner. Skipped for ZIP snapshots (case 1 handles those).
@@ -57,7 +65,6 @@ export default function RepoUpdateBanner({
       if (r.ok) {
         setStatus(await window.tangos.repoUpdateStatus())
         setMsg({ text: r.note ? `Updated to the latest. ${r.note}` : 'Updated to the latest.', ok: true })
-        setTimeout(() => setMsg(null), r.note ? 15000 : 4000) // linger if there's a backup path to read
       } else if (r.err && /conflict|rebase/i.test(r.err)) {
         setMsg({ text: "Couldn't auto-update - your local changes conflict with the new upstream work. Nothing was changed; reconcile manually.", ok: false })
       } else {

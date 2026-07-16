@@ -52,7 +52,7 @@ function presenceClass(agent: AiAgent, live: boolean, now: number): string {
 export interface AgentView {
   agent: AiAgent
   batch?: Batch
-  done: number
+  analyzed: number // functions worked through this batch (matched, near-miss, or no-match alike)
   total: number
   task?: string
   live: boolean // has a currently-running tool
@@ -100,7 +100,7 @@ export default function Controller({
   const [busy, setBusy] = useState<Record<string, string>>({}) // name -> loading label
   const [sizes, setSizes] = useState<Record<string, number>>({}) // name -> batch size (-1 = infinite)
   const [notice, setNotice] = useState<string | null>(null) // gentle info toast (e.g. "no work for this role")
-  const [statScope, setStatScope] = useState<'all' | 'run'>('all') // which tally the boxes show
+  const [statScope, setStatScope] = useState<'all' | 'run'>('run') // which tally the boxes show
   const [genTail, setGenTail] = useState('') // the in-flight scheduler's streamed output (one gen at a time)
   const [genLogOpen, setGenLogOpen] = useState(false)
   useEffect(() => window.tangos.onGenOutput(setGenTail), [])
@@ -130,7 +130,9 @@ export default function Controller({
       const batch = batches
         .filter((b) => b.targetAgent === agent.name)
         .sort((a, b) => b.createdAt - a.createdAt)[0]
-      const done = batch ? batch.items.filter((i) => i.done).length : 0
+      // The bar tracks progress THROUGH the batch, not just wins: a target counts as soon as the
+      // agent has worked it (matched, near-miss, or dead end), so the bar advances on every function.
+      const analyzed = batch ? batch.items.filter((i) => i.worked || i.done).length : 0
       const total = batch ? batch.items.length : 0
       const batchDone = batch?.status === 'done'
       // The agent's QUEUE: everything not yet worked through. queueRemaining counts targets the agent
@@ -145,7 +147,7 @@ export default function Controller({
       // Keep the last line up between functions (don't blank when a run finishes) so the box
       // doesn't visibly reset after every function during a scan.
       const liveLine = latest?.output ? lastLine(latest.output) : ''
-      return { agent, batch, done, total, task, live, batchDone, liveLine, queueRemaining, queuedBatches }
+      return { agent, batch, analyzed, total, task, live, batchDone, liveLine, queueRemaining, queuedBatches }
     })
   }, [agents, latestByName, batches])
 
@@ -203,11 +205,11 @@ export default function Controller({
         </button>
         <div style={{ flex: 1 }} />
         <div className="stat-scope" title="Which tally the boxes show">
-          <button className={statScope === 'all' ? 'on' : ''} onClick={() => setStatScope('all')}>
-            All-time
-          </button>
           <button className={statScope === 'run' ? 'on' : ''} onClick={() => setStatScope('run')}>
             This session
+          </button>
+          <button className={statScope === 'all' ? 'on' : ''} onClick={() => setStatScope('all')}>
+            All-time
           </button>
         </div>
         {mcpControl}
@@ -220,11 +222,11 @@ export default function Controller({
         </div>
       ) : (
         <div className="ctl-grid aero-scroll">
-          {views.map(({ agent, batch, done, total, task, live, batchDone, liveLine, queueRemaining, queuedBatches }) => {
+          {views.map(({ agent, batch, analyzed, total, task, live, batchDone, liveLine, queueRemaining, queuedBatches }) => {
             const a = agent
             const st = statScope === 'run' ? a.run ?? a.stats : a.stats // all-time vs this-run tally
             const col = aiColor(a.name)
-            const pct = total ? Math.round((done / total) * 100) : 0
+            const pct = total ? Math.round((analyzed / total) * 100) : 0
             const hit = st.matchAttempts ? Math.round(st.hitRate * 100) : null
             // API providers are always available (we hold the key). Boxes never gray out now -
             // presence is shown by the dot's color (green/yellow/red), not by fading the whole box.
@@ -237,6 +239,9 @@ export default function Controller({
             const driving = a.kind === 'api' && (a.connected || busy[a.name] === 'Driving')
             // Drive appears once there's anything in the queue; it walks the WHOLE queue.
             const canDrive = a.kind === 'api' && queueRemaining > 0 && !isLooping && !driving && !busy[a.name] && !live
+            // Actively working (driving its API, or on a continuous loop). While running, the box
+            // collapses to just a Stop - the role/effort/size/loop/start controls only clutter it.
+            const running = driving || isLooping
             const generating = busy[a.name] === 'Generating batch'
             const rawSize = sizes[a.name] // undefined = empty (use recommended); -1 = loop
             // Reflect the ACTUAL loop state, not just the local ∞ toggle: an MCP agent the main
@@ -289,6 +294,18 @@ export default function Controller({
                   </span>
                   {a.kind === 'api' && <span className="aib-kind">API</span>}
                   {isLooping && <span className="aib-kind loop" title="Matching continuously">∞</span>}
+                  {a.roles.map((r) => (
+                    <span className="role-chip" key={r} title={ROLE_PRESETS[r]}>
+                      {r}
+                      <button
+                        className="role-x"
+                        onClick={() => window.tangos.setClientRoles(a.name, a.roles.filter((x) => x !== r))}
+                        title={`Remove ${r}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
                   <span className="aib-matches">
                     {st.totalMatches}
                     <small> matched</small>
@@ -314,7 +331,7 @@ export default function Controller({
                           <span className="aib-bar">
                             <span style={{ width: `${pct}%`, background: col }} />
                           </span>
-                          {done}/{total} matched · {pct}%
+                          {analyzed}/{total} analyzed · {pct}%
                         </span>
                       )}
                       {liveLine && <span className={`aib-live mono${live ? '' : ' done'}`}>▸ {liveLine}</span>}
@@ -332,152 +349,123 @@ export default function Controller({
                 </div>
 
                 <div className="aib-actions" onClick={(e) => e.stopPropagation()}>
-                  <div className="aib-roles">
-                    {a.roles.map((r) => (
-                      <span className="role-chip" key={r} title={ROLE_PRESETS[r]}>
-                        {r}
-                        <button
-                          className="role-x"
-                          onClick={() => window.tangos.setClientRoles(a.name, a.roles.filter((x) => x !== r))}
-                          title={`Remove ${r}`}
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
-                    <select
-                      className={`agent-role add${a.roles.length === 0 ? ' needs' : ''}`}
-                      value=""
-                      onChange={(e) => {
-                        const r = e.target.value
-                        if (r) window.tangos.setClientRoles(a.name, [...a.roles, r])
-                      }}
-                      title={rec.role ? `Recommended role: ${rec.role} (${rec.why})` : 'Give this agent a role'}
+                  {running ? (
+                    // Working (driving or looping): collapse to a single Stop - the role/effort/size/
+                    // loop/start controls only add clutter and jump the box height while it runs.
+                    <button
+                      className="mini-btn stop aib-stop"
+                      onClick={() => window.tangos.stopAi(a.name)}
+                      title={
+                        driving
+                          ? 'Stop - finishes nothing further; matches found so far are kept'
+                          : "Stop looping - no new batch is queued once the current one finishes; the agent isn't signalled or interrupted"
+                      }
                     >
-                      <option value="">{a.roles.length ? '+ add role' : 'assign role'}</option>
-                      {ROLE_NAMES.filter((r) => r !== 'Unassigned' && !a.roles.includes(r)).map((r) => (
-                        <option key={r} value={r}>
-                          {r}
-                          {ROLE_STRENGTH[r] ? ` (${ROLE_STRENGTH[r]})` : ''}
-                          {r === rec.role ? ' - recommended' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    {(() => {
-                      const spec = effortSpec(a)
-                      return (
+                      <Square size={12} /> Stop
+                    </button>
+                  ) : (
+                    <>
+                      <div className="aib-roles">
                         <select
-                          className="agent-effort"
-                          value={currentEffort(a)}
-                          onChange={(e) => window.tangos.setClientEffort(a.name, e.target.value)}
-                          title={`Reasoning effort${spec.note ? ` - ${spec.note}` : ''}`}
+                          className={`agent-role add${a.roles.length === 0 ? ' needs' : ''}`}
+                          value=""
+                          onChange={(e) => {
+                            const r = e.target.value
+                            if (r) window.tangos.setClientRoles(a.name, [...a.roles, r])
+                          }}
+                          title={rec.role ? `Recommended role: ${rec.role} (${rec.why})` : 'Give this agent a role'}
                         >
-                          {spec.options.map((o) => (
-                            <option key={o} value={o}>
-                              {o}
+                          <option value="">{a.roles.length ? '+ add role' : 'assign role'}</option>
+                          {ROLE_NAMES.filter((r) => r !== 'Unassigned' && !a.roles.includes(r)).map((r) => (
+                            <option key={r} value={r}>
+                              {r}
+                              {ROLE_STRENGTH[r] ? ` (${ROLE_STRENGTH[r]})` : ''}
+                              {r === rec.role ? ' - recommended' : ''}
                             </option>
                           ))}
                         </select>
-                      )
-                    })()}
-                  </div>
-                  <div className="aib-btns">
-                    <input
-                      className="aib-size"
-                      type="number"
-                      min={1}
-                      max={200}
-                      value={loopSel || rawSize == null ? '' : rawSize}
-                      placeholder={loopSel ? '∞' : '16'}
-                      disabled={loopSel}
-                      title={loopSel ? 'Running continuously (∞)' : 'Batch size - leave empty for the recommended 16, max 200'}
-                      onChange={(e) => {
-                        const v = e.target.value.trim()
-                        setSizes((s) => {
-                          const next = { ...s }
-                          if (v === '') delete next[a.name]
-                          else next[a.name] = Math.max(1, Math.min(200, Math.floor(Number(v)) || 1))
-                          return next
-                        })
-                      }}
-                    />
-                    <button
-                      className={`aib-loop${loopSel ? ' on' : ''}`}
-                      title={loopSel ? 'Switch back to one-shot: queue up a set amount instead' : 'Continuous: this AI keeps pulling fresh batches from its queue until you stop it'}
-                      onClick={() =>
-                        setSizes((s) => {
-                          const next = { ...s }
-                          if (loopSel) delete next[a.name]
-                          else next[a.name] = -1
-                          return next
-                        })
-                      }
-                    >
-                      ∞
-                    </button>
-                    {a.kind === 'mcp' && isLooping ? (
-                      // A looping MCP agent self-serves its own work, so there's nothing to "add" -
-                      // the button becomes Stop. This does NOT signal or interrupt the agent: it just
-                      // stops the console from queuing a NEW batch once the current one finishes.
-                      <button
-                        className="mini-btn stop"
-                        onClick={() => window.tangos.stopAi(a.name)}
-                        title="Stop looping - no new batch is queued once the current one finishes. The agent isn't signalled or interrupted; it just stops getting fed."
-                      >
-                        <Square size={12} /> Stop
-                      </button>
-                    ) : (
-                      <button
-                        className="mini-btn"
-                        disabled={generating}
-                        onClick={() => assign(a.name, a.roles[0])}
-                        title={
-                          loopSel
-                            ? 'Start matching: this AI keeps pulling role-fit batches and working them until stopped'
-                            : 'Generate a role-fit batch of this size and add it to the queue - press again to line up more'
-                        }
-                      >
-                        {/* Infinite mode is a plain start button (no count - it never stops). Fixed mode
-                            shows how many are lined up right on the button, so there is no top-of-box chip. */}
-                        <Sparkles size={12} />{' '}
-                        {loopSel
-                          ? 'Start matching'
-                          : queueRemaining > 0
-                            ? `Add to queue (${queueRemaining})`
-                            : 'Add to queue'}
-                      </button>
-                    )}
-                    {!loopSel && queuedBatches > 0 && (
-                      <button
-                        className="aib-clearq"
-                        title="Clear the queue (waiting batches only - the batch being worked isn't touched)"
-                        onClick={() => window.tangos.clearQueue(a.name)}
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                  {cartCount > 0 && (
-                    <button className="mini-btn custom" onClick={() => onAssignCart(a.name)} title="Add the functions you picked in the Chaos Viewer to this AI's queue">
-                      <ShoppingCart size={12} /> Add chosen functions ({cartCount})
-                    </button>
-                  )}
-                  {/* Stop only exists for console-driven API agents (no chat channel to stop them). An
-                      MCP-connected agent is stopped by telling it to stop in chat, so it gets no button. */}
-                  {(() => {
-                    const showStop = a.kind === 'api' && (driving || isLooping)
-                    if (!showStop && !canDrive) return null
-                    return (
-                      <div className="aib-drive-row">
-                        {showStop ? (
+                        {(() => {
+                          const spec = effortSpec(a)
+                          return (
+                            <select
+                              className="agent-effort"
+                              value={currentEffort(a)}
+                              onChange={(e) => window.tangos.setClientEffort(a.name, e.target.value)}
+                              title={`Reasoning effort${spec.note ? ` - ${spec.note}` : ''}`}
+                            >
+                              {spec.options.map((o) => (
+                                <option key={o} value={o}>
+                                  {o}
+                                </option>
+                              ))}
+                            </select>
+                          )
+                        })()}
+                      </div>
+                      <div className="aib-btns">
+                        <input
+                          className="aib-size"
+                          type="number"
+                          min={1}
+                          max={200}
+                          value={loopSel || rawSize == null ? '' : rawSize}
+                          placeholder={loopSel ? '∞' : '16'}
+                          disabled={loopSel}
+                          title={loopSel ? 'Running continuously (∞)' : 'Batch size - leave empty for the recommended 16, max 200'}
+                          onChange={(e) => {
+                            const v = e.target.value.trim()
+                            setSizes((s) => {
+                              const next = { ...s }
+                              if (v === '') delete next[a.name]
+                              else next[a.name] = Math.max(1, Math.min(200, Math.floor(Number(v)) || 1))
+                              return next
+                            })
+                          }}
+                        />
+                        <button
+                          className={`aib-loop${loopSel ? ' on' : ''}`}
+                          title={loopSel ? 'Switch back to one-shot: queue up a set amount instead' : 'Continuous: this AI keeps pulling fresh batches from its queue until you stop it'}
+                          onClick={() =>
+                            setSizes((s) => {
+                              const next = { ...s }
+                              if (loopSel) delete next[a.name]
+                              else next[a.name] = -1
+                              return next
+                            })
+                          }
+                        >
+                          ∞
+                        </button>
+                        <button
+                          className="mini-btn"
+                          disabled={generating}
+                          onClick={() => assign(a.name, a.roles[0])}
+                          title={
+                            loopSel
+                              ? 'Start matching: this AI keeps pulling role-fit batches and working them until stopped'
+                              : 'Generate a role-fit batch of this size and add it to the queue - press again to line up more'
+                          }
+                        >
+                          <Sparkles size={12} />{' '}
+                          {loopSel ? 'Start matching' : queueRemaining > 0 ? `Add to queue (${queueRemaining})` : 'Add to queue'}
+                        </button>
+                        {!loopSel && queuedBatches > 0 && (
                           <button
-                            className="mini-btn stop"
-                            onClick={() => window.tangos.stopAi(a.name)}
-                            title={driving ? 'Stop - finishes nothing further; matches found so far are kept' : 'Stop pulling batches'}
+                            className="aib-clearq"
+                            title="Clear the queue (waiting batches only - the batch being worked isn't touched)"
+                            onClick={() => window.tangos.clearQueue(a.name)}
                           >
-                            <Square size={12} /> Stop
+                            ×
                           </button>
-                        ) : (
+                        )}
+                      </div>
+                      {cartCount > 0 && (
+                        <button className="mini-btn custom" onClick={() => onAssignCart(a.name)} title="Add the functions you picked in the Chaos Viewer to this AI's queue">
+                          <ShoppingCart size={12} /> Add chosen functions ({cartCount})
+                        </button>
+                      )}
+                      {canDrive && (
+                        <div className="aib-drive-row">
                           <button
                             className="mini-btn go"
                             onClick={() => drive(a.name)}
@@ -485,10 +473,10 @@ export default function Controller({
                           >
                             <Play size={12} /> Drive queue ({queueRemaining})
                           </button>
-                        )}
-                      </div>
-                    )
-                  })()}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             )

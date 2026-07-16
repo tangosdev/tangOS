@@ -84,7 +84,7 @@ export default function AiDetail({
     for (const r of mine) m.set(r.toolId, (m.get(r.toolId) ?? 0) + 1)
     return [...m.entries()].sort((a, b) => b[1] - a[1])
   }, [mine])
-  const [scope, setScope] = useState<'all' | 'run'>('all')
+  const [scope, setScope] = useState<'all' | 'run'>('run')
   const s = scope === 'run' ? agent.run ?? agent.stats : agent.stats
   const rec = recommendRole(agent) // aptitude recommendation stays all-time (needs the full history)
   const running = mine.find((r) => r.status === 'running')
@@ -127,11 +127,11 @@ export default function AiDetail({
 
         <div className="aid-scope">
           <div className="stat-scope" title="Which tally these numbers show">
-            <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>
-              All-time
-            </button>
             <button className={scope === 'run' ? 'on' : ''} onClick={() => setScope('run')}>
               This session
+            </button>
+            <button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>
+              All-time
             </button>
           </div>
         </div>
