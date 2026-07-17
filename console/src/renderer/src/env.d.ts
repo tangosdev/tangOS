@@ -52,7 +52,7 @@ export interface TangosApi {
   onDraftAdd(cb: (item: BatchItem) => void): () => void
   githubCredits(): Promise<GithubCredits>
   contributorColors(): Promise<{ colors: Record<string, string>; you: string | null }>
-  setContributorColor(color: string): Promise<{ ok: boolean; error?: string; colors?: Record<string, string> }>
+  proposeContributorColor(color: string): Promise<{ ok: boolean; error?: string; prUrl?: string }>
   githubSignin(): Promise<{ userCode: string; verificationUri: string }>
   onGithubSignedin(cb: (r: { ok: boolean; error?: string }) => void): () => void
   pickRepo(): Promise<RepoState>

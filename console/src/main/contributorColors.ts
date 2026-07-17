@@ -1,11 +1,14 @@
 // Shared contributor colors. `contributor-colors.json` on the decomp repo's default branch maps
 // GitHub login -> hex color. Every console fetches it (raw, TTL-cached, local-clone fallback) and
 // overrides the generated legend palette with it, so a color one contributor picks shows up on
-// EVERYONE's Atlas. Setting a color is gated on being signed into GitHub, edits ONLY the caller's
-// own login key (the merge happens here, server-side of the renderer - the UI can't write anyone
-// else's), and lands through the GitHub Contents API as a direct commit to the default branch.
+// EVERYONE's Atlas. Picking is local-preview only; an explicit Confirm opens a one-file PR (built
+// here from upstream's file plus ONLY the caller's own login key - the UI can't write anyone
+// else's). Direct commits were the v1 and reverted visually: raw.githubusercontent CDN-caches for
+// ~5 min, so the post-save refetch served the stale file and stomped the fresh pick.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pushSubsetToBranch, fetchBase } from './gitsafe'
+import { ensurePullRequest, resolvePushTarget } from './pullRequests'
 
 export const COLORS_FILE = 'contributor-colors.json'
 const HEX = /^#[0-9a-fA-F]{6}$/
@@ -98,53 +101,62 @@ export async function fetchColors(
   return colors
 }
 
-/** Set the CALLER's color: merge their login's key into the upstream file and commit via the
- *  Contents API (base sha handled, so concurrent writers get a clean 409 to retry). Only the
- *  caller's own key can change - the merged file is built here from upstream + one entry. */
-export async function setMyColor(
+/** Confirm the CALLER's color: merge their login's key into upstream's file and open a one-file
+ *  PR (throwaway-index branch push, fork fallback for non-collaborators). Only the caller's own
+ *  key can change - the merged file is built here from upstream + one entry. Also flips the repo's
+ *  delete-branch-on-merge setting (best effort, admin only) so accepted color PRs clean their
+ *  branches up instead of accumulating as unimportant history. */
+export async function openColorPr(
+  repoPath: string,
   slug: { owner: string; repo: string },
   branch: string,
   token: string,
   color: string
-): Promise<{ ok: boolean; login?: string; error?: string }> {
+): Promise<{ ok: boolean; login?: string; prUrl?: string; error?: string }> {
   if (!HEX.test(color)) return { ok: false, error: 'color must be #rrggbb' }
   const login = await viewerLogin(token)
   if (!login) return { ok: false, error: 'could not resolve your GitHub login - sign in again in Settings' }
-  const path = `/repos/${slug.owner}/${slug.repo}/contents/${COLORS_FILE}`
-  // Current file (sha needed for an update; 404 = first color ever, create the file).
-  let sha: string | undefined
+  // Upstream's CURRENT file via the API (not the CDN-cached raw path), so the PR builds on truth.
   let existing: Record<string, string> = {}
-  const cur = await gh(`${path}?ref=${encodeURIComponent(branch)}`, token)
+  const cur = await gh(`/repos/${slug.owner}/${slug.repo}/contents/${COLORS_FILE}?ref=${encodeURIComponent(branch)}`, token)
   if (cur.status === 200) {
-    const j = cur.json as { sha?: string; content?: string; encoding?: string }
-    sha = j.sha
+    const j = cur.json as { content?: string }
     if (j.content) existing = parseColors(Buffer.from(j.content, 'base64').toString('utf8'))
   } else if (cur.status !== 404) {
     return { ok: false, error: `could not read ${COLORS_FILE} (HTTP ${cur.status})` }
   }
-  if (existing[login] === color) return { ok: true, login } // already set - nothing to write
+  if (existing[login] === color) return { ok: true, login } // already upstream - nothing to propose
   const merged = { ...existing, [login]: color }
-  const body = JSON.stringify(merged, null, 2) + '\n'
-  const put = await gh(path, token, {
-    method: 'PUT',
-    body: {
-      message: `chore: contributor color for ${login}`,
-      content: Buffer.from(body, 'utf8').toString('base64'),
-      branch,
-      ...(sha ? { sha } : {})
-    }
+  const bytes = JSON.stringify(merged, null, 2) + '\n'
+  const target = await resolvePushTarget(slug, token)
+  if (!target.ok || !target.slug) return { ok: false, login, error: target.error ?? 'could not resolve a push target' }
+  await fetchBase(repoPath, branch)
+  const head = `tangos/color-${login.toLowerCase().replace(/[^a-z0-9-]/g, '-')}`
+  const pushed = await pushSubsetToBranch(
+    repoPath,
+    head,
+    branch,
+    [COLORS_FILE],
+    `chore: contributor color for ${login}`,
+    target.slug,
+    token,
+    { contents: new Map([[COLORS_FILE, bytes]]) }
+  )
+  if (!pushed.ok) return { ok: false, login, error: `push failed: ${pushed.err.slice(-160)}` }
+  const pr = await ensurePullRequest({
+    owner: slug.owner,
+    repo: slug.repo,
+    head,
+    base: branch,
+    token,
+    headOwner: target.headOwner,
+    title: `Contributor color: ${login}`,
+    body: `Sets ${login}'s contributor color to \`${color}\` in \`${COLORS_FILE}\`. One key only; opened from tangOS Console.`
   })
-  if (put.status === 200 || put.status === 201) {
-    bustColorsCache()
-    return { ok: true, login }
-  }
-  if (put.status === 403 || put.status === 404) {
-    return {
-      ok: false,
-      login,
-      error: 'your GitHub account cannot push to this repo - ask a maintainer to set your color (or get collaborator access)'
-    }
-  }
-  if (put.status === 409) return { ok: false, login, error: 'someone else just updated the colors - try again' }
-  return { ok: false, login, error: `GitHub rejected the update (HTTP ${put.status})` }
+  if (!pr.ok) return { ok: false, login, error: `pushed, but PR failed: ${pr.error}` }
+  // Accepted color PRs are not important history: ask GitHub to auto-delete merged head branches.
+  // Repo-wide setting, admin-token only - non-admins fail silently and a maintainer flips it once.
+  void gh(`/repos/${slug.owner}/${slug.repo}`, token, { method: 'PATCH', body: { delete_branch_on_merge: true } }).catch(() => {})
+  bustColorsCache()
+  return { ok: true, login, prUrl: pr.url }
 }

@@ -43,7 +43,6 @@ export default function AtlasView({
   // which legend entry is YOURS (the signed-in GitHub login - only that one gets a picker).
   const [sharedColors, setSharedColors] = useState<Record<string, string>>({})
   const [myLogin, setMyLogin] = useState<string | null>(null)
-  const [colorErr, setColorErr] = useState<string | null>(null)
   const [recentStems, setRecentStems] = useState<Set<string>>(new Set()) // fn names matched in last 24h
 
   useEffect(() => {
@@ -71,24 +70,33 @@ export default function AtlasView({
     }
   }, [])
 
-  // Pick YOUR color: recolor locally right away, then save debounced (the color input fires per
-  // drag tick - one commit per pick, not per tick). On failure, refetch truth and say why.
-  const colorSaveTimer = useRef<number | null>(null)
+  // Pick YOUR color: purely visual until confirmed. Picking recolors the map locally (nothing
+  // saved, nothing pushed); the confirm button then opens a one-file PR and persists the pick
+  // locally so it never reverts while the PR waits to merge.
+  const [colorDraft, setColorDraft] = useState<string | null>(null)
+  const [colorBusy, setColorBusy] = useState(false)
+  const [colorNote, setColorNote] = useState<string | null>(null)
   function pickMyColor(hex: string): void {
     if (!myLogin) return
     const login = myLogin
-    setSharedColors((c) => ({ ...c, [login]: hex }))
-    if (colorSaveTimer.current) window.clearTimeout(colorSaveTimer.current)
-    colorSaveTimer.current = window.setTimeout(() => {
-      void window.tangos.setContributorColor(hex).then((r) => {
-        if (r.ok && r.colors) setSharedColors(r.colors)
-        else if (!r.ok) {
-          setColorErr(r.error ?? 'could not save your color')
-          window.setTimeout(() => setColorErr(null), 6000)
-          window.tangos.contributorColors().then((x) => setSharedColors(x.colors)).catch(() => {})
-        }
-      })
-    }, 800)
+    setColorDraft(hex)
+    setSharedColors((c) => ({ ...c, [login]: hex })) // local preview only
+  }
+  async function confirmMyColor(): Promise<void> {
+    if (!colorDraft) return
+    setColorBusy(true)
+    try {
+      const r = await window.tangos.proposeContributorColor(colorDraft)
+      if (r.ok) {
+        setColorDraft(null)
+        setColorNote(r.prUrl ? 'color PR opened - it shows for everyone once merged' : 'color already set upstream')
+      } else {
+        setColorNote(r.error ?? 'could not open the color PR')
+      }
+    } finally {
+      setColorBusy(false)
+      window.setTimeout(() => setColorNote(null), 8000)
+    }
   }
 
   const pickColorBy = (c: 'status' | 'author'): void => {
@@ -298,17 +306,29 @@ export default function AtlasView({
                   )}
                 </button>
                 {myLogin && name.toLowerCase() === myLogin.toLowerCase() && (
-                  <input
-                    type="color"
-                    className="contrib-color"
-                    value={authorColors.get(name) ?? '#8896a5'}
-                    title="Pick your contributor color - it commits to the repo and shows on everyone's Atlas"
-                    onChange={(e) => pickMyColor(e.target.value)}
-                  />
+                  <>
+                    <input
+                      type="color"
+                      className="contrib-color"
+                      value={authorColors.get(name) ?? '#8896a5'}
+                      title="Preview your contributor color (local only until you confirm)"
+                      onChange={(e) => pickMyColor(e.target.value)}
+                    />
+                    {colorDraft && (
+                      <button
+                        className="mini-btn contrib-confirm"
+                        disabled={colorBusy}
+                        onClick={confirmMyColor}
+                        title="Confirm: opens a small PR setting your color for everyone"
+                      >
+                        {colorBusy ? 'opening PR…' : 'confirm'}
+                      </button>
+                    )}
+                  </>
                 )}
               </span>
             ))}
-            {colorErr && <span className="hint" style={{ margin: 0, color: '#b91c1c' }}>{colorErr}</span>}
+            {colorNote && <span className="hint" style={{ margin: 0 }}>{colorNote}</span>}
             {authorFilter && (
               <button className="mini-btn" style={{ flex: 'none' }} onClick={() => setAuthorFilter(null)}>clear</button>
             )}
