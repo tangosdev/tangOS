@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { FolderOpen, Bug, ChevronRight, Trash2 } from 'lucide-react'
-import type { RepoState, BackgroundPrefs } from '../../../shared/types'
+import type { RepoState, BackgroundPrefs, MatchingPrefs } from '../../../shared/types'
 import KeyVault from './KeyVault'
 import SyncRepo from './SyncRepo'
 
@@ -56,7 +56,9 @@ export default function Settings({
   agentFanout,
   autoLand,
   bgPrefs,
-  onBgPrefs
+  onBgPrefs,
+  matchingPrefs,
+  onMatchingPrefs
 }: {
   repo: RepoState | null
   theme: string
@@ -69,6 +71,8 @@ export default function Settings({
   autoLand: boolean
   bgPrefs: BackgroundPrefs
   onBgPrefs: (p: Partial<BackgroundPrefs>) => void
+  matchingPrefs: MatchingPrefs
+  onMatchingPrefs: (p: Partial<MatchingPrefs>) => void
 }): JSX.Element {
   const fanout = agentFanout ?? 8
   return (
@@ -86,6 +90,31 @@ export default function Settings({
         throwing away local edits, custom/untracked files, and unpushed commits. Use it when your clone
         has drifted behind main and batches keep coming up short. Your extracted ROM, dependencies, and{' '}
         <code>.env</code> are kept, and the <b>Back up first</b> button saves everything it would delete.
+      </Info>
+
+      <div className="section-title" style={{ marginTop: 14 }}>Matching drafts</div>
+      <label className="settings-check" style={{ marginTop: 8 }}>
+        <input
+          type="checkbox"
+          checked={matchingPrefs.allowNearMiss}
+          onChange={(e) => onMatchingPrefs({ allowNearMiss: e.target.checked })}
+        />
+        <span>Allow near-miss tips</span>
+      </label>
+      <label className="settings-check" style={{ marginTop: 6 }}>
+        <input
+          type="checkbox"
+          checked={matchingPrefs.allowGhidra}
+          onChange={(e) => onMatchingPrefs({ allowGhidra: e.target.checked })}
+        />
+        <span>Allow Ghidra scaffolds</span>
+      </label>
+      <Info>
+        Same idea as Chaos Viewer&apos;s draft toggles. These do <b>not</b> paste tip C, disasm, or
+        Ghidra into the agent message — agents call tools / open files when ON. When near-miss is OFF,
+        <code> nearmiss_*</code> tools are hidden on the next MCP session. Restart MCP (or reconnect
+        the agent) after flipping Near-miss so the tool list updates. Ghidra policy applies on the
+        next <code>next_batch</code> immediately.
       </Info>
 
       <div className="section-title" style={{ marginTop: 14 }}>Theme</div>

@@ -5,9 +5,18 @@ import { z, type ZodTypeAny } from 'zod'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
-import type { TangosDescriptor, TangosRuntime, TangosTool, Batch, BatchItem, RunResult, ConnectedClient } from '../shared/types'
+import type {
+  TangosDescriptor,
+  TangosRuntime,
+  TangosTool,
+  Batch,
+  BatchItem,
+  RunResult,
+  ConnectedClient,
+  MatchingPrefs
+} from '../shared/types'
 import { ROLE_PRESETS } from '../shared/types'
-import { attemptTreeEnabled, matchConventionsGuide } from './matchConventions'
+import { attemptTreeEnabled, defaultMatchingPrefs, matchConventionsGuide } from './matchConventions'
 
 // Re-export so consumers can observe the exact bus instance runTool publishes to.
 export { activityBus } from './activityBus'
@@ -26,6 +35,8 @@ export interface McpContext {
   runtime: TangosRuntime
   allowMutations: boolean
   enabledToolIds?: string[]
+  /** Operator draft-source toggles (near-miss / Ghidra). Affects next_batch policy + tool filter. */
+  matchingPrefs?: MatchingPrefs
   batchApi?: BatchApi
   // main supplies the runner so it can wrap mutating runs in safe-mode git handling
   run: (
@@ -34,6 +45,11 @@ export interface McpContext {
     source: 'ai' | 'user',
     client?: { name: string; role?: string }
   ) => Promise<RunResult>
+}
+
+/** Tip-store tools hidden when Near-miss is OFF (agent should not call them). */
+function isNearMissTool(id: string): boolean {
+  return id === 'nearmiss_list' || id === 'nearmiss_stats' || id.startsWith('nearmiss_')
 }
 
 /** Normalize an MCP client name to a friendly AI label. */
@@ -234,9 +250,12 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
     instructions ? { instructions } : undefined
   )
   const enabled = new Set(ctx.enabledToolIds ?? ctx.descriptor.tools.map((t) => t.id))
+  const mprefs = ctx.matchingPrefs ?? defaultMatchingPrefs(ctx.descriptor.project)
 
   for (const tool of ctx.descriptor.tools) {
     if (!enabled.has(tool.id)) continue
+    // Operator toggle: near-miss OFF → do not expose tip-store tools over MCP.
+    if (!mprefs.allowNearMiss && isNearMissTool(tool.id)) continue
     server.tool(tool.id, describeTool(tool), zodForArg(tool), async (input: Record<string, unknown>) => {
       const c = getClient()
       const res = await getCtx().run(tool, input ?? {}, 'ai', c ? { name: c.name, role: c.roles[0] } : undefined)
@@ -305,8 +324,13 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
         const submitNote = submitting
           ? `\n\n[what may land in src/ - AGENTS.md has the full format]\n${submitting}`
           : ''
-        // Attempt-tree / Ghidra / near-miss DB rules once per batch (not per target).
-        const loggingNote = matchConventionsGuide(desc, b.items.length || 1)
+        // Draft-source policy + optional attempt-tree rules once per batch (not per target).
+        // Never inlines disasm / tip C / Ghidra C — only whether the agent may call tools for them.
+        const live = getCtx()
+        const loggingNote = matchConventionsGuide(desc, {
+          batchSize: b.items.length || 1,
+          prefs: live.matchingPrefs ?? defaultMatchingPrefs(desc.project)
+        })
         return {
           content: [
             {

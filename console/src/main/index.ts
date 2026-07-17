@@ -7,7 +7,10 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, watch, existsSync, unlinkSync, mkdirSync, type FSWatcher } from 'node:fs'
 import { activityBus } from './activityBus'
 import { McpManager, normalizeName } from './mcpServer'
-import { matchConventionsConnectBlurb } from './matchConventions'
+import {
+  defaultMatchingPrefs,
+  matchConventionsConnectBlurb
+} from './matchConventions'
 import { loadDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
 import { registerAll, cliCommand } from './connect'
@@ -38,7 +41,7 @@ import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
   Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
-  SyncPreview, ViewerPrefs, BackgroundPrefs
+  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs
 } from '../shared/types'
 
 const DEFAULT_PORT = 4808
@@ -803,6 +806,8 @@ let bgPrefs: BackgroundPrefs = { enabled: true }
 // Your confirmed contributor color: overlays your own legend entry immediately (and across
 // restarts) while the color PR waits to merge, so the pick never visually reverts.
 let myContributorColor: string | null = null
+// Draft-source toggles for agents (near-miss tips / Ghidra scaffolds). Policy only — never paste C.
+let matchingPrefs: MatchingPrefs = { allowNearMiss: true, allowGhidra: false }
 function settingsFile(): string {
   return join(app.getPath('userData'), 'tangos-settings.json')
 }
@@ -826,6 +831,7 @@ function saveSettings(): void {
         viewerPrefs,
         bgPrefs,
         myContributorColor,
+        matchingPrefs,
         // Whether the MCP server is on RIGHT NOW = whether the user last left it on. The next
         // launch auto-starts it (update restarts kept killing agents' connection point).
         mcpRunning: !!mcp.url
@@ -851,6 +857,7 @@ function loadSettings(): {
   viewerPrefs?: Partial<ViewerPrefs>
   bgPrefs?: Partial<BackgroundPrefs>
   myContributorColor?: string | null
+  matchingPrefs?: Partial<MatchingPrefs>
   mcpRunning?: boolean
 } {
   try {
@@ -866,6 +873,7 @@ const mcp = new McpManager(() => ({
   runtime: currentRuntime(),
   allowMutations: state.allowMutations,
   enabledToolIds: state.enabledToolIds,
+  matchingPrefs,
   batchApi: { next: pullNextBatch, wait: waitForBatch, list: () => state.batches },
   run: runToolSafely
 }))
@@ -1219,6 +1227,11 @@ function setRepo(path: string | null): RepoState {
   }
   // Default: every tool in the new descriptor is enabled (exposed to the AI).
   state.enabledToolIds = state.descriptor ? state.descriptor.tools.map((t) => t.id) : []
+  // Seed Ghidra toggle from the repo's matchConventions when opening a repo (near-miss stays as user left it).
+  if (state.descriptor) {
+    const d = defaultMatchingPrefs(state.descriptor.project)
+    matchingPrefs = { ...matchingPrefs, allowGhidra: d.allowGhidra }
+  }
   // Batches + pending reviews are repo-specific; reset for the new repo.
   state.batches = []
   state.reviews = []
@@ -1425,6 +1438,16 @@ ipcMain.handle('viewer:setPrefs', (_e, p: Partial<ViewerPrefs>): ViewerPrefs => 
   }
   saveSettings()
   return viewerPrefs
+})
+
+ipcMain.handle('matching:getPrefs', (): MatchingPrefs => matchingPrefs)
+ipcMain.handle('matching:setPrefs', (_e, p: Partial<MatchingPrefs>): MatchingPrefs => {
+  if (typeof p?.allowNearMiss === 'boolean') matchingPrefs.allowNearMiss = p.allowNearMiss
+  if (typeof p?.allowGhidra === 'boolean') matchingPrefs.allowGhidra = p.allowGhidra
+  saveSettings()
+  // next_batch policy is live via getCtx(); tool list is fixed per MCP session —
+  // agent should reconnect (or restart MCP) after flipping Near-miss so nearmiss_* hide/show.
+  return matchingPrefs
 })
 
 ipcMain.handle('bg:getPrefs', (): BackgroundPrefs => bgPrefs)
@@ -2908,6 +2931,16 @@ app.whenReady().then(() => {
   }
   bgPrefs = { enabled: typeof saved.bgPrefs?.enabled === 'boolean' ? saved.bgPrefs.enabled : bgPrefs.enabled }
   myContributorColor = typeof saved.myContributorColor === 'string' ? saved.myContributorColor : null
+  matchingPrefs = {
+    allowNearMiss:
+      typeof saved.matchingPrefs?.allowNearMiss === 'boolean'
+        ? saved.matchingPrefs.allowNearMiss
+        : matchingPrefs.allowNearMiss,
+    allowGhidra:
+      typeof saved.matchingPrefs?.allowGhidra === 'boolean'
+        ? saved.matchingPrefs.allowGhidra
+        : matchingPrefs.allowGhidra
+  }
   setReportsEnabled(state.reportsEnabled)
   ensureTips()
   ensureTour()

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Settings2, FolderOpen, RefreshCw, MessageCircle, Bug } from 'lucide-react'
 import type {
-  RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchItem, Review, AiAgent, BackgroundPrefs
+  RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchItem, Review, AiAgent, BackgroundPrefs,
+  MatchingPrefs
 } from '../../shared/types'
 import RepoPicker from './components/RepoPicker'
 import DescriptorGate from './components/DescriptorGate'
@@ -69,6 +70,10 @@ export default function App(): JSX.Element {
   const [bugOpen, setBugOpen] = useState(false)
   const [encyOpen, setEncyOpen] = useState(false) // the tools Encyclopedia overlay (footer paper button)
   const [bgPrefs, setBgPrefs] = useState<BackgroundPrefs>({ enabled: true })
+  const [matchingPrefs, setMatchingPrefs] = useState<MatchingPrefs>({
+    allowNearMiss: true,
+    allowGhidra: false
+  })
   const popRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef<HTMLDivElement>(null)
 
@@ -151,10 +156,15 @@ export default function App(): JSX.Element {
   useEffect(() => {
     window.tangos.appVersion().then(setVersion).catch(() => {})
     window.tangos.bgPrefsGet().then(setBgPrefs).catch(() => {})
+    window.tangos.matchingPrefsGet().then(setMatchingPrefs).catch(() => {})
   }, [])
 
   async function updateBgPrefs(p: Partial<BackgroundPrefs>): Promise<void> {
     setBgPrefs(await window.tangos.bgPrefsSet(p))
+  }
+
+  async function updateMatchingPrefs(p: Partial<MatchingPrefs>): Promise<void> {
+    setMatchingPrefs(await window.tangos.matchingPrefsSet(p))
   }
 
   useEffect(() => {
@@ -397,6 +407,8 @@ export default function App(): JSX.Element {
                     autoLand={autoLand}
                     bgPrefs={bgPrefs}
                     onBgPrefs={updateBgPrefs}
+                    matchingPrefs={matchingPrefs}
+                    onMatchingPrefs={updateMatchingPrefs}
                   />
                 )}
               </div>

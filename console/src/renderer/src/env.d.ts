@@ -47,6 +47,10 @@ export interface TangosApi {
   viewerPrefsSet(p: Partial<ViewerPrefs>): Promise<ViewerPrefs>
   bgPrefsGet(): Promise<BackgroundPrefs>
   bgPrefsSet(p: Partial<BackgroundPrefs>): Promise<BackgroundPrefs>
+  matchingPrefsGet(): Promise<import('../../shared/types').MatchingPrefs>
+  matchingPrefsSet(
+    p: Partial<import('../../shared/types').MatchingPrefs>
+  ): Promise<import('../../shared/types').MatchingPrefs>
   openModulePopout(module: string): Promise<void>
   addDraftItem(item: BatchItem): Promise<void>
   onDraftAdd(cb: (item: BatchItem) => void): () => void

@@ -5,9 +5,19 @@
  * tip store, Ghidra scaffold policy, and SHARED DEFAULTS for provenance — so a
  * batch does not re-paste model/harness/sessionScope on every target.
  *
- * Style: free-text blocks like knownWalls / submitting; opt-in via tangos.json.
+ * Draft sources are NEVER inlined into next_batch (no pasted disasm / tip C /
+ * Ghidra C). Agents call tools (worklist, nearmiss_*, disasm) or open files when
+ * operator toggles allow it.
+ *
+ * Style: free-text blocks like knownWalls / submitting; opt-in via tangos.json
+ * + Console MatchingPrefs switches.
  */
-import type { TangosDescriptor, TangosMatchConventions, TangosProject } from '../shared/types'
+import type {
+  MatchingPrefs,
+  TangosDescriptor,
+  TangosMatchConventions,
+  TangosProject
+} from '../shared/types'
 
 export function conventionsOf(project?: TangosProject | null): TangosMatchConventions | null {
   const c = project?.matchConventions
@@ -19,39 +29,91 @@ export function attemptTreeEnabled(project?: TangosProject | null): boolean {
   return !!conventionsOf(project)?.attemptTree
 }
 
-function paths(c: TangosMatchConventions): {
+/** Defaults when the operator has not set app prefs yet. */
+export function defaultMatchingPrefs(project?: TangosProject | null): MatchingPrefs {
+  const c = conventionsOf(project)
+  return {
+    allowNearMiss: true,
+    // Ghidra off unless the descriptor opts in — matches conservative EP/viewer defaults.
+    allowGhidra: !!c?.ghidraDrafts
+  }
+}
+
+function paths(c: TangosMatchConventions | null): {
   attempts: string
   provenance: string
   nearMiss: string
 } {
   return {
-    attempts: c.attemptsPath?.trim() || 'config/match_attempts.jsonl',
-    provenance: c.provenancePath?.trim() || 'config/match_provenance.jsonl',
-    nearMiss: c.nearMissDb?.trim() || 'nearmiss/db.jsonl'
+    attempts: c?.attemptsPath?.trim() || 'config/match_attempts.jsonl',
+    provenance: c?.provenancePath?.trim() || 'config/match_provenance.jsonl',
+    nearMiss: c?.nearMissDb?.trim() || 'nearmiss/db.jsonl'
   }
+}
+
+export type MatchGuideOpts = {
+  batchSize?: number
+  /** Operator toggles; when omitted, allow near-miss on / ghidra from descriptor. */
+  prefs?: MatchingPrefs | null
 }
 
 /**
  * One-shot guide appended to next_batch (and optionally MCP instructions).
- * Empty when attemptTree is off — classic repos stay unchanged.
+ * Always emits DRAFT SOURCE POLICY when prefs are provided; full attempt-tree
+ * block only when attemptTree is on.
  */
-export function matchConventionsGuide(desc: TangosDescriptor, batchSize = 1): string {
+export function matchConventionsGuide(desc: TangosDescriptor, opts: MatchGuideOpts | number = 1): string {
+  // Back-compat: older call sites passed batchSize as the 2nd arg.
+  const batchSize = typeof opts === 'number' ? opts : (opts.batchSize ?? 1)
+  const prefsIn = typeof opts === 'number' ? null : opts.prefs
+  const prefs = prefsIn ?? defaultMatchingPrefs(desc.project)
   const c = conventionsOf(desc.project)
-  if (!c?.attemptTree) return ''
-
   const { attempts, provenance, nearMiss } = paths(c)
-  const model = c.defaultProvenance?.model?.trim() || 'grok-4.5'
-  const reasoning = c.defaultProvenance?.reasoning?.trim() || 'high'
-  const harness = c.defaultProvenance?.harness?.trim() || 'grok-build'
-  const sessionScope = batchSize <= 1 ? 'focused' : 'batch'
-  const ghidra = !!c.ghidraDrafts
+
+  const allowNear = prefs.allowNearMiss !== false
+  const allowGhidra = !!prefs.allowGhidra
+
   const hasNearMissTool = !!desc.tools?.some(
     (t) => t.id === 'nearmiss_list' || t.id === 'nearmiss_stats' || /nearmiss_db/.test(t.command || '')
   )
   const hasLogTool = !!desc.tools?.some((t) => t.id === 'log_attempt' || /log_attempt/.test(t.command || ''))
-  const hasBankTool = !!desc.tools?.some((t) => t.id === 'bank' || t.id === 'agent_bank' || /\bbank\.py\b/.test(t.command || ''))
+  const hasBankTool = !!desc.tools?.some(
+    (t) => t.id === 'bank' || t.id === 'agent_bank' || /\bbank\.py\b/.test(t.command || '')
+  )
+
+  const policy: string[] = [
+    '',
+    '======================================================================',
+    'DRAFT SOURCES (operator toggles — this batch)',
+    '======================================================================',
+    'Do NOT expect disasm / near-miss C / Ghidra C to be pasted into this message.',
+    'Pull context with tools (worklist, disasm, nearmiss_*) or local files when allowed.',
+    '',
+    allowNear
+      ? `Near-miss tips: ON — you MAY use ${nearMiss}` +
+        (hasNearMissTool ? ' and nearmiss_* tools' : '') +
+        '. Keep compiling tip C; never bank non-reproducing C as a green src/ match. Set usedNearMissDraft when you used a tip.'
+      : 'Near-miss tips: OFF — do NOT open nearmiss/db.jsonl, nearmiss_* tools, or // NONMATCHING tip C for these targets. usedNearMissDraft=false.',
+    allowGhidra
+      ? 'Ghidra: ON — local ghidra_out/0x….c is structure/types only. REWRITE until verify MATCH; never bank decompiler C as-is. Set usedGhidraDraft when used.'
+      : 'Ghidra: OFF — do NOT open ghidra_out/ or GHIDRA SCAFFOLD files. usedGhidraDraft=false.'
+  ]
+
+  if (allowNear && desc.project.nearMissNote) {
+    policy.push(`Near-miss note: ${desc.project.nearMissNote}`)
+  }
+
+  if (!c?.attemptTree) {
+    return policy.join('\n')
+  }
+
+  const model = c.defaultProvenance?.model?.trim() || 'grok-4.5'
+  const reasoning = c.defaultProvenance?.reasoning?.trim() || 'high'
+  const harness = c.defaultProvenance?.harness?.trim() || 'grok-build'
+  const sessionScope = batchSize <= 1 ? 'focused' : 'batch'
 
   const lines: string[] = [
+    ...policy,
     '',
     '======================================================================',
     'MATCH LOGGING (attempt tree) — once for this batch',
@@ -86,23 +148,15 @@ export function matchConventionsGuide(desc: TangosDescriptor, batchSize = 1): st
     'Per target, emit a slim node (fill status / attemptId / parent / base / draft flags);',
     'paste SHARED DEFAULTS for sessionScope, batchSize, author, matchProvenance.',
     '',
-    `Stores: attempts → ${attempts}; final how on bank → ${provenance};`,
-    `near-miss tips → ${nearMiss}.`,
+    `Stores: attempts → ${attempts}; final how on bank → ${provenance}.`,
     hasLogTool
-      ? 'Log tries with the log_attempt tool (or tools/log_attempt.py). Prefer --src on near_miss so tip C lands in the near-miss DB.'
-      : `Log tries by appending YAML/JSON nodes operators ingest into ${attempts} (tools/log_attempt.py when present).`,
+      ? 'Log tries with the log_attempt tool (or tools/log_attempt.py). Prefer --src on near_miss so tip C lands in the near-miss DB (when Near-miss tips are ON).'
+      : `Log tries by appending nodes operators ingest into ${attempts} (tools/log_attempt.py when present).`,
     hasBankTool
       ? 'On MATCH: bank via the bank tool (provenance required for AI: model + reasoning + harness). Bank is NOT a new try.'
-      : 'On MATCH: promote verified C to src/ and stamp provenance when the repo provides a bank path.',
-    hasNearMissTool
-      ? 'Near-misses: keep compiling C; list/update tips via nearmiss_* tools — never park non-reproducing C as a green src/ match.'
-      : `Near-misses: keep compiling C in ${nearMiss}; never commit non-reproducing C as a matched src/ file.`,
-    ghidra
-      ? 'Ghidra: local ghidra_out/0x….c (or GHIDRA SCAFFOLD text) is structure-only — rewrite until verify MATCH; never bank decompiler C as-is. Set usedGhidraDraft when you used it.'
-      : 'Ghidra scaffolds: off for this repo (matchConventions.ghidraDrafts). Do not open ghidra_out/ unless the operator turns that on.',
-    desc.project.nearMissNote ? `Near-miss note: ${desc.project.nearMissNote}` : ''
+      : 'On MATCH: promote verified C to src/ and stamp provenance when the repo provides a bank path.'
   ]
-  return lines.filter((l) => l !== null && l !== undefined).join('\n')
+  return lines.join('\n')
 }
 
 /** Short blurb for the copyable agent connect prompt (agentPrompt). */

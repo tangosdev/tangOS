@@ -41,6 +41,11 @@ const api = {
   viewerPrefsSet: (p: Partial<ViewerPrefs>): Promise<ViewerPrefs> => ipcRenderer.invoke('viewer:setPrefs', p),
   bgPrefsGet: (): Promise<BackgroundPrefs> => ipcRenderer.invoke('bg:getPrefs'),
   bgPrefsSet: (p: Partial<BackgroundPrefs>): Promise<BackgroundPrefs> => ipcRenderer.invoke('bg:setPrefs', p),
+  matchingPrefsGet: (): Promise<import('../shared/types').MatchingPrefs> =>
+    ipcRenderer.invoke('matching:getPrefs'),
+  matchingPrefsSet: (
+    p: Partial<import('../shared/types').MatchingPrefs>
+  ): Promise<import('../shared/types').MatchingPrefs> => ipcRenderer.invoke('matching:setPrefs', p),
   openModulePopout: (module: string): Promise<void> => ipcRenderer.invoke('atlas:popout', module),
   addDraftItem: (item: BatchItem): Promise<void> => ipcRenderer.invoke('draft:addItem', item),
   onDraftAdd: (cb: (item: BatchItem) => void): (() => void) => {

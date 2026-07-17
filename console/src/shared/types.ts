@@ -424,6 +424,18 @@ export interface ViewerPrefs {
   contributorColors: boolean
 }
 
+/**
+ * Session/app toggles for draft sources (like Chaos Viewer prompt checkboxes).
+ * Do NOT paste disasm/near-miss/Ghidra C into next_batch — agents call tools / open
+ * files when allowed. These flags only change the policy text + which tip tools are exposed.
+ */
+export interface MatchingPrefs {
+  /** Allow near-miss tip store / nearmiss_* tools. Default true. */
+  allowNearMiss: boolean
+  /** Allow ghidra_out scaffolds as structure hints. Default false unless descriptor says on. */
+  allowGhidra: boolean
+}
+
 /** Animated gradient-background preference persisted in tangos-settings.json. Whether the
  *  theme background drifts (mesh-gradient + bubbles) vs. renders flat; the palette itself
  *  follows the active theme (see paletteForTheme). */
