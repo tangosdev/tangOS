@@ -7,6 +7,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import type { TangosDescriptor, TangosRuntime, TangosTool, Batch, BatchItem, RunResult, ConnectedClient } from '../shared/types'
 import { ROLE_PRESETS } from '../shared/types'
+import { attemptTreeEnabled, matchConventionsGuide } from './matchConventions'
 
 // Re-export so consumers can observe the exact bus instance runTool publishes to.
 export { activityBus } from './activityBus'
@@ -162,14 +163,15 @@ const WORK_GUIDE_DEFAULT =
   '\n\nHOW TO WORK EACH TARGET (never end a turn on a failed call):\n' +
   'FIRST - this is a WORK turn, not a planning turn. The batch is your go-ahead (do not ask permission to start; a matching session overrides any "ask before coding" habit). Your very next output is tool calls (pull context, write C, fdiff), NOT tool-schema shopping beyond a single missing tool, a todo list, a plan, or a status report. If agents mode is on, actually SPAWN the sub-agents now (~8 targets each) - planning the split in a todo is not doing it; the spawn is the work.\n' +
   '1. Every target has a ready `match` call above (required args: c, func, addr, size). Use it verbatim - never omit `c`.\n' +
-  '2. BEFORE any match/fdiff/falign on a target, make sure its `c` candidate file EXISTS. If it does not, CREATE the draft first from `worklist --addr <addr> --pretty` (or disasm / chaos-db.json). Never diff a file you have not created - that is the #1 avoidable error (FileNotFoundError).\n' +
+  '2. BEFORE any match/fdiff on a target, make sure its `c` candidate file EXISTS. If it does not, CREATE the draft first from `worklist --addr <addr> --pretty` (or disasm / chaos-db.json). Never diff a file you have not created - that is the #1 avoidable error (FileNotFoundError).\n' +
   '3. On ANY tool error - validation (-32602), compile failure, OR missing-file/FileNotFoundError - diagnose and RETRY in the SAME turn (check tangos.json tools[] for required args if unsure). A turn may only end on a successful call or an explicit "blocked because X" hand-off sentence - never right after a failed call.\n' +
-  '4. For first-pass triage use `fdiff` with `"quiet": true` (returns just `mismatches=N/total`) - do NOT lean on match\'s full byte dump or `brief` to triage. Pull the full diff only once you are fixing a specific block. `falign` handles size-mismatched candidates but is EXPENSIVE on large functions - pass `"quiet": true` or `"limit": 1` and fix the earliest diverging block first.\n' +
+  '4. For first-pass triage use `fdiff` with `"quiet": true` (returns just `mismatches=N/total`) - do NOT lean on match\'s full byte dump or `brief` to triage. Pull the full diff only once you are fixing a specific block. If the repo exposes `falign`, use it for size-mismatched candidates (quiet/limit); otherwise stay on fdiff + rewrite until sizes match.\n' +
   '5. Overlay (ov*) targets: keep the `module` in the ready call - it auto-loads the overlay binary, so you do NOT need bin/base. (If overlay bytes read back empty/0, your repo is a stale ZIP snapshot - use a fresh `git clone`.) Run heavy tools one at a time; pass `"brief": true` for large functions.\n' +
   '6. End EVERY working turn with a one-line status: what you just did, the current best divergence, and the single next action. Never end a turn silently after a tool result - and a mid-batch status question from the human is not a stop: answer in one line, then keep tool-calling.\n' +
   '7. When these targets are done, call `next_batch` for more IN THE SAME TURN. "Done" means THIS BATCH, not the session: finishing is a checkpoint, NEVER a stopping point - whether you landed 0 matches or several. Do NOT end the turn on a human-facing session summary / results table, and NEVER ask whether to continue or re-park ("say if you want another loop" is the exact wrong move) - landing matches does not earn a stop, and cost/overrun is the console\'s job (it queues the work), not yours. Only an explicit human "stop" ends the loop. next_batch BLOCKS until there is work (or ~45s), so just call it - no waiting, sleeping, or heartbeat loop. If it returns empty (a timeout), your entire next response is one more next_batch call to keep parking - no worklist, coddog, notes, or self-assigned targets. After several empty waits it tells you to hand back.\n' +
   '8. Coordination is automatic - do NOT claim or push anything yourself. Your batch is already yours (the console hands each agent a distinct set), and when the operator is signed into GitHub the console auto-collects your matched files and opens a per-agent PR. Just match the targets; landing + PRs are handled for you.\n' +
   '9. Stay in your lane: edit source ONLY for the targets above. If an edit regresses a function (worse diff or bigger size), REVERT it - never leave a tracked source file worse than you found it. Keep scratch files, notes, and session reports in a temp/scratch dir, NEVER inside the repo or beside source files.\n' +
+  '10. If this batch includes MATCH LOGGING rules below, emit one MATCH_RESULT node per target for every try (including no_progress). Copy SHARED DEFAULTS once - do not re-invent provenance fields per function.\n' +
   'Fallback if native MCP tools are unavailable in your client: run `npx tsx scripts/mcp-run.mts <calls.json> <your-name>` (e.g. grok) from the tangOS console dir, where calls.json is [{"tool":"match","args":{...}}]. Pass your name so the live viewer tags your runs correctly (omitting it shows "agent").'
 
 // Grok profile: short imperative lines with explicit `tool { args }` framing. Note step 2 forces
@@ -181,11 +183,12 @@ const WORK_GUIDE_GROK =
   '1. File check: candidate `c` must exist. Missing -> create it FIRST via `worklist --addr <addr> --pretty` (or `disasm`), save to `c`. Never fdiff/match a file you did not create (FileNotFoundError = top wasted turn).\n' +
   '2. Triage: fdiff { c, name: <func>, addr, size, module, quiet: true }. For overlays copy the ovNNN module from the ready `match` call (an ov* module auto-loads its binary - no bin/base); arm9/main targets default to arm9, so module is optional there. Do NOT triage off match\'s full dump.\n' +
   '3. Fix the earliest mismatch, re-run fdiff. On ANY error (-32602, compile fail, missing file): fix and RETRY the SAME turn (see tangos.json tools[] for required args). End a turn only on a success or an explicit "blocked because X".\n' +
-  '4. Size mismatch: `falign { ..., quiet: true }` (or limit:1) to line them up, fix the earliest block. Confirm a match with `match { c, func, addr, size }` - never omit `c`. //cpp files: first line must be exactly //cpp; fdiff/match switch to C++ automatically.\n' +
-  '5. mismatches=0 -> leave `c` in src/ as a real match. Near-miss / nonmatching -> write to the nearmiss DB (tools/nearmiss_db.py), NOT a fake green src/ file. Edit regressed it (worse diff / bigger size)? REVERT.\n' +
+  '4. Size mismatch: rewrite until sizes match (or use `falign` if list_tools shows it). Confirm a match with `match { c, func, addr, size }` - never omit `c`. //cpp files: first line must be exactly //cpp; fdiff/match switch to C++ automatically.\n' +
+  '5. mismatches=0 -> leave `c` in src/ as a real match. Near-miss -> near-miss DB (nearmiss tools / nearmiss/db.jsonl), NOT a fake green src/ file. Edit regressed it (worse diff / bigger size)? REVERT.\n' +
   '6. Known wall? verify your near-miss IS one, say so in one line, move on - do not grind.\n' +
   '7. End every working turn with ONE line: what you did / best divergence now / next action. A mid-batch status question from the human ("hows it looking") is NOT a stop - give the one line, then immediately keep tool-calling in the same turn.\n' +
   '8. Batch done -> call next_batch AGAIN, in this SAME turn. "Done" means THIS BATCH, not the session. Finishing a batch is a checkpoint, NEVER a stop - 0 matches or several, same rule. Do NOT write a human session summary / results table and stop, and NEVER ask whether to continue or re-park ("say if you want another loop on next_batch" is the exact failure to avoid) - landing matches does not earn a stop, and cost/overrun is the console\'s job, not yours. Only an explicit human "stop" ends the loop; until then, batch finished = next_batch, every time. (blocks server-side ~45s; no polling loop.) Coordination is automatic: do NOT claim or push - the console auto-collects your matches and opens your PR. Edit source only for the targets above; keep scratch in a temp dir, never beside source.\n' +
+  '9. If MATCH LOGGING is in this batch: one MATCH_RESULT node per target per try; copy SHARED DEFAULTS; log every try including no_progress. matched only after verify; near_miss only when tip improves; else no_progress; no wall-clock times; bank/stamp is not a new try. Call log_attempt (and stamp_provenance when present).\n' +
   'Fallback if native MCP is unavailable: `npx tsx scripts/mcp-run.mts <calls.json> grok` from the tangOS console dir (calls.json = [{"tool":"match","args":{...}}]).'
 
 const WORK_GUIDES: Record<string, string> = { Grok: WORK_GUIDE_GROK }
@@ -217,10 +220,15 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
   const ctx = getCtx()
   // Surface the repo's contribution rules to every connecting AI on `initialize` (MCP
   // startup). `submitting` is the PR/how-to-post directive (points at AGENTS.md); `rules`
-  // is the legal/ROM line. Repo-agnostic: whatever the descriptor declares is what shows.
+  // is the legal/ROM line. Optional matchConventions.attemptTree adds a one-line pointer
+  // (full MATCH LOGGING block is attached per next_batch so it stays fresh).
   const proj = ctx.descriptor.project
+  const logPtr = attemptTreeEnabled(proj)
+    ? 'This repo uses attempt-tree logging (MATCH_RESULT nodes). next_batch includes SHARED DEFAULTS and log paths once per batch.'
+    : ''
   const instructions =
-    [proj.submitting, proj.rules && `Legal: ${proj.rules}`].filter(Boolean).join('\n\n') || undefined
+    [proj.submitting, proj.rules && `Legal: ${proj.rules}`, logPtr].filter(Boolean).join('\n\n') ||
+    undefined
   const server = new McpServer(
     { name: 'tangos', version: '0.1.0' },
     instructions ? { instructions } : undefined
@@ -297,11 +305,13 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
         const submitNote = submitting
           ? `\n\n[what may land in src/ - AGENTS.md has the full format]\n${submitting}`
           : ''
+        // Attempt-tree / Ghidra / near-miss DB rules once per batch (not per target).
+        const loggingNote = matchConventionsGuide(desc, b.items.length || 1)
         return {
           content: [
             {
               type: 'text' as const,
-              text: `${prefix}[tangos batch] "${b.title}" (${b.items.length} targets)\n\n${b.prompt}${targets}${guide}${wallsNote}${submitNote}`
+              text: `${prefix}[tangos batch] "${b.title}" (${b.items.length} targets)\n\n${b.prompt}${targets}${guide}${wallsNote}${submitNote}${loggingNote}`
             }
           ]
         }

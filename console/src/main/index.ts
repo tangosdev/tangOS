@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync, watch, existsSync, unlinkSync, mkdirSync, type FSWatcher } from 'node:fs'
 import { activityBus } from './activityBus'
 import { McpManager, normalizeName } from './mcpServer'
+import { matchConventionsConnectBlurb } from './matchConventions'
 import { loadDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
 import { registerAll, cliCommand } from './connect'
@@ -1008,7 +1009,8 @@ function agentPrompt(): string {
     state.useAgents
       ? `  7. Agents mode is ON: if you fan out into sub-agents, put ~${state.agentFanout} functions in EACH (e.g. a 16-function batch -> about ${Math.max(1, Math.round(16 / state.agentFanout))} sub-agents). NEVER spawn one sub-agent per function - that multiplies token cost for no gain.`
       : '  7. Work your whole batch yourself in one context. Do NOT spawn one sub-agent per function - it wastes tokens.',
-    proj?.readFirst ? `\nREAD FIRST: ${proj.readFirst}` : null
+    proj?.readFirst ? `\nREAD FIRST: ${proj.readFirst}` : null,
+    matchConventionsConnectBlurb(proj)
   ]
   return lines.filter((l) => l !== null).join('\n').trim()
 }
@@ -1714,9 +1716,12 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
         : 'scheduler returned no functions'
     )
   }
+  // Batch prompt stays short; MATCH LOGGING / SHARED DEFAULTS are appended by next_batch
+  // when project.matchConventions.attemptTree is set (same once-per-batch rule as Chaos Viewer).
   const prompt =
     'Match these targets. Each was picked by opcode similarity to an already-matched sibling ' +
-    '(shown per target) - lean on that sibling as scaffolding. Run `match` on each; use `fdiff` on near-misses.'
+    '(shown per target) - lean on that sibling as scaffolding. Run `match` on each; use `fdiff` on near-misses. ' +
+    'Bank near-misses to the near-miss DB when the repo provides one — never park non-reproducing C as a green src/ match.'
   const label = role && role !== 'Unassigned' ? role : 'Similarity'
   // Landed short of what was asked? Say why. A high dropped-as-matched count means the clone is
   // behind main (the fix is to sync, not to grind); otherwise the role's pool is simply drained.

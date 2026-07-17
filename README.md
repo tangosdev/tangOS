@@ -30,6 +30,10 @@ it knows the repo's tools, compiler, data source, and rules.
 The descriptor declares a `tools[]` registry; Console turns each entry into an MCP tool generically,
 so tangOS itself stays repo-agnostic while your repo's own tools do the work.
 
+Optional **`project.matchConventions`** (attempt tree, near-miss DB, Ghidra drafts) lets
+Console / `next_batch` surface MATCH_RESULT logging the same way experimental Chaos Viewer
+prompts do — **once per batch**, with shared provenance defaults. Classic repos omit the block.
+
 ## Layout
 
 ```
