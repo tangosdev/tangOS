@@ -116,7 +116,9 @@ let genOutTimer: NodeJS.Timeout | null = null // throttles gen:output sends to ~
 // pushed to a per-session remote branch, and surfaced as ONE rolling PR (the repo's PR rules /
 // CI gate the merge - this never touches the base branch directly). Gated on a real git
 // checkout + a GitHub origin remote + a stored GITHUB_TOKEN; otherwise it no-ops with a note.
-const SESSION_TAG = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13) // YYYYMMDD-hhmm
+// YYYYMMDD-hhmm plus per-process entropy: two consoles running the same agent slug, started the
+// same minute, otherwise share one remote branch and force-push each other's files out of the PR.
+const SESSION_TAG = `${new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 13)}-${randomUUID().slice(0, 4)}`
 type AutoPushStatus = {
   state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'
   message?: string
@@ -310,6 +312,10 @@ async function runAutoPush(slug: string): Promise<void> {
     // Plain version only - a source/dev build stamps the same string as the release, so a "-dev"
     // suffix never shows up in a public PR and reads as "something special".
     const consoleVer = app.getVersion()
+    // Ship the VERIFIED snapshot bytes, not the current worktree bytes: a refine loop rewriting a
+    // candidate in the seconds between the gate check above and the push could otherwise smuggle
+    // unverified bytes into a "matched" PR (the TOCTOU the snapshot gate nearly closed).
+    const snapshots = new Map(ship.map((f) => [f, verifiedContent.get(f)!]).filter(([, v]) => v != null) as [string, string][])
     const pushed = await pushSubsetToBranch(
       state.repoPath,
       branch,
@@ -317,7 +323,8 @@ async function runAutoPush(slug: string): Promise<void> {
       ship,
       `tangos(${slug}): matched work [tangOS Console v${consoleVer}]`,
       target.slug,
-      token
+      token,
+      { contents: snapshots }
     )
     if (!pushed.ok) {
       return set({ state: 'error', message: `push failed: ${pushed.err.slice(-200)}` })
@@ -378,8 +385,19 @@ async function runToolSafely(
   return res
 }
 
+// Safe-mode mutating runs are SERIALIZED: two overlapping runs each snapshot before/after status,
+// so the first to finish commits the other's half-written files under its own review label, and the
+// second run's review then misses its own files (already committed). Real whenever two agents run
+// mutating tools at once. Read-only runs are untouched - they never enter this chain.
+let safeModeChain: Promise<unknown> = Promise.resolve()
+function runSafeMode(base: Parameters<typeof runTool>[0]): Promise<RunResult> {
+  const next = safeModeChain.then(() => runSafeModeInner(base))
+  safeModeChain = next.catch(() => {}) // a failed run must not wedge the chain
+  return next
+}
+
 /** Mutating run under safe mode: isolate on the work branch, commit what changed, record a review. */
-async function runSafeMode(base: Parameters<typeof runTool>[0]): Promise<RunResult> {
+async function runSafeModeInner(base: Parameters<typeof runTool>[0]): Promise<RunResult> {
   const tool = base.tool
   try {
     const { base: from } = await ensureWorkBranch(state.repoPath!)
@@ -586,10 +604,17 @@ function pullNextBatch(agentName?: string): Batch | null {
   const mine = (b: Batch): boolean => !b.targetAgent || b.targetAgent === agentName
   const idx = state.batches.findIndex((b) => b.status === 'queued' && mine(b))
   if (idx === -1) return null
-  for (const b of state.batches) if (b.status === 'active' && mine(b)) b.status = 'done'
+  // Retire only THIS agent's previous active batch. An unaddressed batch is pullable by everyone,
+  // so retiring every active `mine(b)` here force-closed OTHER agents' in-progress unaddressed
+  // batches - their unworked functions then left the taken set and could be re-handed to a second
+  // agent while the first was still writing them (the double-grind the taken set exists to stop).
+  const pulledByMe = (b: Batch): boolean =>
+    agentName != null && (b.targetAgent === agentName || (!b.targetAgent && b.pulledBy === agentName))
+  for (const b of state.batches) if (b.status === 'active' && pulledByMe(b)) b.status = 'done'
   const batch = state.batches[idx]
   batch.status = 'active'
   batch.activatedAt = Date.now()
+  batch.pulledBy = agentName
   if (agentName) {
     const done = batch.items.filter((i) => i.done).length
     aiStats.setCurrent(agentName, {
@@ -880,7 +905,9 @@ const LLM_KEYS: Record<string, string[]> = {
   GLM_API_KEY: ['GLM'],
   DEEPSEEK_API_KEY: ['DeepSeek'],
   GROK_API_KEY: ['Grok'],
-  OPENAI_API_KEY: ['ChatGPT'],
+  // 'GPT', not 'ChatGPT': normalizeName folds gpt/codex/chatgpt MCP clients to 'GPT', and a
+  // mismatched provider name split one agent into two boxes with divided roles/efforts/stats.
+  OPENAI_API_KEY: ['GPT'],
   NEMOTRON_API_KEY: ['Nemotron']
 }
 // Providers currently being driven by the console (Phase D populates this).
@@ -1077,6 +1104,15 @@ function setRepo(path: string | null): RepoState {
   state.baseBranch = null
   enrichedRows.clear() // preserved coddog context belongs to the old repo
   atlasCache = { repo: state.repoPath }
+  // Auto-push session state is repo-relative: a 20s timer pending across a repo switch would fire
+  // runAutoPush against the NEW repoPath using files claimed in the OLD repo (a same-named
+  // src/<func>.c in both repos could ship into the wrong repo's PR under an old claim).
+  for (const t of autoPushTimers.values()) clearTimeout(t)
+  autoPushTimers.clear()
+  claimedFiles.clear()
+  pendingByAgent.clear()
+  verifiedContent.clear()
+  baselineDirtySrc = new Set()
   // Changing the repo invalidates any AI sessions' tool lists.
   mcp.resetSessions()
   // Watch the new repo's tangos.json so on-disk edits hot-reload.
@@ -2436,13 +2472,15 @@ ipcMain.handle('repo:syncPreview', async (): Promise<SyncPreview> => {
 
 // Back up everything a sync would destroy (working-tree changes, untracked files, local commits)
 // into a timestamped sibling folder, so the destructive sync is undoable.
-ipcMain.handle('repo:backup', async (): Promise<{ ok: boolean; path?: string; files?: number; error?: string }> => {
+ipcMain.handle('repo:backup', async (): Promise<{ ok: boolean; path?: string; files?: number; bundle?: boolean; error?: string }> => {
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo))) return { ok: false, error: 'not a git checkout' }
   try {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
     const r = await backupBeforeSync(repo, stamp)
-    return { ok: true, path: r.path, files: r.files }
+    // bundle=false means the commit bundle FAILED - the UI must not claim "commits backed up"
+    // right before the user runs a sync that discards those commits.
+    return { ok: true, path: r.path, files: r.files, bundle: r.bundle }
   } catch (e) {
     return { ok: false, error: String(e) }
   }
@@ -2485,17 +2523,24 @@ ipcMain.handle('repo:pushWorkPr', async (): Promise<{ ok: boolean; url?: string;
   if (!files.length) {
     return { ok: false, error: `nothing to push - your local matches are already on ${base} upstream (Sync to catch up)` }
   }
-  const who = (await gitUserName(repo)).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'work'
-  const branch = `tangos/${who}`
+  // Fallback must never be 'work': `tangos/work` IS the safe-mode work branch (WORK_BRANCH), and a
+  // contributor with no git user.name once collided with it - update-ref then moved the checked-out
+  // branch out from under HEAD. pushSubsetToBranch refuses it too; this keeps the name sensible.
+  const who = (await gitUserName(repo)).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase()
+  const branch = `tangos/${who && `tangos/${who}` !== WORK_BRANCH ? who : `pr-${randomUUID().slice(0, 6)}`}`
   // Push to the base repo if this account can, otherwise to its fork (created on demand), so a
   // contributor without collaborator access still opens a cross-repo PR instead of getting a 403.
   const target = await getPushTarget(gh, token)
   if (!target.ok || !target.slug) return { ok: false, error: target.error ?? 'could not resolve a push target' }
   const consoleVer = app.getVersion() // plain version, no "-dev" suffix (see noteMatchAndPush)
+  // fromHead: this handler's contract is "publish those COMMITS" - ship the committed HEAD blobs,
+  // not whatever the worktree has drifted to since (an agent dirtying a committed match mid-push
+  // otherwise shipped the dirty bytes, and a deleted worktree file killed the whole push).
   const pushed = await pushSubsetToBranch(
     repo, branch, base, files,
     `tangos: matched work (${branch}) [tangOS Console v${consoleVer}]`,
-    target.slug, token
+    target.slug, token,
+    { fromHead: true }
   )
   if (!pushed.ok) return { ok: false, error: `push failed: ${pushed.err.slice(-160)}` }
   const pr = await ensurePullRequest({

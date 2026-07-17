@@ -12,7 +12,7 @@ export default function SyncRepo({ repo }: { repo: RepoState | null }): JSX.Elem
   const [busy, setBusy] = useState<'backup' | 'sync' | null>(null)
   const [armed, setArmed] = useState(false)
   const [progress, setProgress] = useState<{ label: string; pct: number } | null>(null)
-  const [backup, setBackup] = useState<{ path: string; files: number } | null>(null)
+  const [backup, setBackup] = useState<{ path: string; files: number; bundle: boolean } | null>(null)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
 
   useEffect(() => window.tangos.onRepoSyncProgress(setProgress), [])
@@ -38,7 +38,7 @@ export default function SyncRepo({ repo }: { repo: RepoState | null }): JSX.Elem
     setResult(null)
     try {
       const r = await window.tangos.repoBackup()
-      if (r.ok && r.path) setBackup({ path: r.path, files: r.files ?? 0 })
+      if (r.ok && r.path) setBackup({ path: r.path, files: r.files ?? 0, bundle: r.bundle !== false })
       else setResult({ ok: false, text: `Backup failed: ${r.error ?? 'unknown error'}` })
     } finally {
       setBusy(null)
@@ -113,8 +113,11 @@ export default function SyncRepo({ repo }: { repo: RepoState | null }): JSX.Elem
           {p?.error && <div className="sync-repo-counts muted">Couldn&apos;t read repo state: {p.error}</div>}
 
           {backup && (
-            <div className="sync-repo-msg ok">
-              <Check size={13} /> Backed up {backup.files} file{backup.files === 1 ? '' : 's'} + local commits.
+            <div className={`sync-repo-msg ${backup.bundle ? 'ok' : 'err'}`}>
+              {backup.bundle ? <Check size={13} /> : <AlertTriangle size={13} />}
+              {backup.bundle
+                ? `Backed up ${backup.files} file${backup.files === 1 ? '' : 's'} + local commits.`
+                : `Backed up ${backup.files} file${backup.files === 1 ? '' : 's'}, but the COMMIT bundle failed - unpushed commits are NOT backed up.`}
               <button className="linkish" onClick={() => window.tangos.revealPath(backup.path)} title={backup.path}>
                 <FolderOpen size={12} style={{ verticalAlign: -2, marginRight: 3 }} /> Open backup
               </button>

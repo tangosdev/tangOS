@@ -159,7 +159,7 @@ const api = {
   repoPushWorkPr: (): Promise<{ ok: boolean; url?: string; error?: string }> => ipcRenderer.invoke('repo:pushWorkPr'),
   // Hard "Sync repo" (reset to origin + clean): preview, optional backup, then the destructive run.
   repoSyncPreview: (): Promise<SyncPreview> => ipcRenderer.invoke('repo:syncPreview'),
-  repoBackup: (): Promise<{ ok: boolean; path?: string; files?: number; error?: string }> =>
+  repoBackup: (): Promise<{ ok: boolean; path?: string; files?: number; bundle?: boolean; error?: string }> =>
     ipcRenderer.invoke('repo:backup'),
   repoSync: (): Promise<{ ok: boolean; branch?: string; head?: string; error?: string }> =>
     ipcRenderer.invoke('repo:sync'),

@@ -338,6 +338,10 @@ export class McpManager {
   private transports = new Map<string, StreamableHTTPServerTransport>()
   private clients = new Map<string, ConnectedClient>()
   private lastSeen = new Map<string, number>() // sessionId -> last request time, for evicting ghosts
+  // sessionId -> POST requests currently being handled. A single tool call can legitimately run
+  // longer than the stale window (sweep/unpack/falign on a big function); while one is in flight
+  // the session is NOT silent, and evicting it would close the transport out from under the call.
+  private inFlight = new Map<string, number>()
   // agent NAME -> last request time. Unlike lastSeen (per session, deleted on disconnect) this
   // survives eviction/disconnect, so the UI can keep showing a just-gone agent as yellow (recently
   // active) for an hour before it goes red. Pruned in evictStale once well past the red threshold.
@@ -420,6 +424,7 @@ export class McpManager {
     const now = Date.now()
     let changed = false
     for (const id of [...this.clients.keys()]) {
+      if ((this.inFlight.get(id) ?? 0) > 0) continue // a tool call is mid-run - not a ghost
       if (now - (this.lastSeen.get(id) ?? 0) > STALE_MS) {
         try {
           this.transports.get(id)?.close()
@@ -429,6 +434,7 @@ export class McpManager {
         this.transports.delete(id)
         this.clients.delete(id)
         this.lastSeen.delete(id)
+        this.inFlight.delete(id)
         changed = true
       }
     }
@@ -484,6 +490,8 @@ export class McpManager {
           if (id) {
             this.transports.delete(id)
             this.clients.delete(id)
+            this.lastSeen.delete(id)
+            this.inFlight.delete(id)
             this.onClientsChange?.()
           }
         }
@@ -506,7 +514,20 @@ export class McpManager {
         res.status(400).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Bad Request: No valid session ID' }, id: null })
         return
       }
-      await transport!.handleRequest(req, res, req.body)
+      // Track the request in flight (and re-touch on completion) so a long tool call - sweep,
+      // unpack, a big falign - can't read as "silent" and get its session reaped mid-run.
+      const sid = transport!.sessionId ?? sessionId
+      if (sid) this.inFlight.set(sid, (this.inFlight.get(sid) ?? 0) + 1)
+      try {
+        await transport!.handleRequest(req, res, req.body)
+      } finally {
+        if (sid) {
+          const n = (this.inFlight.get(sid) ?? 1) - 1
+          if (n <= 0) this.inFlight.delete(sid)
+          else this.inFlight.set(sid, n)
+          this.touch(sid) // the call just finished - that IS activity
+        }
+      }
     })
 
     const sessionRequest = async (req: Request, res: Response) => {
@@ -580,6 +601,10 @@ export class McpManager {
     }
     this.transports.clear()
     this.clients.clear()
+    // Session-id keyed maps must go with the sessions - descriptor hot-reloads fire this often,
+    // and orphaned entries accumulated for the app's whole lifetime (a slow leak).
+    this.lastSeen.clear()
+    this.inFlight.clear()
     this.onClientsChange?.()
   }
 }

@@ -114,7 +114,7 @@ export interface TangosApi {
   onRepoPullProgress(cb: (p: { label: string; pct: number }) => void): () => void
   repoPushWorkPr(): Promise<{ ok: boolean; url?: string; error?: string }>
   repoSyncPreview(): Promise<SyncPreview>
-  repoBackup(): Promise<{ ok: boolean; path?: string; files?: number; error?: string }>
+  repoBackup(): Promise<{ ok: boolean; path?: string; files?: number; bundle?: boolean; error?: string }>
   repoSync(): Promise<{ ok: boolean; branch?: string; head?: string; error?: string }>
   onRepoSyncProgress(cb: (p: { label: string; pct: number }) => void): () => void
   minimizeWin(): Promise<void>

@@ -11,6 +11,7 @@ import {
   rmSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { randomUUID } from 'node:crypto'
 import type { SyncPreview } from '../shared/types'
 
 export const WORK_BRANCH = 'tangos/work'
@@ -48,15 +49,28 @@ export async function currentBranch(repo: string): Promise<string> {
   return (await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).out.trim()
 }
 
+/** Parse `status --porcelain=v1 -z` output into {xy, path} entries. In -z mode a rename/copy
+ *  entry is followed by its ORIGINAL path as a separate NUL token with no XY prefix - a naive
+ *  token loop treats that as its own (bogus) entry and mangles it via slice(). Skip it here. */
+function parsePorcelainZ(out: string): Array<{ xy: string; path: string }> {
+  const toks = out.split('\0')
+  const entries: Array<{ xy: string; path: string }> = []
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i]
+    if (t.length < 4) continue
+    const xy = t.slice(0, 2)
+    entries.push({ xy, path: t.slice(3) })
+    if (xy[0] === 'R' || xy[0] === 'C') i++ // the next token is the rename's old path - not an entry
+  }
+  return entries
+}
+
 /** path -> porcelain XY code. Untracked is "??". */
 export async function statusMap(repo: string): Promise<Map<string, string>> {
   const r = await git(repo, ['status', '--porcelain=v1', '-z'])
   const map = new Map<string, string>()
   if (r.code !== 0) return map
-  for (const tok of r.out.split('\0')) {
-    if (tok.length < 4) continue
-    map.set(tok.slice(3), tok.slice(0, 2))
-  }
+  for (const e of parsePorcelainZ(r.out)) map.set(e.path, e.xy)
   return map
 }
 
@@ -99,23 +113,12 @@ export async function commitFiles(repo: string, files: ChangedFile[], message: s
   await git(repo, ['commit', '-m', message])
 }
 
-/** Stage matched work (new/modified sources under src/, plus any tracked-file edits like
- *  ledgers/README) and commit it on the current branch. Returns true if a commit was made.
- *  Deliberately scoped: `git add src` + `git add -u` never grabs stray untracked scratch files. */
-export async function commitMatchedWork(repo: string, message: string): Promise<boolean> {
-  await git(repo, ['add', '--', 'src'])
-  await git(repo, ['add', '-u'])
-  const staged = await git(repo, ['diff', '--cached', '--name-only'])
-  if (!staged.out.trim()) return false
-  const res = await git(repo, ['commit', '-m', message])
-  return res.code === 0
-}
-
 /** owner/repo parsed from a GitHub remote URL (https or ssh). Prefers "origin", then the
  *  current branch's push remote, then the first remote - so a fork named "fork" still works. */
 export async function remoteSlug(repo: string): Promise<{ owner: string; repo: string } | null> {
   const parse = (url: string): { owner: string; repo: string } | null => {
-    const m = /github\.com[:/]([^/]+)\/([^/.]+?)(?:\.git)?\s*$/i.exec(url.trim())
+    // repo segment allows dots ("some.repo"); only a trailing ".git" is stripped
+    const m = /github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?\s*$/i.exec(url.trim())
     return m ? { owner: m[1], repo: m[2] } : null
   }
   const names: string[] = []
@@ -348,21 +351,6 @@ export function scrubToken(s: string, token?: string): string {
   return out
 }
 
-export async function pushToBranch(
-  repo: string,
-  remoteBranch: string,
-  slug: { owner: string; repo: string },
-  token: string
-): Promise<{ ok: boolean; err: string }> {
-  const url = `https://x-access-token:${token}@github.com/${slug.owner}/${slug.repo}.git`
-  const spec = `HEAD:refs/heads/${remoteBranch}`
-  let r = await git(repo, ['push', url, spec])
-  if (r.code !== 0 && /\bnon-fast-forward\b|\brejected\b/i.test(r.err || r.out)) {
-    r = await git(repo, ['push', '--force', url, spec]) // session-owned branch: safe to force
-  }
-  return { ok: r.code === 0, err: scrubToken((r.err || r.out).trim(), token) }
-}
-
 /** Merge the work branch into base (no-ff) and delete it. Leaves you on base. */
 export async function mergeWorkBranch(repo: string, base: string): Promise<void> {
   const co = await git(repo, ['checkout', base])
@@ -396,7 +384,11 @@ export async function upstreamState(repo: string, base: string, path: string): P
 export async function upstreamIsNonmatching(repo: string, base: string, path: string): Promise<boolean> {
   const r = await git(repo, ['show', `origin/${base}:${path}`])
   if (r.code !== 0) return false
-  return /(^|\n)\s*\/\/\s*NONMATCHING\b/i.test(r.out)
+  // The repo convention puts the marker in the file's HEADER (line 1, or right after a //cpp
+  // first line). Check only the first few lines so an explanatory comment deeper in the file
+  // ("// not NONMATCHING anymore") can't false-positive, and accept a block-comment form too.
+  const head = r.out.split('\n', 4).join('\n')
+  return /(^|\n)\s*(\/\/|\/\*)\s*NONMATCHING\b/i.test(head)
 }
 
 /** src/*.c|.cpp files a diverged local branch introduces vs origin/<base> that AREN'T already
@@ -437,10 +429,18 @@ export async function changedSrcFiles(repo: string): Promise<string[]> {
 }
 
 /** Publish ONE agent's matched files as an isolated, squashed branch without ever touching the
- *  shared working tree or the checked-out branch. It builds a tree = base tree + the given
- *  working-tree files in a throwaway index (read-tree -> add -> write-tree -> commit-tree ->
- *  update-ref), then force-pushes the branch (the agent's own rolling PR head). This is what lets
- *  several AIs share one checkout yet each land in tangos/<agent>-<session> without colliding. */
+ *  shared working tree or the checked-out branch. It builds a tree = base tree + the given files
+ *  in a throwaway index (read-tree -> stage -> write-tree -> commit-tree -> update-ref), then
+ *  force-pushes the branch (the agent's own rolling PR head). This is what lets several AIs share
+ *  one checkout yet each land in tangos/<agent>-<session> without colliding.
+ *
+ *  What gets staged, per file:
+ *   - opts.contents has the path -> those EXACT bytes ship (the auto-push verified snapshot; a
+ *     refine loop rewriting the worktree file between verify and push can no longer smuggle
+ *     unverified bytes into a "matched" PR - the TOCTOU the snapshot gate almost closed).
+ *   - opts.fromHead -> the committed HEAD blob ships (repo:pushWorkPr's contract is "push those
+ *     commits", not whatever the worktree has drifted to since).
+ *   - otherwise -> plain `git add` of the worktree file (legacy behavior). */
 export async function pushSubsetToBranch(
   repo: string,
   branch: string,
@@ -448,23 +448,54 @@ export async function pushSubsetToBranch(
   files: string[],
   message: string,
   slug: { owner: string; repo: string },
-  token: string
+  token: string,
+  opts?: { contents?: Map<string, string>; fromHead?: boolean }
 ): Promise<{ ok: boolean; err: string }> {
   if (!files.length) return { ok: false, err: 'no files to push' }
+  // Never write the safe-mode work branch (an unset git user.name once fell back to exactly this
+  // name and silently moved the checked-out branch), and never update-ref whatever IS checked out.
+  if (branch === WORK_BRANCH) return { ok: false, err: `refusing to push to the reserved branch ${WORK_BRANCH}` }
+  if ((await currentBranch(repo)) === branch)
+    return { ok: false, err: `refusing to move the checked-out branch ${branch}` }
   // Prefer the remote tip so the PR diffs cleanly against current main; fall back to local base.
   let baseRef = `origin/${base}`
   if ((await git(repo, ['rev-parse', '--verify', '--quiet', baseRef])).code !== 0) baseRef = base
-  const idxFile = join(tmpdir(), `tangos-idx-${process.pid}-${Date.now()}`)
+  // Resolve the base ONCE: a concurrent fetch can move origin/<base> between read-tree and the
+  // parent lookup, producing a tree built on old-base with a new-base parent - a PR that reverts
+  // everything landed in between.
+  const baseSha = (await git(repo, ['rev-parse', baseRef])).out.trim()
+  if (!baseSha) return { ok: false, err: `could not resolve ${baseRef}` }
+  const idxFile = join(tmpdir(), `tangos-idx-${process.pid}-${randomUUID()}`)
   const env: NodeJS.ProcessEnv = { GIT_INDEX_FILE: idxFile }
   try {
-    let r = await git(repo, ['read-tree', baseRef], env)
+    let r = await git(repo, ['read-tree', baseSha], env)
     if (r.code !== 0) return { ok: false, err: `read-tree: ${(r.err || r.out).trim()}` }
-    r = await git(repo, ['add', '--', ...files], env)
-    if (r.code !== 0) return { ok: false, err: `add: ${(r.err || r.out).trim()}` }
+    const plainAdd: string[] = []
+    for (const f of files) {
+      const snap = opts?.contents?.get(f)
+      if (snap != null) {
+        // Ship the snapshot bytes: hash the string into the object store, stage by oid.
+        const tmp = join(tmpdir(), `tangos-blob-${randomUUID()}`)
+        writeFileSync(tmp, snap)
+        const oid = (await git(repo, ['hash-object', '-w', tmp])).out.trim()
+        try { unlinkSync(tmp) } catch { /* ignore */ }
+        if (!oid) return { ok: false, err: `hash-object failed for ${f}` }
+        r = await git(repo, ['update-index', '--add', '--cacheinfo', `100644,${oid},${f}`], env)
+        if (r.code !== 0) return { ok: false, err: `stage ${f}: ${(r.err || r.out).trim()}` }
+      } else if (opts?.fromHead) {
+        const oid = (await git(repo, ['rev-parse', `HEAD:${f}`])).out.trim()
+        if (!oid) return { ok: false, err: `${f} is not in HEAD - commit it first` }
+        r = await git(repo, ['update-index', '--add', '--cacheinfo', `100644,${oid},${f}`], env)
+        if (r.code !== 0) return { ok: false, err: `stage ${f}: ${(r.err || r.out).trim()}` }
+      } else plainAdd.push(f)
+    }
+    if (plainAdd.length) {
+      r = await git(repo, ['add', '--', ...plainAdd], env)
+      if (r.code !== 0) return { ok: false, err: `add: ${(r.err || r.out).trim()}` }
+    }
     const tree = (await git(repo, ['write-tree'], env)).out.trim()
     if (!tree) return { ok: false, err: 'write-tree produced no tree' }
-    const parent = (await git(repo, ['rev-parse', baseRef])).out.trim()
-    const commit = (await git(repo, ['commit-tree', tree, '-p', parent, '-m', message], env)).out.trim()
+    const commit = (await git(repo, ['commit-tree', tree, '-p', baseSha, '-m', message], env)).out.trim()
     if (!commit) return { ok: false, err: 'commit-tree produced no commit (is git user.name/email set?)' }
     const up = await git(repo, ['update-ref', `refs/heads/${branch}`, commit])
     if (up.code !== 0) return { ok: false, err: `update-ref: ${up.err.trim()}` }
@@ -502,9 +533,8 @@ export async function syncPreview(repo: string): Promise<SyncPreview> {
   let localChanges = 0
   let untracked = 0
   if (r.code === 0) {
-    for (const tok of r.out.split('\0')) {
-      if (tok.length < 4) continue
-      if (tok.slice(0, 2) === '??') untracked++
+    for (const e of parsePorcelainZ(r.out)) {
+      if (e.xy === '??') untracked++
       else localChanges++
     }
   }
@@ -523,13 +553,12 @@ export async function backupBeforeSync(
   const r = await git(repo, ['status', '--porcelain=v1', '-uall', '-z'])
   let files = 0
   if (r.code === 0) {
-    for (const tok of r.out.split('\0')) {
-      if (tok.length < 4) continue
-      const xy = tok.slice(0, 2)
+    for (const e of parsePorcelainZ(r.out)) {
+      const xy = e.xy
       if (xy[0] === 'D' || xy[1] === 'D') continue // a deletion - reset restores it from history
-      const rel = tok.slice(3)
+      const rel = e.path
       const src = join(repo, rel)
-      if (!existsSync(src)) continue // a rename's old-path token, or already gone
+      if (!existsSync(src)) continue // already gone
       const to = join(dest, 'files', rel)
       try {
         mkdirSync(dirname(to), { recursive: true })
@@ -568,6 +597,11 @@ export async function syncToOrigin(
   onProgress?: (label: string, pct: number) => void
 ): Promise<{ ok: boolean; branch: string; head: string; err?: string }> {
   if (!(await remoteSlug(repo))) return { ok: false, branch: '', head: '', err: 'no GitHub "origin" remote to sync from' }
+  // Clear any in-progress rebase/merge FIRST (a wedged repo is exactly when people reach for Sync).
+  // Left in place, the stale .git/rebase-merge survives the checkout and the NEXT Update's
+  // self-heal `rebase --abort` would restore the pre-sync branch head - silently un-syncing.
+  await git(repo, ['rebase', '--abort']) // no-op (nonzero) when no rebase is active
+  await git(repo, ['merge', '--abort']) // no-op (nonzero) when no merge is active
   onProgress?.('Fetching origin', 15)
   if (!(await fetchRemote(repo))) return { ok: false, branch: '', head: '', err: 'git fetch origin failed - check your connection' }
   const db = await defaultBranch(repo)
