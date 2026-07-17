@@ -37,6 +37,13 @@ const api = {
   recentAdds: (sinceHours?: number): Promise<string[]> => ipcRenderer.invoke('atlas:recentAdds', sinceHours),
   atlasSource: (req: { id: string; srcPath?: string }): Promise<AtlasSource | null> =>
     ipcRenderer.invoke('atlas:source', req),
+  functionHistory: (req: {
+    functionId?: string
+    module: string
+    addr: number
+    name: string
+  }): Promise<import('../shared/types').FunctionHistory | null> =>
+    ipcRenderer.invoke('atlas:functionHistory', req),
   viewerPrefsGet: (): Promise<ViewerPrefs> => ipcRenderer.invoke('viewer:getPrefs'),
   viewerPrefsSet: (p: Partial<ViewerPrefs>): Promise<ViewerPrefs> => ipcRenderer.invoke('viewer:setPrefs', p),
   bgPrefsGet: (): Promise<BackgroundPrefs> => ipcRenderer.invoke('bg:getPrefs'),

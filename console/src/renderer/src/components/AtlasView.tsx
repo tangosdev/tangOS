@@ -1,6 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { RefreshCw, Search, Plus, Minus, X, Database, Cloud, HardDrive, Users, ExternalLink, Maximize2, Minimize2 } from 'lucide-react'
-import type { AtlasDb, AtlasFunction, BatchItem, GithubCredits } from '../../../shared/types'
+import {
+  RefreshCw,
+  Search,
+  Plus,
+  Minus,
+  X,
+  Database,
+  Cloud,
+  HardDrive,
+  Users,
+  ExternalLink,
+  Maximize2,
+  Minimize2
+} from 'lucide-react'
+import type {
+  AtlasDb,
+  AtlasFunction,
+  BatchItem,
+  FunctionHistory,
+  GithubCredits
+} from '../../../shared/types'
 import ChaosViewer from '../chaos/ChaosViewer'
 import type { LayoutMode } from '../chaos/types'
 import { sortFns, SORT_LABELS, type SortKey } from '../atlas/sort'
@@ -38,12 +57,43 @@ export default function AtlasView({
   const [showNearMiss, setShowNearMiss] = useState(true)
   const [selectedFn, setSelectedFn] = useState<AtlasFunction | null>(null)
   const [fullAtlas, setFullAtlas] = useState(false) // hide head + right rail: map fills the window
+  const [history, setHistory] = useState<FunctionHistory | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [gh, setGh] = useState<GithubCredits | null>(null)
   // Shared contributor colors (login->hex, committed to the repo so everyone sees the same) and
   // which legend entry is YOURS (the signed-in GitHub login - only that one gets a picker).
   const [sharedColors, setSharedColors] = useState<Record<string, string>>({})
   const [myLogin, setMyLogin] = useState<string | null>(null)
   const [recentStems, setRecentStems] = useState<Set<string>>(new Set()) // fn names matched in last 24h
+
+  // Prior tries for the selected function (attempt log + near-miss tip). Operator planning only.
+  useEffect(() => {
+    if (!selectedFn) {
+      setHistory(null)
+      return
+    }
+    let alive = true
+    setHistoryLoading(true)
+    window.tangos
+      .functionHistory({
+        functionId: selectedFn.id,
+        module: selectedFn.module,
+        addr: selectedFn.addr,
+        name: selectedFn.name
+      })
+      .then((h) => {
+        if (alive) setHistory(h)
+      })
+      .catch(() => {
+        if (alive) setHistory(null)
+      })
+      .finally(() => {
+        if (alive) setHistoryLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [selectedFn?.id, selectedFn?.module, selectedFn?.addr, selectedFn?.name])
 
   useEffect(() => {
     window.tangos.githubCredits().then(setGh).catch(() => {})
@@ -433,47 +483,120 @@ export default function AtlasView({
 
       <div className="atlas-right">
       {selectedFn && (
-        <div className="atlas-detail aero-panel">
-          <span className="ad-name mono">{selectedFn.name}</span>
-          <span className="ad-meta">
-            {selectedFn.module} · 0x{selectedFn.addr.toString(16).padStart(8, '0')} · {selectedFn.size}b ·{' '}
-            {selectedFn.matched
-              ? 'matched'
-              : selectedFn.div != null
-                ? `near-miss (div ${selectedFn.div})`
-                : selectedFn.srcPath
-                  ? 'draft'
-                  : 'unmatched'}
-          </span>
-          <div style={{ flex: 1 }} />
-          {!selectedFn.matched &&
-            (draftRefs.has(selectedFn.name) ? (
-              <button className="aero-button danger" onClick={() => onRemove(selectedFn.name)}>
-                <Minus size={14} style={{ verticalAlign: -2, marginRight: 5 }} />
-                Remove from batch
-              </button>
+        <div className="atlas-detail aero-panel atlas-detail-card">
+          <div className="atlas-detail-top">
+            <span className="ad-name mono">{selectedFn.name}</span>
+            <span className="ad-meta">
+              {selectedFn.module} · 0x{selectedFn.addr.toString(16).padStart(8, '0')} · {selectedFn.size}b ·{' '}
+              {selectedFn.matched
+                ? 'matched'
+                : selectedFn.div != null
+                  ? `near-miss (div ${selectedFn.div})`
+                  : selectedFn.srcPath
+                    ? 'draft'
+                    : 'unmatched'}
+            </span>
+            <div style={{ flex: 1 }} />
+            {!selectedFn.matched &&
+              (draftRefs.has(selectedFn.name) ? (
+                <button className="aero-button danger" onClick={() => onRemove(selectedFn.name)}>
+                  <Minus size={14} style={{ verticalAlign: -2, marginRight: 5 }} />
+                  Remove from batch
+                </button>
+              ) : (
+                <button
+                  className="aero-button"
+                  onClick={() =>
+                    onAdd({
+                      id: `${Date.now()}-${selectedFn.name}`,
+                      ref: selectedFn.name,
+                      label: selectedFn.module,
+                      module: selectedFn.module,
+                      addr: selectedFn.addr,
+                      size: selectedFn.size,
+                      srcPath: selectedFn.srcPath
+                    })
+                  }
+                >
+                  <Plus size={14} style={{ verticalAlign: -2, marginRight: 5 }} />
+                  Add to batch
+                </button>
+              ))}
+            <button
+              className="run-icon"
+              title="close"
+              onClick={() => {
+                setSelectedFn(null)
+                setModuleFilter(null)
+              }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+
+          {/* Prior tries: plan before queueing — data from repo logs, not pasted into agent prompts */}
+          <div className="ad-history">
+            <div className="ad-history-head">
+              <span className="ad-history-title">Prior tries</span>
+              {historyLoading && <span className="hint">loading…</span>}
+              {!historyLoading && history && (
+                <span className="hint">
+                  {history.attempts.length} attempt{history.attempts.length === 1 ? '' : 's'}
+                  {history.tip ? ' · tip on disk' : ''}
+                </span>
+              )}
+            </div>
+            {history?.tip && (
+              <div className="ad-tip">
+                <b>Best tip</b>
+                {history.tip.divergences != null ? ` · div ${history.tip.divergences}` : ''}
+                {history.tip.source ? ` · ${history.tip.source}` : ''}
+                {history.tip.hasCSource ? ' · C in nearmiss DB' : ''}
+                {history.tip.srcPath && (
+                  <button
+                    className="path-link"
+                    style={{ marginLeft: 8 }}
+                    title={history.tip.srcPath}
+                    onClick={() => window.tangos.revealPath(history.tip!.srcPath!)}
+                  >
+                    open tip path
+                  </button>
+                )}
+              </div>
+            )}
+            {historyLoading ? null : history?.attempts.length ? (
+              <ul className="ad-attempt-list">
+                {history.attempts.map((a) => (
+                  <li
+                    key={a.attemptId}
+                    className={`ad-attempt st-${a.status.replace(/[^a-z_]/gi, '')}`}
+                    style={{ paddingLeft: 8 + a.depth * 12 }}
+                    title={a.attemptId}
+                  >
+                    <span className={`ad-status st-${a.status}`}>{a.status}</span>
+                    {a.divergences != null && <span className="ad-div">div {a.divergences}</span>}
+                    {a.improvedNearMiss && <span className="ad-flag">↑</span>}
+                    {a.model && <span className="ad-model mono">{a.model}</span>}
+                    {a.loggedAt && (
+                      <span className="ad-time">{a.loggedAt.replace('T', ' ').replace(/:\d{2}Z?$/, '')}</span>
+                    )}
+                    {(a.usedNearMissDraft || a.usedGhidraDraft) && (
+                      <span className="ad-flags">
+                        {a.usedNearMissDraft ? 'nm' : ''}
+                        {a.usedNearMissDraft && a.usedGhidraDraft ? '+' : ''}
+                        {a.usedGhidraDraft ? 'gh' : ''}
+                      </span>
+                    )}
+                    {a.note && <span className="ad-note">{a.note}</span>}
+                  </li>
+                ))}
+              </ul>
             ) : (
-              <button
-                className="aero-button"
-                onClick={() =>
-                  onAdd({
-                    id: `${Date.now()}-${selectedFn.name}`,
-                    ref: selectedFn.name,
-                    label: selectedFn.module,
-                    module: selectedFn.module,
-                    addr: selectedFn.addr,
-                    size: selectedFn.size,
-                    srcPath: selectedFn.srcPath
-                  })
-                }
-              >
-                <Plus size={14} style={{ verticalAlign: -2, marginRight: 5 }} />
-                Add to batch
-              </button>
-            ))}
-          <button className="run-icon" title="close" onClick={() => { setSelectedFn(null); setModuleFilter(null) }}>
-            <X size={14} />
-          </button>
+              <p className="ad-empty hint">
+                {history?.note || (historyLoading ? '' : 'No attempts logged for this function yet.')}
+              </p>
+            )}
+          </div>
         </div>
       )}
 

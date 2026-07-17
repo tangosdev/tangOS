@@ -417,6 +417,41 @@ export interface AtlasSource {
   path?: string
 }
 
+/** Prior tries for one Atlas function (from match_attempts + nearmiss tip). No C bodies. */
+export interface AttemptNodeSummary {
+  attemptId: string
+  parentAttemptId: string | null
+  status: string
+  divergences: number | null
+  improvedNearMiss: boolean
+  loggedAt: string | null
+  model: string | null
+  harness: string | null
+  reasoning: string | null
+  note: string | null
+  baseKind: string | null
+  usedNearMissDraft: boolean | null
+  usedGhidraDraft: boolean | null
+  depth: number
+}
+
+export interface NearMissTipSummary {
+  divergences: number | null
+  source: string | null
+  srcPath: string | null
+  hasCSource: boolean
+}
+
+export interface FunctionHistory {
+  functionId: string
+  name: string
+  attempts: AttemptNodeSummary[]
+  tip: NearMissTipSummary | null
+  attemptsPath: string
+  nearMissPath: string
+  note: string | null
+}
+
 /** Chaos Viewer preferences persisted in tangos-settings.json. The renderer's
  *  theme registry sanitizes unknown theme ids back to classic. */
 export interface ViewerPrefs {

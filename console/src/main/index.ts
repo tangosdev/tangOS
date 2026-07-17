@@ -17,6 +17,7 @@ import { registerAll, cliCommand } from './connect'
 import { runTool } from './runTool'
 import { preflight } from './preflight'
 import { readAtlas } from './atlas'
+import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
 import { fetchColors, openColorPr, viewerLogin } from './contributorColors'
 import { startDeviceFlow, pollForToken } from './githubAuth'
@@ -1392,6 +1393,25 @@ ipcMain.handle('atlas:loadLive', (_e, force?: boolean) => loadLiveDb(!!force))
 // with a path-traversal guard; unmatched functions fall back to a disasm text field on
 // the chaos-db row when the generator provides one. Best-effort: null instead of throwing.
 const SOURCE_LINE_CAP = 400
+ipcMain.handle(
+  'atlas:functionHistory',
+  (
+    _e,
+    req: { functionId?: string; module: string; addr: number; name: string }
+  ): import('../shared/types').FunctionHistory | null => {
+    if (!state.repoPath || !state.descriptor) return null
+    if (!req || typeof req.module !== 'string' || typeof req.name !== 'string') return null
+    const addr = typeof req.addr === 'number' ? req.addr : parseInt(String(req.addr), 0)
+    if (!Number.isFinite(addr)) return null
+    return readFunctionHistory(state.repoPath, state.descriptor, {
+      functionId: req.functionId,
+      module: req.module,
+      addr,
+      name: req.name
+    })
+  }
+)
+
 ipcMain.handle('atlas:source', (_e, req: { id: string; srcPath?: string }): AtlasSource | null => {
   const repo = state.repoPath
   if (!repo || !req || typeof req.id !== 'string') return null
