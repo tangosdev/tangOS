@@ -2069,24 +2069,19 @@ async function driveBatch(agentName: string): Promise<void> {
     throw new Error(
       `none of this batch's ${batch.items.length} target(s) could be enriched with context - pick targets with an addr + module the worklist tool knows, or generate the batch with the Recommended button (coddog)`
     )
-  // glm_refine REFINES an existing draft. A fresh target (no "draft" field - a coddog/finisher or
-  // hand-picked pick) has nothing to refine, so the model just flails or reaches for an inline-asm
-  // hack (the "the draft is missing" failure). Keep only draftable rows; if none, steer the operator
-  // to a near-miss/refine batch rather than burning the model on hopeless from-scratch attempts.
-  const rows = enriched.filter((line) => {
+  // Ship EVERY enriched row, draft or not. glm_refine handles both: a row with a draft gets the
+  // refine prompt, a fresh one gets the explicit "NO DRAFT YET - write the complete source from
+  // scratch" prompt (the old filter-and-throw here predates that upgrade and blocked hand-picked
+  // targets from being driven at all - a hand-assigned batch should just be attempted, role or not).
+  const rows = enriched
+  const fresh = rows.filter((line) => {
     try {
-      return !!(JSON.parse(line) as { draft?: string }).draft?.trim()
+      return !(JSON.parse(line) as { draft?: string }).draft?.trim()
     } catch {
-      return false
+      return true
     }
-  })
-  const freshSkipped = enriched.length - rows.length
-  if (!rows.length)
-    throw new Error(
-      `${agentName}'s batch is all fresh targets with no draft to refine. The console drives API models with glm_refine, which improves an existing draft - it can't match from scratch here. Give this AI the "Refiner" role (near-miss targets carry a draft), or hand these from-scratch functions to an MCP agent.`
-    )
-  if (freshSkipped)
-    console.log(`[driveBatch] ${agentName}: skipped ${freshSkipped} fresh target(s) with no draft to refine`)
+  }).length
+  if (fresh) console.log(`[driveBatch] ${agentName}: ${fresh}/${rows.length} fresh target(s) - driver drafts those from scratch`)
 
   // Stable, discoverable location (not a random temp name) so the run's "open folder" link
   // always resolves to real files. One worklist + output per agent; the next drive overwrites.
