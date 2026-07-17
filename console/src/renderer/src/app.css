@@ -598,7 +598,7 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 .splash-tango { height: 188px; width: auto; user-select: none; -webkit-user-drag: none; filter: drop-shadow(0 10px 24px rgba(10,50,20,0.28)); }
 
 /* ---- atlas ---- */
-.atlas { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 14px 14px 58px; overflow: hidden; min-height: 0; }
+.atlas { flex: 1; display: flex; flex-direction: column; gap: 12px; padding: 14px; overflow: hidden; min-height: 0; }
 .atlas-treemap.fill { flex: 1 1 0; min-height: 150px; }
 .atlas-treemap.fill canvas { border-radius: 8px; }
 .atlas.center { align-items: center; justify-content: center; }

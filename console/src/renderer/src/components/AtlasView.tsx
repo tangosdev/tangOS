@@ -324,6 +324,44 @@ export default function AtlasView({
         showNearMiss={showNearMiss}
         layout={layoutMode}
       />
+      {/* Bottom bar INSIDE the map column, so "centered" means centered on the atlas box and the
+          popout/fullscreen buttons sit at the map's bottom-right corner. */}
+      <div className="atlas-bottombar">
+        <div className="bb-left">
+          <div className="seg">
+            <button className={colorBy === 'status' ? 'on' : ''} onClick={() => pickColorBy('status')}>Status</button>
+            <button className={colorBy === 'author' ? 'on' : ''} onClick={() => pickColorBy('author')}>Contributor</button>
+          </div>
+        </div>
+        <div className="bb-center">
+          <div className="seg">
+            {(
+              [
+                ['ov', 'By ov'],
+                ['size', 'By size'],
+                ['match', 'By match'],
+                ['contributor', 'By contributor']
+              ] as Array<[LayoutMode, string]>
+            ).map(([m, label]) => (
+              <button key={m} className={layoutMode === m ? 'on' : ''} onClick={() => pickLayout(m)}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="bb-right">
+          <button className="mini-btn" onClick={() => window.tangos.openModulePopout('*')} title="Open the Atlas in its own window">
+            <ExternalLink size={12} style={{ verticalAlign: -2 }} />
+          </button>
+          <button
+            className="mini-btn"
+            onClick={() => setFullAtlas((v) => !v)}
+            title={fullAtlas ? 'Exit fullscreen - bring back the stats and list' : 'Fullscreen - the map fills the window under the header'}
+          >
+            {fullAtlas ? <Minimize2 size={12} style={{ verticalAlign: -2 }} /> : <Maximize2 size={12} style={{ verticalAlign: -2 }} />}
+          </button>
+        </div>
+      </div>
       </div>
 
       <div className="atlas-right">
@@ -441,45 +479,6 @@ export default function AtlasView({
         })}
       </div>
       </div>
-      </div>
-
-      {/* Bottom bar: coloring on the left, layout in the middle, popout + fullscreen on the right.
-          Lives OUTSIDE atlas-body so the map's bottom edge sits flush with the right-hand list. */}
-      <div className="atlas-bottombar">
-        <div className="bb-left">
-          <div className="seg">
-            <button className={colorBy === 'status' ? 'on' : ''} onClick={() => pickColorBy('status')}>Status</button>
-            <button className={colorBy === 'author' ? 'on' : ''} onClick={() => pickColorBy('author')}>Contributor</button>
-          </div>
-        </div>
-        <div className="bb-center">
-          <div className="seg">
-            {(
-              [
-                ['ov', 'By ov'],
-                ['size', 'By size'],
-                ['match', 'By match'],
-                ['contributor', 'By contributor']
-              ] as Array<[LayoutMode, string]>
-            ).map(([m, label]) => (
-              <button key={m} className={layoutMode === m ? 'on' : ''} onClick={() => pickLayout(m)}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="bb-right">
-          <button className="mini-btn" onClick={() => window.tangos.openModulePopout('*')} title="Open the Atlas in its own window">
-            <ExternalLink size={12} style={{ verticalAlign: -2 }} />
-          </button>
-          <button
-            className="mini-btn"
-            onClick={() => setFullAtlas((v) => !v)}
-            title={fullAtlas ? 'Exit fullscreen - bring back the stats and list' : 'Fullscreen - the map fills the window under the header'}
-          >
-            {fullAtlas ? <Minimize2 size={12} style={{ verticalAlign: -2 }} /> : <Maximize2 size={12} style={{ verticalAlign: -2 }} />}
-          </button>
-        </div>
       </div>
     </div>
   )
