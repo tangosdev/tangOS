@@ -33,6 +33,34 @@ export interface TangosCategory {
   description?: string
 }
 
+/**
+ * Optional matching conventions a decomp can declare so Console / next_batch
+ * surface attempt-tree logging, near-miss tips, and Ghidra scaffolds (the same
+ * extras the experimental Chaos Viewer fork adds on top of classic prompts).
+ * All fields optional; classic SM64DS-style repos work without this block.
+ */
+export interface TangosMatchConventions {
+  /** Emit attempt-tree / MATCH_RESULT logging rules to connected AIs. */
+  attemptTree?: boolean
+  /** Append-only attempt log path (default config/match_attempts.jsonl). */
+  attemptsPath?: string
+  /** Final how-record path on bank (default config/match_provenance.jsonl). */
+  provenancePath?: string
+  /** Encourage Ghidra scaffolds under ghidra_out/ as draft hints only. */
+  ghidraDrafts?: boolean
+  /** Near-miss tip store (default nearmiss/db.jsonl). */
+  nearMissDb?: string
+  /**
+   * Prefill matchProvenance on attempt-tree nodes (slugs, not display names).
+   * Same idea as Chaos Viewer's model / reasoning / harness pickers.
+   */
+  defaultProvenance?: {
+    model?: string
+    reasoning?: string
+    harness?: string
+  }
+}
+
 export interface TangosProject {
   name: string
   title: string
@@ -51,6 +79,8 @@ export interface TangosProject {
   submitting?: string // how to open a PR (format, what may land in src/); surfaced at MCP startup + in next_batch
   nearMissNote?: string
   knownWalls?: string // proven-unreachable shapes; surfaced to connected AIs via next_batch
+  /** Experimental / extended matching conventions (attempt tree, Ghidra, near-miss DB). */
+  matchConventions?: TangosMatchConventions
 }
 
 export interface EnvKeyHelp {
@@ -207,13 +237,13 @@ export interface ConnectedClient {
  *  matching pipeline (Drafter -> Refiner) plus a hard-function role and a random-breadth one. */
 export const ROLE_PRESETS: Record<string, string> = {
   'Hard matcher':
-    'You are the HARD MATCHER. Take the large, hard functions others skip and drive each all the way to a byte match, end to end. Write C from the disasm, callees, pool slots, and signatures; run the heavy tiers (sweep/clone/paramclone) and the refine tools; verify with match/fdiff; bank confirmed byte matches. This is the deep-water role - work each one patiently.',
+    'You are the HARD MATCHER. Take the large, hard functions others skip and drive each all the way to a byte match, end to end. Write C from the disasm, callees, pool slots, and signatures; run the heavy tiers (sweep/clone/paramclone) and the refine tools; verify with match/fdiff; bank confirmed byte matches. This is the deep-water role - work each one patiently. If MATCH LOGGING is on for this repo, log every try as a MATCH_RESULT node (SHARED DEFAULTS from next_batch).',
   'Drafter':
-    'You are the DRAFTER (stage 1 of the pipeline). Your batch is unmatched functions that have a similar MATCHED sibling to lean on. Adapt that sibling into a close, COMPILING draft for each target - get it as near as you can. You do NOT have to land byte-exact: bank each near-miss draft to the draft DB (tools/nearmiss_db.py) so the Refiner can finish it. Favor volume of good drafts over grinding any single function.',
+    'You are the DRAFTER (stage 1 of the pipeline). Your batch is unmatched functions that have a similar MATCHED sibling to lean on. Adapt that sibling into a close, COMPILING draft for each target - get it as near as you can. You do NOT have to land byte-exact: bank each near-miss draft to the near-miss tip store (nearmiss/db.jsonl via nearmiss tools or tools/nearmiss_db.py) so the Refiner can finish it. Favor volume of good drafts over grinding any single function. Log tries when MATCH LOGGING is on; usedNearMissDraft when you lean on a tip.',
   'Refiner':
-    'You are the REFINER (stage 2 of the pipeline). Pull near-misses that already carry a draft, diagnose the exact divergences with fdiff/falign, and refine each draft to a byte-exact match. You have the most to work with - a compiling draft plus the verifier diff - so nudge codegen SHAPE (declaration/statement order, types, register coloring) rather than rewriting. Bank confirmed byte matches.',
+    'You are the REFINER (stage 2 of the pipeline). Pull near-misses that already carry a draft, diagnose the exact divergences with fdiff (and falign if available), and refine each draft to a byte-exact match. You have the most to work with - a compiling draft plus the verifier diff - so nudge codegen SHAPE (declaration/statement order, types, register coloring) rather than rewriting. Bank confirmed byte matches. Keep the attempt tree linked (parentAttemptId = the tip you forked).',
   'Random':
-    'You are the RANDOM MATCHER. Your batch is unmatched functions drawn uniformly at random from across the whole ROM - any size, any module, no similarity hint. For each, study the disasm, callees, pool slots, and signatures, write C, and verify with match/fdiff. Give each about 5 attempts with DIFFERENT levers; if it has not matched by then, move on rather than grinding. Bank confirmed byte matches. This role samples the whole unmatched pool for breadth - on an infinite loop you get a fresh random draw each batch.'
+    'You are the RANDOM MATCHER. Your batch is unmatched functions drawn uniformly at random from across the whole ROM - any size, any module, no similarity hint. For each, study the disasm, callees, pool slots, and signatures, write C, and verify with match/fdiff. Give each about 5 attempts with DIFFERENT levers; if it has not matched by then, move on rather than grinding. Bank confirmed byte matches. Log every try when MATCH LOGGING is on. This role samples the whole unmatched pool for breadth - on an infinite loop you get a fresh random draw each batch.'
 }
 /** Rough model-strength each role wants, shown in the assign-role dropdown so the operator parks the
  *  right model: your strongest on the hardest role, a cheap/local model where there's the most

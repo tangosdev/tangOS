@@ -33,7 +33,44 @@
         "rules": { "type": "string", "description": "Legal / contribution rules (ROM ownership, what may be committed)." },
         "submitting": { "type": "string", "description": "How to open a PR: format, what may land in src/, where near-misses go. Surfaced to connected AIs at MCP startup and in next_batch. Point at an AGENTS.md in the repo for the full guide." },
         "knownWalls": { "type": "string", "description": "Proven-unreachable codegen shapes; surfaced to connected AIs via next_batch." },
-        "nearMissNote": { "type": "string" }
+        "nearMissNote": { "type": "string" },
+        "matchConventions": {
+          "type": "object",
+          "description": "Optional matching conventions (attempt-tree logging, near-miss tip store, Ghidra scaffolds). Classic repos omit this; experimental forks set attemptTree so Console/next_batch surface MATCH_RESULT rules once per batch.",
+          "additionalProperties": false,
+          "properties": {
+            "attemptTree": {
+              "type": "boolean",
+              "description": "When true, MCP startup + next_batch include attempt-tree / MATCH_RESULT logging rules (shared once, not per target)."
+            },
+            "attemptsPath": {
+              "type": "string",
+              "description": "Append-only attempt log path. Default: config/match_attempts.jsonl."
+            },
+            "provenancePath": {
+              "type": "string",
+              "description": "Final how-record path on bank. Default: config/match_provenance.jsonl."
+            },
+            "ghidraDrafts": {
+              "type": "boolean",
+              "description": "When true, agents may use local ghidra_out/ scaffolds as structure hints only (never bank as-is)."
+            },
+            "nearMissDb": {
+              "type": "string",
+              "description": "Near-miss tip store path. Default: nearmiss/db.jsonl."
+            },
+            "defaultProvenance": {
+              "type": "object",
+              "description": "Prefill matchProvenance slugs for attempt-tree nodes (model / reasoning / harness).",
+              "additionalProperties": false,
+              "properties": {
+                "model": { "type": "string" },
+                "reasoning": { "type": "string" },
+                "harness": { "type": "string" }
+              }
+            }
+          }
+        }
       }
     },
     "runtime": {
