@@ -164,10 +164,10 @@ export function matchConventionsGuide(desc: TangosDescriptor, opts: MatchGuideOp
     '',
     `Stores: attempts → ${attempts}; final how on bank → ${provenance}.`,
     hasLogTool
-      ? 'Log tries with the log_attempt tool (or tools/log_attempt.py). Prefer --src on near_miss so tip C lands in the near-miss DB (when Near-miss tips are ON).'
-      : `Log tries by appending nodes operators ingest into ${attempts} (tools/log_attempt.py when present).`,
+      ? 'MUST call the log_attempt tool after EVERY try (not only matches). Pass model + reasoning + harness for kind=ai, session-scope + batch-size, parent-attempt-id when forking a tip, used-near-miss-draft / used-ghidra-draft when true. Prefer --src on near_miss so tip C lands in the near-miss DB (when Near-miss tips are ON). Do not only paste MATCH_RESULT in chat — the log tool writes the durable store.'
+      : `Log tries by appending nodes into ${attempts} (tools/log_attempt.py when present). AI rows need model + reasoning + harness.`,
     hasBankTool
-      ? 'On MATCH: bank via the bank tool (AI needs model + reasoning + harness). Bank is NOT a new try — do not double-log matched unless the function was never logged as matched.'
+      ? 'On MATCH: call bank with the same AI provenance (model + reasoning + harness). Bank promotes C + final how — it is NOT a new try and must not replace log_attempt for the session.'
       : 'On MATCH: promote verified C to src/ and stamp provenance when the repo provides a bank path. Banking is NOT a second try.'
   ]
   return lines.join('\n')
