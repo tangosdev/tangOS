@@ -450,19 +450,34 @@ function afterRun(
   if (ok && typeof values.func === 'string') void noteMatchAndPush(client?.name, [values.func])
 }
 
-// A looping agent only ever has ONE reassign generating at a time. Both the batch-completion path
-// (advanceLoopingBatches) and the next_batch-poll path (kickLoopReassign) funnel through here, so a
-// completion and a poll landing together can't kick two overlapping scheduler runs (double batches).
+// Keep a looping self-serving (MCP) agent's queue topped up to this many batches, so there's always a
+// spare ready the instant it finishes one - it never parks waiting for the scheduler mid-loop. (One
+// active + one queued.) Console-driven agents don't need it: their drive loop generates on demand.
+const LOOP_QUEUE_DEPTH = 2
+// One scheduler run in flight per agent - the heavy coddog runs must never overlap.
 const loopReassigning = new Set<string>()
-function reassignLoop(agentName: string): void {
-  if (loopReassigning.has(agentName)) return // a fresh batch is already being generated for it
+
+function openLoopBatches(agentName: string): number {
+  return state.batches.filter((b) => b.targetAgent === agentName && b.status !== 'done').length
+}
+
+/** Top the agent's queue back up to LOOP_QUEUE_DEPTH, one scheduler run at a time, chaining on
+ *  completion until it's full - so filling from empty, and a pull that frees a slot, both converge.
+ *  No-ops for console-driven agents, a stopped agent, an already-full queue, or a run in flight. */
+function ensureLoopQueue(agentName: string): void {
+  if (!agentLoop.has(agentName) || isConsoleDrivable(agentName)) return
+  if (loopReassigning.has(agentName)) return // a run is already in flight; its finally re-checks depth
+  if (openLoopBatches(agentName) >= LOOP_QUEUE_DEPTH) return
   loopReassigning.add(agentName)
   const role = agentRoles[agentName]?.[0]
   void assignToAgent(agentName, role ?? 'Unassigned', roleBatchSize(role), true)
     .catch((e) =>
       report('batch', { event: 'loop-reassign-failed', agent: agentName, error: String((e as Error)?.message ?? e) })
     )
-    .finally(() => loopReassigning.delete(agentName))
+    .finally(() => {
+      loopReassigning.delete(agentName)
+      ensureLoopQueue(agentName) // still short (filling 0->2, or a pull emptied a slot)? make the next
+    })
 }
 
 /** Continuous mode (looping agents): retire any targeted batch whose items are all worked THROUGH -
@@ -478,7 +493,7 @@ function advanceLoopingBatches(): void {
       agentLoop.has(b.targetAgent)
     ) {
       b.status = 'done'
-      reassignLoop(b.targetAgent)
+      ensureLoopQueue(b.targetAgent)
     }
   }
 }
@@ -502,7 +517,7 @@ function kickLoopReassign(agentName: string): void {
     total: active.items.length
   })
   pushState()
-  reassignLoop(agentName)
+  ensureLoopQueue(agentName)
 }
 
 /** Flag a target WORKED (an agent attempted it, hit or miss) across any batch that lists it. Drives
@@ -552,6 +567,9 @@ function pullNextBatch(agentName?: string): Batch | null {
       batchId: batch.id,
       progress: { done, total: batch.items.length }
     })
+    // Pulling one frees a queue slot: refill NOW (while the agent works this batch) so the next is
+    // already queued when it finishes - the double-buffer that keeps an infinite loop from stalling.
+    ensureLoopQueue(agentName)
   }
   pushState()
   return batch
@@ -1640,6 +1658,10 @@ ipcMain.handle('ai:assign', async (_e, p: { agent: string; role?: string; count:
       report('drive', { agent: p.agent, status: 'error', error: String((e as Error)?.message ?? e) })
       pushState() // the loop cleared agentLoop on error; refresh so the box stops showing as looping
     })
+  } else if (p.loop) {
+    // MCP loop: pre-generate the spare so the second batch is ready the moment the agent finishes the
+    // first, instead of the agent parking on next_batch while the scheduler runs.
+    ensureLoopQueue(p.agent)
   }
   return { ok: true }
 })

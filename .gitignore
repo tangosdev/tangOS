@@ -11,6 +11,8 @@ console/release/
 console/out/
 # TypeScript incremental build cache (regenerated every build)
 *.tsbuildinfo
+# tangOS MCP fallback call scripts (mcp-run.mts input) - transient agent scratch, never source
+console/calls-*.json
 # Local Windows double-click launchers (dev + built app). Kept out of the public
 # tree on purpose - restore from history if you need them again.
 /Launch tangOS (dev).cmd
