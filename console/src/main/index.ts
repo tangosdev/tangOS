@@ -32,11 +32,12 @@ import {
   isGitRepo, ensureWorkBranch, statusMap, changedSince, diffForFile, commitFiles,
   mergeWorkBranch, discardWorkBranch, WORK_BRANCH,
   remoteSlug, defaultBranch, currentBranch,
-  pushSubsetToBranch, changedSrcFiles,
+  pushSubsetToBranch, commitSubsetToLocalBranch, changedSrcFiles,
   isDirty, aheadBehind, unmergedAhead, fetchRemote, rebasePull, gitUserName,
   recentlyAddedSrc, fetchBase, upstreamState, upstreamIsNonmatching, newSrcVsBase,
   syncPreview, backupBeforeSync, syncToOrigin
 } from './gitsafe'
+import { saveHarvest, listHarvests, type HarvestRecord } from './harvest'
 import { ensurePullRequest, resolvePushTarget, type PushTarget } from './pullRequests'
 import { writeBugReport } from './bugReport'
 import { initAutoUpdate, checkForAppUpdate, quitAndInstallUpdate } from './updater'
@@ -162,6 +163,112 @@ function snapshotVerified(repoPath: string, relPath: string): void {
     verifiedContent.set(relPath, readFileSync(join(repoPath, relPath), 'utf8'))
   } catch {
     /* file vanished between verify and snapshot; the flush's existence check handles it */
+  }
+}
+
+// --- Durable recovery of verified matches (see harvest.ts) --------------------------------------
+// The remote per-agent PR is a best-effort delivery: it can be off (Push toggle), fail (403/network),
+// or never see a match at all (an agent that verifies OFF the MCP bridge - direct tools, an external
+// editor - never hits noteMatchAndPush). When that happens the ONLY trace of finished work is dirty
+// bytes in the worktree + in-memory maps that a crash/app-close erases. That is exactly how 13
+// byte-identical matches were stranded and nearly lost on 2026-07-18.
+//
+// So the moment the stranded sweep VERIFIES a match, we bank it two ways that survive anything:
+//   1. a local recovery branch (tangos/harvest-<session>) holding the exact bytes - a real commit,
+//      never pushed, never touching the checked-out branch or worktree; and
+//   2. a harvest record under userData that lets the console tell the operator, on the next launch,
+//      "N verified matches are recovered but not yet upstream - on branch X".
+// This is the "persist finished matches BEFORE any notes/cleanup/PR" guarantee.
+const HARVEST_BRANCH = `tangos/harvest-${SESSION_TAG}`
+const harvestedMatches = new Map<string, { func: string; ts: number }>() // src path -> banked match
+let priorHarvestSurfaced = false // once-per-repo-load nag about a previous session's unlanded matches
+
+/** Bank the just-verified matches to the local recovery branch + harvest record. Cumulative and
+ *  idempotent: the branch is rebuilt from base + every recovered file each call. Best-effort - a
+ *  harvest failure is logged but never breaks the sweep (the worktree still holds the bytes). */
+async function bankRecovered(repo: string, verifiedPaths: string[]): Promise<void> {
+  let fresh = false
+  for (const p of verifiedPaths) {
+    if (!harvestedMatches.has(p)) {
+      harvestedMatches.set(p, { func: p.replace(/^src\//, '').replace(/\.(c|cpp)$/, ''), ts: Date.now() })
+      fresh = true
+    }
+  }
+  if (!fresh || !harvestedMatches.size) return // nothing new since the last bank
+  try {
+    const base = await defaultBranch(repo)
+    // Ship the current verified worktree bytes: the sweep just compiled these files and they matched,
+    // so what's on disk right now IS the verified match.
+    const contents = new Map<string, string>()
+    for (const p of harvestedMatches.keys()) {
+      try {
+        contents.set(p, readFileSync(join(repo, p), 'utf8'))
+      } catch {
+        /* file vanished since verify; drop it from this bank, keep the rest */
+      }
+    }
+    const files = [...contents.keys()]
+    if (!files.length) return
+    const res = await commitSubsetToLocalBranch(
+      repo,
+      HARVEST_BRANCH,
+      base,
+      files,
+      `tangos: recovered ${files.length} verified match${files.length === 1 ? '' : 'es'} [tangOS Console v${app.getVersion()}] (${SESSION_TAG})`,
+      { contents }
+    )
+    const rec: HarvestRecord = {
+      session: SESSION_TAG,
+      repo,
+      branch: HARVEST_BRANCH,
+      commit: res.commit,
+      updatedAt: Date.now(),
+      landed: false,
+      matches: [...harvestedMatches.entries()].map(([path, v]) => ({ func: v.func, path, ts: v.ts }))
+    }
+    saveHarvest(rec)
+    report('strandedSweep', res.ok
+      ? { event: 'harvested', branch: HARVEST_BRANCH, commit: res.commit, files: files.length }
+      : { event: 'harvest-branch-failed', error: res.err.slice(-200), files: files.length })
+  } catch (e) {
+    report('strandedSweep', { event: 'harvest-error', error: String((e as Error)?.message ?? e).slice(-200) })
+  }
+}
+
+/** On repo load, tell the operator if a PREVIOUS session left verified matches that never reached
+ *  origin/<base> - the signal that was missing when the 13 matches were stranded. Best-effort. */
+async function surfacePriorHarvests(repo: string): Promise<void> {
+  try {
+    const prior = listHarvests(repo).filter((h) => h.session !== SESSION_TAG && !h.landed)
+    if (!prior.length) return
+    const base = await defaultBranch(repo)
+    await fetchBase(repo, base).catch(() => false)
+    let unresolved = 0
+    const branches = new Set<string>()
+    for (const h of prior) {
+      let anyUnlanded = false
+      for (const m of h.matches) {
+        if ((await upstreamState(repo, base, m.path)) !== 'identical') {
+          anyUnlanded = true
+          unresolved++
+        }
+      }
+      if (anyUnlanded) branches.add(h.branch)
+      else {
+        h.landed = true // every match landed upstream - mark resolved so it stops nagging
+        saveHarvest(h)
+      }
+    }
+    if (unresolved) {
+      autoPushStatus = {
+        state: 'skipped',
+        message: `${unresolved} verified match${unresolved === 1 ? '' : 'es'} recovered from a previous session ${unresolved === 1 ? 'is' : 'are'} not yet upstream - on local branch ${[...branches].join(', ')}. Push or salvage ${unresolved === 1 ? 'it' : 'them'}.`,
+        at: Date.now()
+      }
+      pushState()
+    }
+  } catch {
+    /* surfacing is best-effort; the harvest branch + record still exist on disk */
   }
 }
 
@@ -354,7 +461,15 @@ async function runAutoPush(slug: string): Promise<void> {
       skippedUpstream: landedUpstream, heldStale, prUrl: pr.url, created: pr.created
     })
   } catch (e) {
-    set({ state: 'error', message: String((e as Error).message ?? e).slice(-200) })
+    const msg = String((e as Error).message ?? e).slice(-200)
+    set({ state: 'error', message: msg })
+    // A thrown push used to vanish silently: report() logs only successes, so the run log couldn't
+    // tell "push failed" from "nothing to push", and no timer was left - the burst's files sat in
+    // pendingByAgent until the NEXT match happened to reschedule, often never (a contributor to the
+    // stranding). Log it AND reschedule so a transient fetch/network/PR failure self-heals; the files
+    // are still in pendingByAgent, so the retry ships them.
+    report('autopush', { agent: slug, status: 'error', error: msg, pending: pendingByAgent.get(slug)?.size ?? 0 })
+    if (autoPushActive() && (pendingByAgent.get(slug)?.size ?? 0) > 0) scheduleAutoPush(slug)
   } finally {
     autoPushBusy.delete(slug)
   }
@@ -362,13 +477,21 @@ async function runAutoPush(slug: string): Promise<void> {
 
 // ---- Stranded-match sweep ----------------------------------------------------------------------
 // Agents sometimes verify a match locally and never land it - the session ends, the PR never opens,
-// and the file sits in src/ as baseline dirt no flush will ever touch (it happened twice in two
-// days; five verified matches were only found by hand-diffing the tree). On startup / repo load,
-// re-verify the dirty src candidates against the ROM. Verified files are claimed under the
-// 'recovered' slug and fed to the normal auto-push pipeline; with push off, the status chip says
-// what was found instead. The baselineDirtySrc gate is deliberately bypassed for these: stranded
-// files ARE baseline dirt, and per-file ROM verification is a stronger junk filter than the gate.
-const SWEEP_CAP = 12 // compile runs per sweep - keeps startup cheap even on a messy tree
+// and the file sits in src/ as baseline dirt no flush will ever touch. Worse, a match verified OFF
+// the MCP bridge (direct repo tools, an external editor) never hits noteMatchAndPush at all, so the
+// push queue is blind to it (this stranded 13 byte-identical matches on 2026-07-18). The sweep is
+// the safety net: re-verify the dirty src candidates against the ROM, BANK every verified one to the
+// crash-proof recovery branch + harvest record (bankRecovered), then feed them to the normal
+// auto-push pipeline; with push off, the status chip says what was found. The baselineDirtySrc gate
+// is deliberately bypassed - stranded files ARE baseline dirt, and per-file ROM verification is a
+// stronger junk filter than the gate.
+//
+// Cadence (see startSweepCadence): repo-load, a periodic backstop, AND a debounced run after src/
+// goes quiet - not startup-only, so off-MCP matches are caught within minutes of being written.
+// SWEEP_CAP bounds compiles PER sweep so a messy tree stays cheap; anything over the cap is picked
+// up by the next sweep (already-banked files are skipped), so nothing is dropped for good - the old
+// hard cap silently lost the 13th of 13.
+const SWEEP_CAP = 24 // compile runs per sweep; the rest carry over to the next recurring sweep
 let sweepTimer: NodeJS.Timeout | null = null
 let sweepRunning = false
 
@@ -387,14 +510,23 @@ async function runStrandedSweep(): Promise<void> {
   if (!repo || !matchTool || !(await isGitRepo(repo))) return
   sweepRunning = true
   try {
+    // Once per repo load, nag about a PREVIOUS session's verified matches that never reached
+    // upstream - the operator signal that was missing when the 13 were lost. Runs even on a clean
+    // tree, so a crash that left work on a harvest branch is announced on the next launch.
+    if (!priorHarvestSurfaced) {
+      priorHarvestSurfaced = true
+      await surfacePriorHarvests(repo)
+    }
     const dirty = (await changedSrcFiles(repo)).filter((f) => /^src\/[^/]+\.(c|cpp)$/.test(f))
     if (!dirty.length) return
     const base = await defaultBranch(repo)
     await fetchBase(repo, base)
     // Candidates: new files, or local rewrites of an upstream NONMATCHING (a possible upgrade).
-    // 'identical' and differs-vs-a-real-upstream-match are not ours to rescue.
+    // 'identical' and differs-vs-a-real-upstream-match are not ours to rescue. Already-banked files
+    // are skipped - they're verified and safe on the recovery branch; recompiling them wastes budget.
     const candidates: string[] = []
     for (const f of dirty) {
+      if (harvestedMatches.has(f)) continue
       const up = await upstreamState(repo, base, f)
       if (up === 'identical') continue
       if (up === 'differs' && !(await upstreamIsNonmatching(repo, base, f))) continue
@@ -447,6 +579,10 @@ async function runStrandedSweep(): Promise<void> {
     }
     if (!verified.length) return
     report('strandedSweep', { event: 'found', files: verified })
+    // Persist FIRST, before any push: bank the verified bytes to the crash-proof recovery branch +
+    // harvest record. From here the work survives a crash, an app close, Push being off, or a failed
+    // PR - the whole point of the fix. Only then hand off to the (best-effort) remote push pipeline.
+    await bankRecovered(repo, verified)
     if (autoPushActive()) {
       const mine = pendingByAgent.get('recovered') ?? new Set<string>()
       for (const f of verified) {
@@ -463,13 +599,54 @@ async function runStrandedSweep(): Promise<void> {
       const names = verified.map((f) => f.replace(/^src\//, '')).join(', ')
       autoPushStatus = {
         state: 'skipped',
-        message: `stranded sweep: ${verified.length} verified match${verified.length === 1 ? '' : 'es'} sitting unpushed in src/ (${names}) - turn on Writes + Review + Push to auto-PR, or push them yourself`,
+        message: `stranded sweep: ${verified.length} verified match${verified.length === 1 ? '' : 'es'} banked to ${HARVEST_BRANCH} (${names}) - turn on Writes + Review + Push to auto-PR, or push that branch yourself`,
         at: Date.now()
       }
       pushState()
     }
   } finally {
     sweepRunning = false
+  }
+}
+
+// Sweep cadence: the sweep is only useful as a safety net if it runs while work is happening, not
+// just at repo load. A periodic backstop catches off-MCP matches even on an idle-looking tree; a
+// debounced src/ watcher catches them within ~30s of the edits settling. Both funnel through the
+// same scheduleStrandedSweep debounce, and the sweep early-returns on a clean tree, so this stays
+// cheap. Timers are per-repo and torn down when the repo changes.
+const SWEEP_PERIOD_MS = 5 * 60_000
+let sweepPeriodTimer: NodeJS.Timeout | null = null
+let srcWatcher: FSWatcher | null = null
+
+function startSweepCadence(repoPath: string | null): void {
+  if (sweepPeriodTimer) {
+    clearInterval(sweepPeriodTimer)
+    sweepPeriodTimer = null
+  }
+  if (srcWatcher) {
+    try {
+      srcWatcher.close()
+    } catch {
+      /* ignore */
+    }
+    srcWatcher = null
+  }
+  if (!repoPath) return
+  sweepPeriodTimer = setInterval(() => scheduleStrandedSweep(1_000), SWEEP_PERIOD_MS)
+  try {
+    const srcDir = join(repoPath, 'src')
+    if (existsSync(srcDir)) {
+      // recursive works on Windows + macOS; a throw here just leaves the periodic backstop in charge.
+      srcWatcher = watch(srcDir, { persistent: false, recursive: true }, (_evt, filename) => {
+        const name = typeof filename === 'string' ? filename : ''
+        // Only source edits can produce a new match; a null/non-string filename means "something
+        // changed" - sweep anyway rather than miss it.
+        if (name && !/\.(c|cpp)$/i.test(name)) return
+        scheduleStrandedSweep(30_000) // debounce until the edit burst quiets down
+      })
+    }
+  } catch {
+    /* recursive fs.watch unsupported here; the periodic backstop still covers off-MCP matches */
   }
 }
 
@@ -1325,6 +1502,11 @@ function setRepo(path: string | null): RepoState {
   if (state.repoPath) saveSettings()
   // Rescue pass for verified-but-never-pushed matches from dead agent sessions (runs ~20s after
   // load so startup stays snappy; covers app launch AND repo switches since both come through here).
+  // startSweepCadence then keeps it running periodically + on src/ edits, so matches produced OFF the
+  // MCP bridge mid-session are caught too - not just whatever was already dirty at load.
+  priorHarvestSurfaced = false // re-announce any unlanded prior-session matches for the new repo
+  harvestedMatches.clear() // recovery-branch state is per-session/per-repo, like the auto-push maps above
+  startSweepCadence(state.repoPath)
   if (state.repoPath) scheduleStrandedSweep()
   pushState()
   return repoState()
@@ -2757,6 +2939,15 @@ ipcMain.handle('repo:backup', async (): Promise<{ ok: boolean; path?: string; fi
 ipcMain.handle('repo:sync', async (): Promise<{ ok: boolean; branch?: string; head?: string; error?: string }> => {
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo))) return { ok: false, error: 'not a git checkout' }
+  // Crash-safe cleanup: reset --hard + clean -fd would discard any verified match still sitting
+  // uncommitted in the worktree. Run the sweep FIRST so those get banked to the local recovery branch
+  // (a ref survives reset/clean), so a Sync can never silently destroy finished-but-unlanded work.
+  // Best-effort and awaited - never block a user-requested sync on it.
+  try {
+    await runStrandedSweep()
+  } catch {
+    /* sweep failed; proceed with the sync the user asked for */
+  }
   const r = await syncToOrigin(repo, (label, pct) => mainWindow?.webContents.send('repo:syncProgress', { label, pct }))
   if (r.ok) {
     atlasCache = { repo: null }

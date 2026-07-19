@@ -511,6 +511,75 @@ export async function pushSubsetToBranch(
   }
 }
 
+/** Commit a subset of files to a LOCAL branch without pushing and without touching the working tree
+ *  or the checked-out branch - the crash-proof twin of pushSubsetToBranch. Banks verified matches
+ *  (the recovery branch) the instant they're found, so a crash, an app close, a Push-off session, or
+ *  a failed PR can't strand finished work in an uncommitted worktree. Rebuilds the branch as a single
+ *  commit = base tree + the given files every call, so it's idempotent - pass the growing cumulative
+ *  set and the branch always reflects everything recovered so far.
+ *
+ *  Bytes staged per file mirror pushSubsetToBranch: opts.contents ships those EXACT verified bytes;
+ *  otherwise the current worktree file is added. No network, so nothing here can 403/timeout - the
+ *  durability guarantee holds even fully offline. */
+export async function commitSubsetToLocalBranch(
+  repo: string,
+  branch: string,
+  base: string,
+  files: string[],
+  message: string,
+  opts?: { contents?: Map<string, string> }
+): Promise<{ ok: boolean; err: string; commit?: string }> {
+  if (!files.length) return { ok: false, err: 'no files to commit' }
+  // Same guards as pushSubsetToBranch: never write the reserved work branch, never move whatever is
+  // checked out (update-ref on the current branch would desync HEAD from the worktree).
+  if (branch === WORK_BRANCH) return { ok: false, err: `refusing to write the reserved branch ${WORK_BRANCH}` }
+  if ((await currentBranch(repo)) === branch)
+    return { ok: false, err: `refusing to move the checked-out branch ${branch}` }
+  // Prefer origin/<base> so the recovery branch diffs cleanly against current main; fall back to the
+  // local base, then HEAD, so a never-fetched or detached checkout can still bank its work.
+  let baseRef = `origin/${base}`
+  if ((await git(repo, ['rev-parse', '--verify', '--quiet', baseRef])).code !== 0) baseRef = base
+  if ((await git(repo, ['rev-parse', '--verify', '--quiet', baseRef])).code !== 0) baseRef = 'HEAD'
+  const baseSha = (await git(repo, ['rev-parse', baseRef])).out.trim()
+  if (!baseSha) return { ok: false, err: `could not resolve ${baseRef}` }
+  const idxFile = join(tmpdir(), `tangos-hidx-${process.pid}-${randomUUID()}`)
+  const env: NodeJS.ProcessEnv = { GIT_INDEX_FILE: idxFile }
+  try {
+    let r = await git(repo, ['read-tree', baseSha], env)
+    if (r.code !== 0) return { ok: false, err: `read-tree: ${(r.err || r.out).trim()}` }
+    const plainAdd: string[] = []
+    for (const f of files) {
+      const snap = opts?.contents?.get(f)
+      if (snap != null) {
+        const tmp = join(tmpdir(), `tangos-hblob-${randomUUID()}`)
+        writeFileSync(tmp, snap)
+        const oid = (await git(repo, ['hash-object', '-w', tmp])).out.trim()
+        try { unlinkSync(tmp) } catch { /* ignore */ }
+        if (!oid) return { ok: false, err: `hash-object failed for ${f}` }
+        r = await git(repo, ['update-index', '--add', '--cacheinfo', `100644,${oid},${f}`], env)
+        if (r.code !== 0) return { ok: false, err: `stage ${f}: ${(r.err || r.out).trim()}` }
+      } else plainAdd.push(f)
+    }
+    if (plainAdd.length) {
+      r = await git(repo, ['add', '--', ...plainAdd], env)
+      if (r.code !== 0) return { ok: false, err: `add: ${(r.err || r.out).trim()}` }
+    }
+    const tree = (await git(repo, ['write-tree'], env)).out.trim()
+    if (!tree) return { ok: false, err: 'write-tree produced no tree' }
+    const commit = (await git(repo, ['commit-tree', tree, '-p', baseSha, '-m', message], env)).out.trim()
+    if (!commit) return { ok: false, err: 'commit-tree produced no commit (is git user.name/email set?)' }
+    const up = await git(repo, ['update-ref', `refs/heads/${branch}`, commit])
+    if (up.code !== 0) return { ok: false, err: `update-ref: ${up.err.trim()}` }
+    return { ok: true, err: '', commit }
+  } finally {
+    try {
+      unlinkSync(idxFile)
+    } catch {
+      /* index file may not exist if read-tree never ran */
+    }
+  }
+}
+
 /** Abandon the work branch: back to base, delete the branch (its commits are dropped). */
 export async function discardWorkBranch(repo: string, base: string): Promise<void> {
   const co = await git(repo, ['checkout', base])
