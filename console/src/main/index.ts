@@ -4,7 +4,7 @@ import { dumpDebug, debugDir } from './debug'
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { readFileSync, writeFileSync, watch, existsSync, unlinkSync, mkdirSync, type FSWatcher } from 'node:fs'
+import { readFileSync, writeFileSync, watch, existsSync, unlinkSync, mkdirSync, statSync, type FSWatcher } from 'node:fs'
 import { activityBus } from './activityBus'
 import { McpManager, normalizeName } from './mcpServer'
 import {
@@ -181,6 +181,11 @@ function snapshotVerified(repoPath: string, relPath: string): void {
 // This is the "persist finished matches BEFORE any notes/cleanup/PR" guarantee.
 const HARVEST_BRANCH = `tangos/harvest-${SESSION_TAG}`
 const harvestedMatches = new Map<string, { func: string; ts: number }>() // src path -> banked match
+// src path -> file mtime the sweep last COMPILED. The sweep now recurs, so without this a messy tree
+// (persistent near-miss .c files that never verify) would recompile the same bytes every cycle. Skip
+// a candidate whose bytes haven't changed since we last tried it; an edit toward a match bumps mtime
+// and re-opens it. Verified files are already skipped via harvestedMatches.
+const lastSweepAttempt = new Map<string, number>()
 let priorHarvestSurfaced = false // once-per-repo-load nag about a previous session's unlanded matches
 
 /** Bank the just-verified matches to the local recovery branch + harvest record. Cumulative and
@@ -556,6 +561,16 @@ async function runStrandedSweep(): Promise<void> {
       const func = f.replace(/^src\//, '').replace(/\.(c|cpp)$/, '')
       const m = meta.get(func)
       if (!m?.addr || !m?.size) continue
+      // Skip a candidate whose bytes are unchanged since we last compiled it - re-verifying identical
+      // bytes just burns CPU every recurring sweep. An edit bumps mtime and re-opens it.
+      let mtime = 0
+      try {
+        mtime = statSync(join(repo, f)).mtimeMs
+      } catch {
+        /* vanished between the status read and here; let the compile below handle the miss */
+      }
+      if (mtime && lastSweepAttempt.get(f) === mtime) continue
+      if (mtime) lastSweepAttempt.set(f, mtime)
       checked++
       // Direct runTool (the genDraft pattern): visible in the activity feed, but skips afterRun so
       // sweep verifications never pollute agent stats or batch bookkeeping.
@@ -1506,6 +1521,7 @@ function setRepo(path: string | null): RepoState {
   // MCP bridge mid-session are caught too - not just whatever was already dirty at load.
   priorHarvestSurfaced = false // re-announce any unlanded prior-session matches for the new repo
   harvestedMatches.clear() // recovery-branch state is per-session/per-repo, like the auto-push maps above
+  lastSweepAttempt.clear()
   startSweepCadence(state.repoPath)
   if (state.repoPath) scheduleStrandedSweep()
   pushState()
