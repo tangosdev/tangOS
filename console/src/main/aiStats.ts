@@ -40,6 +40,8 @@ interface Persisted {
    *  marks a record as post-dedupe: legacy records lack it and are reset on hydrate. */
   matchedFuncs?: string[]
   attemptedFuncs?: string[]
+  /** Functions already counted in nearMisses, so re-banking the same tip can't inflate it. */
+  nearMissFuncs?: string[]
 }
 interface Current {
   task?: string
@@ -128,18 +130,42 @@ class AiStatsStore {
     return func ? this.bestDiv.get(func) ?? Infinity : Infinity
   }
 
+  /** Apply the closeness floor and count the function once. An improvement that's still far off
+   *  (most of the function differs) compiled to size but isn't "near". Unknown size -> can't judge
+   *  the ratio, so let it through on whatever gate the caller already applied. */
+  private bumpNearMiss(name: string, func: string, div: number, size?: number): void {
+    const words = size && size > 0 ? size / 4 : 0
+    if (words && div / words >= NEAR_MISS_MAX_RATIO) return
+    let counted = false
+    for (const s of this.scopes(name)) {
+      const seen = (s.nearMissFuncs ??= [])
+      if (seen.includes(func)) continue // already counted this function for this AI
+      seen.push(func)
+      s.nearMisses = (s.nearMisses ?? 0) + 1
+      counted = true
+    }
+    if (counted) this.onChange?.()
+  }
+
   recordNearMiss(name: string | undefined, func: string | undefined, div: number | null, size?: number): void {
     if (!name || !func || div == null || div < 1 || div >= 999) return
     const prev = this.bestDiv.get(func) ?? Infinity
     if (div >= prev) return // no improvement over the best already seen - not a win
     this.bestDiv.set(func, div) // new best; track it even if it's still too far to count below
-    // Closeness floor: an improvement that's still far off (most of the function differs) compiled to
-    // size but isn't "near". Only count when under NEAR_MISS_MAX_RATIO of the words differ. Unknown
-    // size -> can't judge the ratio, so allow it through on the improvement gate alone.
-    const words = size && size > 0 ? size / 4 : 0
-    if (words && div / words >= NEAR_MISS_MAX_RATIO) return
-    for (const s of this.scopes(name)) s.nearMisses = (s.nearMisses ?? 0) + 1
-    this.onChange?.()
+    this.bumpNearMiss(name, func, div, size)
+  }
+
+  /** A near-miss observed in the near-miss DB rather than in a tool call the console watched.
+   *  Sub-agents bank tips straight to the DB via the ingest script, so the console never sees a
+   *  `div=N` line for them and they used to read as zero. The caller proves the entry is new work
+   *  by diffing against a session-start snapshot of the DB, so the improvement-vs-bestDiv gate is
+   *  skipped here: bestDiv is already seeded from ground truth that includes this very entry, and
+   *  re-checking it would reject every banked tip. Closeness and per-function dedupe still apply. */
+  recordBankedNearMiss(name: string | undefined, func: string | undefined, div: number | null, size?: number): void {
+    if (!name || !func || div == null || div < 1 || div >= 999) return
+    const prev = this.bestDiv.get(func)
+    if (prev == null || div < prev) this.bestDiv.set(func, div)
+    this.bumpNearMiss(name, func, div, size)
   }
 
   recordTokens(name: string | undefined, tokensIn: number, tokensOut: number): void {
@@ -217,7 +243,13 @@ class AiStatsStore {
       t.attemptedFuncs = [...au]
       t.totalMatches = mu.size + anonMatches
       t.matchAttempts = au.size + anonAttempts
-      if (s.nearMisses) t.nearMisses = (t.nearMisses ?? 0) + s.nearMisses
+      const nu = new Set([...(t.nearMissFuncs ?? []), ...(s.nearMissFuncs ?? [])])
+      if (nu.size) {
+        t.nearMissFuncs = [...nu]
+        t.nearMisses = nu.size
+      } else if (s.nearMisses) {
+        t.nearMisses = (t.nearMisses ?? 0) + s.nearMisses
+      }
       const ti = (t.tokensIn ?? 0) + (s.tokensIn ?? 0)
       const to = (t.tokensOut ?? 0) + (s.tokensOut ?? 0)
       if (ti) t.tokensIn = ti

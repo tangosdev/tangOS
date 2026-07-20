@@ -25,6 +25,7 @@ import { fetchColors, openColorPr, viewerLogin } from './contributorColors'
 import { startDeviceFlow, pollForToken } from './githubAuth'
 import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
 import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
+import * as nearMissWatch from './nearMissWatch'
 import { record as report, setReportsEnabled, reportsDir } from './reports'
 import { ensureTips, readTips, openTips } from './tips'
 import { ensureTour, readTour, openTour } from './tour'
@@ -632,6 +633,38 @@ async function runStrandedSweep(): Promise<void> {
 const SWEEP_PERIOD_MS = 5 * 60_000
 let sweepPeriodTimer: NodeJS.Timeout | null = null
 let srcWatcher: FSWatcher | null = null
+
+// Near-miss cadence: sub-agents append tips to the near-miss DB through the ingest script, which
+// the console never sees, so its per-AI near-miss count read zero while real work landed. Poll the
+// DB for entries added since the session snapshot and credit them to the agent whose batch holds
+// the function. Polling is a stat() unless the file actually changed, so this is close to free.
+const NEAR_MISS_POLL_MS = 60_000
+let nearMissPollTimer: NodeJS.Timeout | null = null
+
+/** Credit tips banked since the last poll. A tip is only counted when it traces to a batch and an
+ *  agent; the DB has no agent column, so anything untraceable stays uncounted rather than guessed. */
+function reconcileBankedNearMisses(): void {
+  if (!nearMissWatch.isWatching()) return
+  for (const tip of nearMissWatch.collectNewTips()) {
+    const batch = state.batches.find((b) => b.items.some((i) => i.ref === tip.func))
+    const agent = batch?.pulledBy || batch?.targetAgent
+    if (!agent) continue
+    const item = batch?.items.find((i) => i.ref === tip.func)
+    aiStats.recordBankedNearMiss(agent, tip.func, tip.div, tip.size ?? item?.size)
+  }
+}
+
+function startNearMissWatch(repoPath: string | null): void {
+  if (nearMissPollTimer) {
+    clearInterval(nearMissPollTimer)
+    nearMissPollTimer = null
+  }
+  nearMissWatch.endSession()
+  if (!repoPath || !state.descriptor) return
+  // Everything already banked becomes the baseline, so only work done from here is attributed.
+  nearMissWatch.beginSession(repoPath, state.descriptor)
+  nearMissPollTimer = setInterval(reconcileBankedNearMisses, NEAR_MISS_POLL_MS)
+}
 
 function startSweepCadence(repoPath: string | null): void {
   if (sweepPeriodTimer) {
@@ -1523,6 +1556,7 @@ function setRepo(path: string | null): RepoState {
   harvestedMatches.clear() // recovery-branch state is per-session/per-repo, like the auto-push maps above
   lastSweepAttempt.clear()
   startSweepCadence(state.repoPath)
+  startNearMissWatch(state.repoPath) // re-baseline near-miss attribution for the new repo
   if (state.repoPath) scheduleStrandedSweep()
   pushState()
   return repoState()
