@@ -336,6 +336,14 @@ export async function defaultBranch(repo: string): Promise<string> {
   return 'main'
 }
 
+/** Raw contents of `path` at a git `ref` (e.g. "origin/main"), or '' if the file does not exist
+ *  there. Reads from the object store, so it works for a large file the GitHub contents API would
+ *  truncate. Caller should fetchBase() first if reading an origin ref. */
+export async function showFile(repo: string, ref: string, path: string): Promise<string> {
+  const r = await git(repo, ['show', `${ref}:${path}`])
+  return r.code === 0 ? r.out : ''
+}
+
 /** Push the current branch to origin/<remoteBranch> using a token-authenticated URL (the token
  *  is never persisted to git config). The branch is session-owned so a plain push suffices:
  *  it creates the branch on the first push and fast-forwards it on later ones. (--force-with-lease

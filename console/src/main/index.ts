@@ -36,7 +36,7 @@ import {
   pushSubsetToBranch, commitSubsetToLocalBranch, changedSrcFiles,
   isDirty, aheadBehind, unmergedAhead, fetchRemote, rebasePull, gitUserName,
   recentlyAddedSrc, fetchBase, upstreamState, upstreamIsNonmatching, newSrcVsBase,
-  syncPreview, backupBeforeSync, syncToOrigin
+  syncPreview, backupBeforeSync, syncToOrigin, showFile
 } from './gitsafe'
 import { saveHarvest, listHarvests, type HarvestRecord } from './harvest'
 import { ensurePullRequest, resolvePushTarget, type PushTarget } from './pullRequests'
@@ -334,6 +334,108 @@ async function noteMatchAndPush(
   }
   pendingByAgent.set(slug, mine)
   if (mine.size) scheduleAutoPush(slug)
+}
+
+// ---- Near-miss rolling PR --------------------------------------------------------------------
+// crackloop land ingests compiling-but-not-matching drafts into nearmiss/db.jsonl (the committed
+// near-miss backlog). The match auto-push only ships src/ files, so those DB entries used to sit
+// uncommitted until a human PR'd them - and a match-less run pushed nothing at all. This proposes
+// them as their own rolling PR, separate from matches because the DB is an append/line-union file,
+// not a per-function verified match (none of the claim/snapshot machinery applies).
+const NEARMISS_DB = 'nearmiss/db.jsonl'
+const sessionNearMissNames = new Set<string>() // every near-miss name this session banked locally
+let nearMissPushBusy = false
+let nearMissPushPending = false
+
+interface NmEntry { line: string; div: number }
+function parseNmDb(text: string): Map<string, NmEntry> {
+  const m = new Map<string, NmEntry>()
+  for (const raw of text.split('\n')) {
+    const t = raw.trim()
+    if (!t) continue
+    try {
+      const r = JSON.parse(t) as { name?: string; divergences?: number }
+      if (r.name) m.set(r.name, { line: t, div: Number(r.divergences ?? Infinity) })
+    } catch {
+      /* skip a corrupt line rather than dropping the whole DB */
+    }
+  }
+  return m
+}
+
+/** Layer this session's near-miss entries onto the CURRENT upstream DB. Upstream order is kept and
+ *  a name is only overridden when our divergence is strictly lower (matches nearmiss_db's dedup:
+ *  lower div wins), so the diff is exactly our contributions and merges cleanly against whatever
+ *  else landed. Returns null when nothing changes. Pure + covered by a unit check. */
+export function unionNearMissDb(baseText: string, localText: string, sessionNames: Set<string>): string | null {
+  const base = parseNmDb(baseText)
+  const local = parseNmDb(localText)
+  const out: string[] = []
+  const emitted = new Set<string>()
+  let changed = false
+  // Walk upstream in order; replace a line in place when this session improved that name.
+  for (const [name, be] of base) {
+    const le = sessionNames.has(name) ? local.get(name) : undefined
+    if (le && le.div < be.div) {
+      out.push(le.line)
+      changed = true
+    } else {
+      out.push(be.line)
+    }
+    emitted.add(name)
+  }
+  // Append this session's genuinely-new names (present locally, absent upstream).
+  for (const name of sessionNames) {
+    if (emitted.has(name)) continue
+    const le = local.get(name)
+    if (le) {
+      out.push(le.line)
+      emitted.add(name)
+      changed = true
+    }
+  }
+  return changed ? out.join('\n') + '\n' : null
+}
+
+/** Propose this session's banked near-misses as a rolling PR. Gated by the same Push toggle as
+ *  matches (autoPushActive). Line-union safe via unionNearMissDb building on current origin/base. */
+async function pushNearMisses(): Promise<void> {
+  if (!autoPushActive() || !state.repoPath || !sessionNearMissNames.size) return
+  if (nearMissPushBusy) { nearMissPushPending = true; return } // coalesce; re-run after the flight
+  const repo = state.repoPath
+  const slug = await remoteSlug(repo)
+  const token = secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN
+  if (!slug || !token) return
+  nearMissPushBusy = true
+  try {
+    const base = await defaultBranch(repo)
+    await fetchBase(repo, base)
+    const baseText = await showFile(repo, `origin/${base}`, NEARMISS_DB)
+    let localText = ''
+    try { localText = readFileSync(join(repo, NEARMISS_DB), 'utf8') } catch { return }
+    const merged = unionNearMissDb(baseText, localText, sessionNearMissNames)
+    if (merged == null) return // nothing new vs upstream
+    const target = await resolvePushTarget(slug, token)
+    if (!target.ok || !target.slug) return
+    const head = `tangos/nearmiss-${SESSION_TAG}`
+    const pushed = await pushSubsetToBranch(
+      repo, head, base, [NEARMISS_DB],
+      `nearmiss: bank ${sessionNearMissNames.size} draft(s) from tangOS Console`,
+      target.slug, token, { contents: new Map([[NEARMISS_DB, merged]]) }
+    )
+    if (!pushed.ok) { report('nearmiss-push', { status: 'error', error: pushed.err.slice(-160) }); return }
+    const pr = await ensurePullRequest({
+      owner: slug.owner, repo: slug.repo, head, base, token, headOwner: target.headOwner,
+      title: 'nearmiss: banked drafts from tangOS Console',
+      body: 'Compiling near-miss drafts ingested into `nearmiss/db.jsonl` (line-union append, lower-divergence-wins). No `src/` changes; no CI match gate. Opened from tangOS Console.'
+    })
+    report('nearmiss-push', { status: pr.ok ? 'ok' : 'pr-failed', url: pr.ok ? pr.url : undefined, names: sessionNearMissNames.size })
+  } catch (e) {
+    report('nearmiss-push', { status: 'error', error: String((e as Error)?.message ?? e).slice(-160) })
+  } finally {
+    nearMissPushBusy = false
+    if (nearMissPushPending) { nearMissPushPending = false; void pushNearMisses() }
+  }
 }
 
 /** Debounced per agent: coalesce a burst of one AI's matches into a single push ~20s after its last. */
@@ -2560,6 +2662,7 @@ async function driveBatch(agentName: string): Promise<void> {
       onSpawn: ({ kill }) => driveKills.set(agentName, kill)
     })
     let landed: string[] = []
+    let nearMissNames: string[] = [] // compiling drafts this run produced but did not match (worth banking)
     let tin = 0
     let tout = 0
     let rawOut = ''
@@ -2570,6 +2673,7 @@ async function driveBatch(agentName: string): Promise<void> {
         landedNames?: string[]
         matches?: Array<string | { name?: string }>
         results?: Array<{ name?: string; matched?: boolean }>
+        nearMisses?: Array<{ name?: string; c_source?: string }>
         tokensIn?: number
         tokensOut?: number
         inputTokens?: number
@@ -2580,6 +2684,12 @@ async function driveBatch(agentName: string): Promise<void> {
       landed = (landedRaw as Array<string | { name?: string }>)
         .map((x) => (typeof x === 'string' ? x : x?.name))
         .filter((x): x is string => !!x)
+      // Compiling-but-not-matching drafts (glm_refine already drops div=999 non-compiles). These
+      // must be banked even when the run landed no match, else a from-scratch batch that produced
+      // only near-misses silently discards real progress (standing rule: never drop a close attempt).
+      nearMissNames = (out.nearMisses ?? [])
+        .map((n) => n?.name)
+        .filter((n): n is string => !!n)
       // Reconcile with the stream via the driver's authoritative results[] (every target it
       // reached, matched or not). Anything the live parse missed gets recorded here; targets
       // that never ran (e.g. an early Stop) aren't in results[], so a partial run doesn't
@@ -2614,12 +2724,17 @@ async function driveBatch(agentName: string): Promise<void> {
       resultFileTail: rawOut.slice(-3000)
     })
 
-    // Land the matches into the repo. The driver only WRITES matching sources to a scratch
-    // dir + the results file; without this step they never reach src/, the ledger, or git.
-    // `crackloop land` banks the sources, runs the free-tier clone/paramclone post-pass, and
-    // linkcheck-gates everything banked. We deliberately stop BEFORE git commit/push - that
-    // stays a manual, reviewable step (the console never pushes to the public repo on its own).
-    if (state.autoLand && landed.length) {
+    // Land the run into the repo. The driver only WRITES matching sources to a scratch dir + the
+    // results file; without this step matches never reach src/ and near-misses never reach the DB.
+    // `crackloop land` banks the sources, ingests near-misses into nearmiss/db.jsonl, runs the
+    // free-tier clone/paramclone post-pass, and linkcheck-gates everything banked. We deliberately
+    // stop BEFORE git commit/push - that stays a manual, reviewable step.
+    //
+    // Run it whenever the run produced ANYTHING bankable - matches OR compiling near-misses. Gating
+    // on landed.length alone meant a from-scratch batch that only near-missed skipped landing
+    // entirely, so its drafts were never ingested and were lost when the next drive overwrote the
+    // output file (the "GLM made drafts but nothing saved them" bug).
+    if (state.autoLand && (landed.length || nearMissNames.length)) {
       const landTool: TangosTool = {
         id: 'crackloop_land',
         label: `Land ${agentName} matches`,
@@ -2648,6 +2763,10 @@ async function driveBatch(agentName: string): Promise<void> {
         outputTail: (landRes.output || '').slice(-4000)
       })
       await noteMatchAndPush(agentName, landed) // ONLY this driver's landed matches - not ambient near-misses
+      // Near-misses crackloop land just ingested into nearmiss/db.jsonl: propose them as their own
+      // rolling PR so a match-less run's drafts still reach the repo (not just the local tree).
+      for (const n of nearMissNames) sessionNearMissNames.add(n)
+      if (nearMissNames.length) void pushNearMisses()
       scheduleAtlasRegen() // matches are now in src/ - refresh chaos-db so Atlas + near-miss pool track them
     }
   } finally {
