@@ -1478,6 +1478,15 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   font-family: ui-monospace, Consolas, monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
   background: #10241a; color: #b7f0c0; border: 1px solid rgba(94,194,46,0.35);
 }
+/* Per-model tabs for the Requesty fan-out live stream: pick which model to watch. */
+.aid-live-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.aid-live-tab {
+  font: inherit; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--aero-border); background: rgba(var(--aero-gloss-rgb) / 0.5); color: var(--aero-muted);
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.aid-live-tab:hover { color: var(--aero-text); }
+.aid-live-tab.on { background: #10241a; color: #b7f0c0; border-color: rgba(94,194,46,0.55); }
 /* Recent runs: collapsed by default, holds the 10 latest inside its own scrolling bubble */
 .aid-runs-wrap { margin-top: 8px; }
 .aid-runs-summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 4px; }

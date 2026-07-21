@@ -94,16 +94,57 @@ export default function AiDetail({
   const latest = running ?? mine[0]
   const [openRun, setOpenRun] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
-  // Scroll the live pane in an effect keyed on output length - the old inline ref callback forced a
-  // synchronous layout of a potentially huge <pre> on EVERY render (each streamed chunk).
+  // Live pane follows new output ONLY while the reader is parked at the bottom. The moment they
+  // scroll up, stick releases so they can read while the drive keeps streaming underneath; scrolling
+  // back to the bottom re-arms it. (The old effect force-scrolled on every chunk, yanking the view
+  // away from whatever you were reading.)
   const liveRef = useRef<HTMLPreElement>(null)
+  const stick = useRef(true)
+  const onLiveScroll = (): void => {
+    const el = liveRef.current
+    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+  }
   useEffect(() => {
     const el = liveRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (el && stick.current) el.scrollTop = el.scrollHeight
   }, [latest?.output?.length])
+  // Requesty fan-out drives every free model at once; requesty_fanout.py tags each line ⟦model⟧… so
+  // the interleaved stream can be split back into a readable per-model view. Parse the tags into an
+  // "All" stream plus one filtered stream per model. Non-fan-out drives have no tags -> one 'all' tab.
+  const [liveTab, setLiveTab] = useState<string>('all')
+  const live = useMemo(() => {
+    const text = latest?.output ?? ''
+    const re = /^⟦(.+?)⟧ ?/
+    const order: string[] = []
+    const perModel: Record<string, string[]> = {}
+    const all: string[] = []
+    for (const line of text.split('\n')) {
+      const m = re.exec(line)
+      if (m) {
+        const model = m[1]
+        if (!perModel[model]) { perModel[model] = []; order.push(model) }
+        const body = line.slice(m[0].length)
+        perModel[model].push(body)
+        all.push(line.replace(re, `${model.split('/').pop()} | `))
+      } else {
+        all.push(line)
+      }
+    }
+    const byTab: Record<string, string> = { all: all.join('\n') }
+    for (const mdl of order) byTab[mdl] = perModel[mdl].join('\n')
+    return { models: order, byTab }
+  }, [latest?.output])
+  const activeTab = live.byTab[liveTab] != null ? liveTab : 'all'
+  // Switching tab (or a fan-out starting) jumps to the bottom of the newly-shown stream + re-arms stick.
+  useEffect(() => {
+    stick.current = true
+    const el = liveRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [activeTab])
   function copyLive(): void {
-    if (!latest?.output) return
-    void window.tangos.copy(latest.output)
+    const text = live.byTab[activeTab] ?? latest?.output
+    if (!text) return
+    void window.tangos.copy(text)
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1400)
   }
@@ -218,8 +259,29 @@ export default function AiDetail({
                 {copied ? 'Copied' : 'Copy'}
               </button>
             </div>
-            <pre className="aid-live aero-scroll" ref={liveRef}>
-              {latest.output || (running ? '(starting…)' : '(no output)')}
+            {live.models.length > 1 && (
+              <div className="aid-live-tabs">
+                <button
+                  className={`aid-live-tab${activeTab === 'all' ? ' on' : ''}`}
+                  onClick={() => setLiveTab('all')}
+                  title="All models, interleaved"
+                >
+                  All
+                </button>
+                {live.models.map((m) => (
+                  <button
+                    key={m}
+                    className={`aid-live-tab${activeTab === m ? ' on' : ''}`}
+                    onClick={() => setLiveTab(m)}
+                    title={m}
+                  >
+                    {m.split('/').pop()}
+                  </button>
+                ))}
+              </div>
+            )}
+            <pre className="aid-live aero-scroll" ref={liveRef} onScroll={onLiveScroll}>
+              {live.byTab[activeTab] || (running ? '(starting…)' : '(no output)')}
             </pre>
           </>
         )}
