@@ -2313,15 +2313,24 @@ async function enrichTarget(item: BatchItem): Promise<string | null> {
       // --max 0xffffff disables worklist.py's default 0x200 (512-byte) size filter: when we pin the
       // exact function by --addr we want THAT function whatever its size, else every pick over 512
       // bytes is silently dropped ("none of this batch's targets could be enriched").
-      const c = spawn(py, ['tools/worklist.py', '--module', item.module!, '--addr', addr, '--max', '0xffffff'], {
+      //
+      // --examples 0 skips build_example_index, the scan of every already-matched function for
+      // similar siblings (the "similarity roll"). Only hand-picked targets reach here -- coddog's
+      // are pre-enriched and cached in enrichedRows -- and a hand-pick has already chosen its target,
+      // so the sibling few-shot is dead weight. It was ~40% of the runtime (10s -> 6s) and pushed a
+      // single pick close to the timeout under load, the "custom function won't drive" symptom. The
+      // row still carries disasm/callees/signatures/pool/target bytes: everything needed to match.
+      const c = spawn(py, ['tools/worklist.py', '--module', item.module!, '--addr', addr, '--max', '0xffffff', '--examples', '0'], {
         cwd: repo,
         env: { ...process.env, ...secretsEnv() }
       })
-      // Hard cap: never let one slow/hung target wedge the whole drive. Kill + skip it after 20s.
+      // Hard cap: never let one slow/hung target wedge the whole drive. Kill + skip it after 45s.
+      // Enrichment is ~6s warm; 45s leaves headroom for a cold cache or a loaded machine without
+      // wedging the drive if worklist genuinely hangs.
       const timer = setTimeout(() => {
         try { c.kill() } catch { /* already gone */ }
         resolve('')
-      }, 20000)
+      }, 45000)
       c.stdout?.on('data', (d) => (buf += String(d)))
       c.on('error', () => { clearTimeout(timer); resolve('') })
       c.on('close', () => { clearTimeout(timer); resolve(buf) })
