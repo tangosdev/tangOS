@@ -102,6 +102,7 @@ export interface TangosApi {
   discardReview(): Promise<boolean>
   setClientRoles(name: string, roles: string[]): Promise<AiAgent[]>
   setClientEffort(name: string, effort: string): Promise<AiAgent[]>
+  setClientAttempts(name: string, attempts: number | null): Promise<AiAgent[]>
   generateBatch(count?: number): Promise<BatchDraft>
   enqueueBatch(draft: BatchDraft): Promise<Batch[]>
   assignBatch(draft: BatchDraft, agentName: string): Promise<Batch[]>

@@ -134,6 +134,8 @@ const api = {
     ipcRenderer.invoke('clients:setRoles', { name, roles }),
   setClientEffort: (name: string, effort: string): Promise<AiAgent[]> =>
     ipcRenderer.invoke('clients:setEffort', { name, effort }),
+  setClientAttempts: (name: string, attempts: number | null): Promise<AiAgent[]> =>
+    ipcRenderer.invoke('clients:setAttempts', { name, attempts }),
 
   generateBatch: (count?: number): Promise<BatchDraft> => ipcRenderer.invoke('batch:generate', count),
   enqueueBatch: (draft: BatchDraft): Promise<Batch[]> => ipcRenderer.invoke('batch:enqueue', draft),

@@ -404,6 +404,24 @@ export default function Controller({
                             </select>
                           )
                         })()}
+                        {a.kind === 'api' && (
+                          <input
+                            className="agent-attempts"
+                            type="number"
+                            min={1}
+                            max={20}
+                            value={a.attempts ?? ''}
+                            placeholder="4"
+                            title="Attempts limit - max tries per function before moving on (default 4)"
+                            onChange={(e) => {
+                              const v = e.target.value.trim()
+                              window.tangos.setClientAttempts(
+                                a.name,
+                                v === '' ? null : Math.max(1, Math.min(20, Math.floor(Number(v)) || 1))
+                              )
+                            }}
+                          />
+                        )}
                       </div>
                       <div className="aib-btns">
                         <input

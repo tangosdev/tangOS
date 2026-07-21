@@ -1197,6 +1197,9 @@ function currentRuntime(): TangosRuntime {
 // Remember the last-opened repo + each agent's assigned role + reasoning effort across sessions.
 let agentRoles: Record<string, string[]> = {}
 let agentEfforts: Record<string, string> = {}
+// Per-agent max match attempts per function (console-driven agents; glm_refine --attempts).
+let agentAttempts: Record<string, number> = {}
+const DEFAULT_ATTEMPTS = 4
 // Chaos Viewer prefs (theme + contributor colors); unknown theme ids are sanitized renderer-side.
 let viewerPrefs: ViewerPrefs = { theme: 'classic', contributorColors: false }
 // Animated gradient-background pref (on by default); the palette follows the active theme.
@@ -1217,6 +1220,7 @@ function saveSettings(): void {
         lastRepo: state.repoPath,
         agentRoles,
         agentEfforts,
+        agentAttempts,
         agentStats: aiStats.serialize(),
         agentBestDiv: aiStats.serializeBestDiv(),
         reportsEnabled: state.reportsEnabled,
@@ -1243,6 +1247,7 @@ function loadSettings(): {
   lastRepo?: string
   agentRoles?: Record<string, string | string[]> // string = legacy single-role format
   agentEfforts?: Record<string, string>
+  agentAttempts?: Record<string, number>
   agentStats?: Record<string, { totalMatches: number; matchAttempts: number }>
   agentBestDiv?: Record<string, number>
   reportsEnabled?: boolean
@@ -1461,6 +1466,7 @@ function agentsSnapshot(): AiAgent[] {
       kind: 'mcp',
       roles: list.find((c) => c.roles.length)?.roles ?? agentRoles[name] ?? [],
       effort: agentEfforts[name],
+      attempts: agentAttempts[name],
       connected: true,
       sessions: list.length,
       currentBatchId: aiStats.currentBatchId(name),
@@ -1485,6 +1491,7 @@ function agentsSnapshot(): AiAgent[] {
       provider,
       roles: agentRoles[provider] ?? [],
       effort: agentEfforts[provider],
+      attempts: agentAttempts[provider],
       connected: apiDriving.has(provider),
       currentBatchId: aiStats.currentBatchId(provider),
       stats: aiStats.statsFor(provider),
@@ -1502,6 +1509,7 @@ function agentsSnapshot(): AiAgent[] {
       kind: 'mcp',
       roles: agentRoles[name] ?? [],
       effort: agentEfforts[name],
+      attempts: agentAttempts[name],
       connected: false,
       lastSeen: active.get(name),
       stats: aiStats.statsFor(name),
@@ -1518,6 +1526,7 @@ function agentsSnapshot(): AiAgent[] {
       kind: 'mcp',
       roles: agentRoles[name] ?? [],
       effort: agentEfforts[name],
+      attempts: agentAttempts[name],
       connected: false,
       lastSeen: ts,
       stats: aiStats.statsFor(name),
@@ -2593,8 +2602,11 @@ async function driveBatch(agentName: string): Promise<void> {
     label: `Drive ${agentName}`,
     category: 'matching',
     readOnly: false,
-    command: '{python} tools/glm_refine.py --wl {wl} --out {out} --jobs {jobs}'
+    command: '{python} tools/glm_refine.py --wl {wl} --out {out} --jobs {jobs} --attempts {attempts}'
   }
+  // Max match attempts per function: the agent box's override, else the console default (4). glm_refine's
+  // own default is higher, but a from-scratch batch rarely improves past a few tries, so 4 caps spend.
+  const attempts = agentAttempts[agentName] ?? DEFAULT_ATTEMPTS
   // GLM's default endpoint is z.ai's Coding Plan, which is ~single-concurrency: parallel workers
   // just 429 each other into a slow retry grind (function 1 lands, the rest hang). Drive it
   // sequentially. Nemotron is one local LM Studio model on one GPU - parallel requests just queue
@@ -2651,7 +2663,7 @@ async function driveBatch(agentName: string): Promise<void> {
   try {
     const res = await runTool({
       tool,
-      values: { wl, out: outPath, jobs },
+      values: { wl, out: outPath, jobs, attempts },
       runtime: currentRuntime(),
       repoPath: state.repoPath,
       source: 'ai',
@@ -2890,6 +2902,16 @@ ipcMain.handle('clients:setRoles', (_e, p: { name: string; roles: string[] }) =>
 ipcMain.handle('clients:setEffort', (_e, p: { name: string; effort: string }) => {
   if (p.effort) agentEfforts[p.name] = p.effort
   else delete agentEfforts[p.name]
+  saveSettings()
+  pushState()
+  return agentsSnapshot()
+})
+
+ipcMain.handle('clients:setAttempts', (_e, p: { name: string; attempts: number | null }) => {
+  // Clamp to a sane range; null/empty clears the override so the DEFAULT_ATTEMPTS applies.
+  const n = p.attempts == null ? null : Math.max(1, Math.min(20, Math.floor(p.attempts)))
+  if (n == null) delete agentAttempts[p.name]
+  else agentAttempts[p.name] = n
   saveSettings()
   pushState()
   return agentsSnapshot()
@@ -3371,6 +3393,7 @@ app.whenReady().then(() => {
     ])
   )
   agentEfforts = { ...(saved.agentEfforts ?? {}) }
+  agentAttempts = { ...(saved.agentAttempts ?? {}) }
   aiStats.hydrate(saved.agentStats)
   aiStats.hydrateBestDiv(saved.agentBestDiv)
   aiStats.remapKeys(normalizeName) // fold old per-model/per-session stat keys into one family box

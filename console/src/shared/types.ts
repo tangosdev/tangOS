@@ -366,6 +366,7 @@ export interface AiAgent {
   provider?: string // api AIs: 'Claude' | 'GLM' | 'DeepSeek'
   roles: string[] // zero or more assigned roles
   effort?: string // reasoning-effort level; valid values depend on the model family (see efforts.ts)
+  attempts?: number // console-driven agents: max match attempts per function (glm_refine --attempts)
   connected: boolean // mcp: a live session exists; api: currently driving a batch
   sessions?: number // mcp: number of live sessions collapsed under this name
   currentBatchId?: string
