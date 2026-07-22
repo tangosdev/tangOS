@@ -344,12 +344,18 @@ export default function Controller({
                   )}
                 </div>
 
-                <div className="aib-stats">
-                  {hit != null && <span title="matches / match attempts">{hit}% hit</span>}
-                  <span title="near misses: compiled non-matches that pushed a function's byte-diff lower than anyone had before (real progress; re-hitting the same divergence doesn't count)">
-                    {st.nearMisses ?? 0} near
-                  </span>
-                </div>
+                {/* Only render when there's something to say - an all-zero stats row was pure dead
+                    height on a fresh box, pushing the controls down for no information. */}
+                {(hit != null || (st.nearMisses ?? 0) > 0) && (
+                  <div className="aib-stats">
+                    {hit != null && <span title="matches / match attempts">{hit}% hit</span>}
+                    {(st.nearMisses ?? 0) > 0 && (
+                      <span title="near misses: compiled non-matches that pushed a function's byte-diff lower than anyone had before (real progress; re-hitting the same divergence doesn't count)">
+                        {st.nearMisses} near
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 <div className="aib-actions" onClick={(e) => e.stopPropagation()}>
                   {running ? (

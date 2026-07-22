@@ -922,9 +922,11 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   align-content: start; align-items: stretch;
 }
 
-/* one AI box (click to pop out detail) - uniform size: equal column width + stretched height */
+/* one AI box (click to pop out detail) - equal column width; height follows content. No min-height:
+   the grid's align-items:stretch already equalises every box in a row, so a floor only added dead
+   space under a box with little to show. */
 .ai-box {
-  position: relative; min-height: 196px;
+  position: relative; min-height: 0;
   border: 1.5px solid rgba(var(--aero-gloss-rgb) / 0.22); border-radius: 14px; padding: 11px 12px 10px; cursor: pointer;
   /* near-solid (~90%) theme-tinted fill so each agent card reads as a solid panel rather than
      glass; no bright inset rim + muted border keep the edges glare-free */
