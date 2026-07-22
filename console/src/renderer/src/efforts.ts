@@ -19,7 +19,23 @@ const CATALOG: Record<string, EffortSpec> = {
   GPT: { options: ['minimal', 'low', 'medium', 'high'], default: 'medium', note: 'reasoning_effort' },
   Grok: { options: ['low', 'high'], default: 'high', note: 'grok reasoning_effort' },
   DeepSeek: { options: ['chat', 'reasoner'], default: 'reasoner', note: 'V3 chat vs R1 reasoner' },
-  Nemotron: { options: ['off'], default: 'off', note: 'local LM Studio (model nemo): reasons internally, the driver reads the answer' }
+  Nemotron: { options: ['off'], default: 'off', note: 'local LM Studio (model nemo): reasons internally, the driver reads the answer' },
+  // Requesty is a gateway; the "effort" box picks WHICH free model this single agent runs (one at a
+  // time, not a fan-out - all 8 at once share one key's quota and rate-limit each other).
+  Requesty: {
+    options: [
+      'nvidia/nemotron-3-super-120b-a12b',
+      'nvidia/nemotron-3-ultra-550b-a55b',
+      'nvidia/nemotron-3-nano-30b-a3b',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+      'google/gemma-4-31b-it',
+      'mistral/leanstral-1-5',
+      'novita/tencent/hy3',
+      'poolside/laguna-m.1'
+    ],
+    default: 'nvidia/nemotron-3-super-120b-a12b',
+    note: 'which free Requesty model to run'
+  }
 }
 
 const FALLBACK: EffortSpec = { options: ['low', 'medium', 'high'], default: 'medium' }
