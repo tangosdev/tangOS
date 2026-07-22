@@ -1250,6 +1250,7 @@ function saveSettings(): void {
         agentRoles,
         agentEfforts,
         agentAttempts,
+        agentLoop: [...agentLoop], // continuous-mode agents, so a restart (incl. an update) can resume them
         agentStats: aiStats.serialize(),
         agentBestDiv: aiStats.serializeBestDiv(),
         reportsEnabled: state.reportsEnabled,
@@ -1277,6 +1278,7 @@ function loadSettings(): {
   agentRoles?: Record<string, string | string[]> // string = legacy single-role format
   agentEfforts?: Record<string, string>
   agentAttempts?: Record<string, number>
+  agentLoop?: string[]
   agentStats?: Record<string, { totalMatches: number; matchAttempts: number }>
   agentBestDiv?: Record<string, number>
   reportsEnabled?: boolean
@@ -3482,6 +3484,7 @@ app.whenReady().then(() => {
   )
   agentEfforts = { ...(saved.agentEfforts ?? {}) }
   agentAttempts = { ...(saved.agentAttempts ?? {}) }
+  for (const n of saved.agentLoop ?? []) agentLoop.add(n) // restored so startup can resume them
   aiStats.hydrate(saved.agentStats)
   aiStats.hydrateBestDiv(saved.agentBestDiv)
   aiStats.remapKeys(normalizeName) // fold old per-model/per-session stat keys into one family box
@@ -3521,6 +3524,17 @@ app.whenReady().then(() => {
     void startMcpServer().catch(() => {
       /* port taken or repo moved - the user can start it by hand as before */
     })
+  }
+  // Resume continuous-mode agents that were driving when the app last closed (crash or an update's
+  // restart) so a relaunch doesn't silently stop the fleet. Only console-drivable (keyed API) agents
+  // whose loop set persisted; a Stop persisted as removal, so a deliberately-stopped agent never
+  // auto-resumes. Delayed so the repo's own startup (sweep, descriptor) settles and the window exists.
+  if (agentLoop.size && state.repoPath && state.descriptor) {
+    setTimeout(() => {
+      for (const name of [...agentLoop]) {
+        if (isConsoleDrivable(name)) void startDriveLoop(name).catch(() => { /* missing key etc. just no-ops */ })
+      }
+    }, 8000)
   }
   createWindow()
   initAutoUpdate() // check the public releases feed for a newer build

@@ -308,6 +308,22 @@ export async function rebasePull(
     }
   }
 
+  // --autostash re-applies the stashed uncommitted TRACKED changes AFTER the rebase. When that apply
+  // CONFLICTS (a local edit to a file upstream also changed - e.g. the auto-generated nearmiss/db.jsonl
+  // or contributions.json the console itself keeps rewriting), git leaves conflict markers in the tree
+  // AND keeps the autostash, yet STILL EXITS 0 (verified). The old success path shipped that broken
+  // tree with an orphaned stash - the source of the recurring UU/UD conflicts and the stray autostash
+  // pile-up. Detect it, reset the conflicted files to the rebased (upstream) version - these are
+  // regenerated / re-pushed by the console anyway - and drop the orphaned autostash.
+  let autostashNote: string | undefined
+  const popConflicts = (await git(repo, ['diff', '--name-only', '--diff-filter=U'])).out
+    .split('\n').map((s) => s.trim()).filter(Boolean)
+  if (popConflicts.length) {
+    await git(repo, ['checkout', '--force', 'HEAD', '--', ...popConflicts])
+    await git(repo, ['stash', 'drop']) // git kept the failed autostash as stash@{0}
+    autostashNote = `${popConflicts.length} locally-modified file(s) superseded by upstream during sync (reset to upstream): ${popConflicts.slice(0, 4).join(', ')}${popConflicts.length > 4 ? '…' : ''}`
+  }
+
   // Rebase landed. Identical backups are pure dups of what upstream just checked out -> discard.
   // Differing ones are kept so the contributor can compare/recover their version.
   report('Finishing up', 95)
@@ -315,9 +331,10 @@ export async function rebasePull(
   for (const m of moved) {
     if (m.identical) { try { unlinkSync(join(backupRoot, m.path)) } catch { /* ignore */ } }
   }
-  let note: string | undefined
+  let note: string | undefined = autostashNote
   if (kept.length) {
-    note = `Set aside ${kept.length} local file${kept.length === 1 ? '' : 's'} that upstream had also matched (different code) -> ${backupRoot}`
+    const setAside = `Set aside ${kept.length} local file${kept.length === 1 ? '' : 's'} that upstream had also matched (different code) -> ${backupRoot}`
+    note = note ? `${note}\n${setAside}` : setAside
   } else {
     try { rmSync(backupRoot, { recursive: true, force: true }) } catch { /* ignore */ }
   }

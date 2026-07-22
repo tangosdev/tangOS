@@ -78,9 +78,9 @@
       ]
     },
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "shortcutName": "tangOS Console",
       "deleteAppDataOnUninstall": true
     },
