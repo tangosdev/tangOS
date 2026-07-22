@@ -398,6 +398,11 @@ export default function Controller({
                         </select>
                         {(() => {
                           const spec = effortSpec(a)
+                          // A single-option spec (GLM, Nemotron: only "off") is a control with nothing
+                          // to choose - it just ate row width and pushed the attempts box onto its own
+                          // line. Boxes where it DOES something keep it: Claude/GPT set the thinking
+                          // level, and on DeepSeek/Requesty it selects which model actually runs.
+                          if (spec.options.length < 2) return null
                           return (
                             <select
                               className="agent-effort"

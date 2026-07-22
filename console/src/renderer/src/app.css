@@ -999,7 +999,9 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   font-size: 14px; line-height: 1; padding: 0 2px; color: var(--aero-muted); border-radius: 999px;
 }
 .role-x:hover { color: #ef4444; background: rgba(239,68,68,0.14); }
-.aib-roles .agent-role.add { width: auto; flex: 1 1 auto; min-width: 92px; font-size: 11px; padding: 3px 6px; }
+/* The role picker only has to show "assign role" / "+ add role" - it was reserving enough width to
+   push the attempts box onto its own line. Let it shrink so the row fits on one line in a narrow box. */
+.aib-roles .agent-role.add { width: auto; flex: 1 1 auto; min-width: 68px; font-size: 11px; padding: 3px 5px; }
 /* Reasoning-effort selector: compact, pinned to the right of the (growing) add-role dropdown. */
 .aib-roles .agent-effort { font: inherit; font-size: 11px; padding: 3px 6px; border-radius: 8px; border: 1px solid var(--aero-border); background: rgba(var(--aero-gloss-rgb) / 0.55); color: var(--aero-text); flex: 0 0 88px; width: 88px; }
 .aib-roles .agent-attempts { font: inherit; font-size: 11px; font-weight: 800; padding: 3px 6px; border-radius: 8px; border: 1px solid var(--aero-border); background: rgba(var(--aero-gloss-rgb) / 0.55); color: var(--aero-text); flex: 0 0 46px; width: 46px; text-align: center; }
