@@ -396,18 +396,21 @@ function parseNmDb(text: string): Map<string, NmEntry> {
  *  a name is only overridden when our divergence is strictly lower (matches nearmiss_db's dedup:
  *  lower div wins), so the diff is exactly our contributions and merges cleanly against whatever
  *  else landed. Returns null when nothing changes. Pure + covered by a unit check. */
-export function unionNearMissDb(baseText: string, localText: string, sessionNames: Set<string>): string | null {
+export function unionNearMissDb(
+  baseText: string, localText: string, sessionNames: Set<string>
+): { text: string; improved: number; added: number } | null {
   const base = parseNmDb(baseText)
   const local = parseNmDb(localText)
   const out: string[] = []
   const emitted = new Set<string>()
-  let changed = false
+  let improved = 0
+  let added = 0
   // Walk upstream in order; replace a line in place when this session improved that name.
   for (const [name, be] of base) {
     const le = sessionNames.has(name) ? local.get(name) : undefined
     if (le && le.div < be.div) {
       out.push(le.line)
-      changed = true
+      improved++
     } else {
       out.push(be.line)
     }
@@ -420,10 +423,10 @@ export function unionNearMissDb(baseText: string, localText: string, sessionName
     if (le) {
       out.push(le.line)
       emitted.add(name)
-      changed = true
+      added++
     }
   }
-  return changed ? out.join('\n') + '\n' : null
+  return improved || added ? { text: out.join('\n') + '\n', improved, added } : null
 }
 
 /** Propose this session's banked near-misses as a rolling PR. Gated by the same Push toggle as
@@ -444,13 +447,21 @@ async function pushNearMisses(): Promise<void> {
     try { localText = readFileSync(join(repo, NEARMISS_DB), 'utf8') } catch { return }
     const merged = unionNearMissDb(baseText, localText, sessionNearMissNames)
     if (merged == null) return // nothing new vs upstream
+    // Report what this push actually CHANGES upstream, not how many drafts the session has
+    // touched in total. The old message used the cumulative session set, so a push that
+    // improved 4 entries announced "bank 144 draft(s)" - wildly overstating it and making the
+    // near-miss PRs look like they were inventing work from nowhere.
+    const parts = [
+      merged.added ? `${merged.added} new` : '',
+      merged.improved ? `${merged.improved} improved` : ''
+    ].filter(Boolean).join(' + ')
     const target = await resolvePushTarget(slug, token)
     if (!target.ok || !target.slug) return
     const head = `tangos/nearmiss-${SESSION_TAG}`
     const pushed = await pushSubsetToBranch(
       repo, head, base, [NEARMISS_DB],
-      `nearmiss: bank ${sessionNearMissNames.size} draft(s) from tangOS Console`,
-      target.slug, token, { contents: new Map([[NEARMISS_DB, merged]]) }
+      `nearmiss: ${parts} draft(s) from tangOS Console`,
+      target.slug, token, { contents: new Map([[NEARMISS_DB, merged.text]]) }
     )
     if (!pushed.ok) { report('nearmiss-push', { status: 'error', error: pushed.err.slice(-160) }); return }
     const pr = await ensurePullRequest({
@@ -458,7 +469,8 @@ async function pushNearMisses(): Promise<void> {
       title: 'nearmiss: banked drafts from tangOS Console',
       body: 'Compiling near-miss drafts ingested into `nearmiss/db.jsonl` (line-union append, lower-divergence-wins). No `src/` changes; no CI match gate. Opened from tangOS Console.'
     })
-    report('nearmiss-push', { status: pr.ok ? 'ok' : 'pr-failed', url: pr.ok ? pr.url : undefined, names: sessionNearMissNames.size })
+    report('nearmiss-push', { status: pr.ok ? 'ok' : 'pr-failed', url: pr.ok ? pr.url : undefined,
+      added: merged.added, improved: merged.improved })
   } catch (e) {
     report('nearmiss-push', { status: 'error', error: String((e as Error)?.message ?? e).slice(-160) })
   } finally {
