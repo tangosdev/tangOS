@@ -2609,7 +2609,9 @@ async function driveBatch(agentName: string): Promise<void> {
   // Reasoning effort chosen on the AI box (falls back to the family default). Claude models map it to
   // the extended-thinking budget; GLM forces it off (thinking starves its code block); DeepSeek picks
   // the model by effort (chat vs reasoner) and the reasoner thinks on its own, so both pass 'off'.
-  const effortDefault: Record<string, string> = { Opus: 'high', Fable: 'high', Sonnet: 'high' }
+  // Must mirror efforts.ts: without an entry here an un-picked box resolves to '' and the driver
+  // sends NO reasoning knob at all, so the dropdown's displayed default would be a lie.
+  const effortDefault: Record<string, string> = { Opus: 'high', Fable: 'high', Sonnet: 'high', GPT: 'high' }
   driverEnv.TANGOS_EFFORT =
     agentName === 'GLM' || agentName === 'DeepSeek' || agentName === 'Nemotron'
       ? 'off'
@@ -2708,7 +2710,16 @@ async function driveBatch(agentName: string): Promise<void> {
   // and multiply latency, so it's serial too. Requesty runs one free model whose free tier rate-limits
   // hard, so it's serial too (jobs>1 just 429s it). Anthropic (Claude) handles concurrency, so it
   // still gets parallel under "Use agents".
-  const jobs = agentName === 'GLM' || agentName === 'Nemotron' || agentName === 'Requesty' ? 1 : state.useAgents ? 3 : 1
+  // GPT is serial for a different reason than the rate-limited ones: glm_refine only streams
+  // per-attempt progress on a sequential drive (parallel workers would interleave their tokens), so
+  // a 3-wide GPT drive printed one buffered result-first block per function instead of each attempt
+  // as it fired. Live visibility is worth more here than the 3x.
+  const jobs =
+    agentName === 'GLM' || agentName === 'Nemotron' || agentName === 'Requesty' || agentName === 'GPT'
+      ? 1
+      : state.useAgents
+        ? 3
+        : 1
   batch.status = 'active'
   apiDriving.add(agentName)
   aiStats.setCurrent(agentName, {

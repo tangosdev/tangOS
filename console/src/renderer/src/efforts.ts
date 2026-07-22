@@ -16,7 +16,7 @@ export interface EffortSpec {
 const CATALOG: Record<string, EffortSpec> = {
   Claude: { options: ['low', 'medium', 'high', 'xhigh', 'max'], default: 'high', note: 'extended-thinking budget' },
   GLM: { options: ['off'], default: 'off', note: 'thinking off: the refine driver emits code directly, and reasoning starves its token budget' },
-  GPT: { options: ['minimal', 'low', 'medium', 'high'], default: 'medium', note: 'reasoning_effort' },
+  GPT: { options: ['minimal', 'low', 'medium', 'high'], default: 'high', note: 'reasoning_effort' },
   Grok: { options: ['low', 'high'], default: 'high', note: 'grok reasoning_effort' },
   DeepSeek: { options: ['chat', 'reasoner'], default: 'reasoner', note: 'V3 chat vs R1 reasoner' },
   Nemotron: { options: ['off'], default: 'off', note: 'local LM Studio (model nemo): reasons internally, the driver reads the answer' },
