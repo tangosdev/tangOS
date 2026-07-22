@@ -35,7 +35,8 @@ const CATALOG: Record<string, EffortSpec> = {
     ],
     default: 'nvidia/nemotron-3-super-120b-a12b',
     note: 'which free Requesty model to run'
-  }
+  },
+  Kimi: { options: ['off'], default: 'off', note: 'Moonshot Kimi K3: the driver reads the answer (OpenAI-compatible)' }
 }
 
 const FALLBACK: EffortSpec = { options: ['low', 'medium', 'high'], default: 'medium' }
@@ -49,6 +50,7 @@ export function familyOf(a: Pick<AiAgent, 'provider' | 'name'>): string {
   if (/grok/.test(n)) return 'Grok'
   if (/deepseek/.test(n)) return 'DeepSeek'
   if (/nemotron|nemo/.test(n)) return 'Nemotron'
+  if (/kimi|moonshot/.test(n)) return 'Kimi'
   if (/gpt|o1|o3|o4|chatgpt|openai/.test(n)) return 'GPT'
   return 'default'
 }

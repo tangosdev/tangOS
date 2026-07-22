@@ -1470,8 +1470,10 @@ const LLM_KEYS: Record<string, string[]> = {
   // mismatched provider name split one agent into two boxes with divided roles/efforts/stats.
   OPENAI_API_KEY: ['GPT'],
   NEMOTRON_API_KEY: ['Nemotron'],
-  // One box that fans a batch out across every free Requesty model and keeps the best per function.
-  REQUESTY_API_KEY: ['Requesty']
+  // One box that runs a single free Requesty model (picked via the box's dropdown).
+  REQUESTY_API_KEY: ['Requesty'],
+  // Moonshot AI - Kimi K3, OpenAI-compatible (api.moonshot.ai).
+  MOONSHOT_API_KEY: ['Kimi']
 }
 // Providers currently being driven by the console (Phase D populates this).
 const apiDriving = new Set<string>()
@@ -2583,6 +2585,13 @@ async function driveBatch(agentName: string): Promise<void> {
     driverEnv.GLM_BASE_URL = 'https://router.requesty.ai/v1'
     driverEnv.GLM_DIALECT = 'openai'
     driverEnv.GLM_MODEL = agentEfforts['Requesty'] || 'nvidia/nemotron-3-super-120b-a12b'
+  } else if (agentName === 'Kimi') {
+    // Moonshot AI - Kimi K3, OpenAI-compatible (/v1/chat/completions). Same driver path as DeepSeek.
+    if (!env.MOONSHOT_API_KEY) throw new Error('no MOONSHOT_API_KEY stored - add it in Settings')
+    driverEnv.GLM_API_KEY = env.MOONSHOT_API_KEY
+    driverEnv.GLM_BASE_URL = 'https://api.moonshot.ai/v1'
+    driverEnv.GLM_DIALECT = 'openai'
+    driverEnv.GLM_MODEL = 'kimi-k3'
   } else {
     throw new Error(`${agentName} has no console driver yet (idle-only)`)
   }
