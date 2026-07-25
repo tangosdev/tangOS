@@ -23,6 +23,7 @@ import WindowControls from './components/WindowControls'
 import BugReport from './components/BugReport'
 import RepoUpdateBanner from './components/RepoUpdateBanner'
 import AppUpdateBanner from './components/AppUpdateBanner'
+import ClaimsKeyBanner from './components/ClaimsKeyBanner'
 import GradientBackground from './components/GradientBackground'
 import { paletteForTheme } from './components/gradientThemes'
 import { UPDATE_NOTE } from './updateNote'
@@ -457,6 +458,7 @@ export default function App(): JSX.Element {
       </div>
 
       <AppUpdateBanner refreshNonce={refreshNonce} />
+      <ClaimsKeyBanner onOpenVault={() => setVaultOpen(true)} />
 
       {repo?.path && (
         <RepoUpdateBanner
