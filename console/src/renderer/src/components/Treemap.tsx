@@ -117,7 +117,7 @@ export default function Treemap({
         const who = resolve(f.author)
         ctx.fillStyle = f.matched ? (who && authorColors?.get(who)) || '#9aa7b5' : UNMATCHED
       } else {
-        ctx.fillStyle = f.matched ? MATCHED : typeof f.div === 'number' && showNearMiss ? NEARMISS : UNMATCHED
+        ctx.fillStyle = f.matched ? MATCHED : (typeof f.div === 'number' || !!f.srcPath) && showNearMiss ? NEARMISS : UNMATCHED
       }
       ctx.fillRect(r.x, r.y, Math.max(0.5, r.w - 0.5), Math.max(0.5, r.h - 0.5))
       if (selectedId && f.id === selectedId) selRect = r

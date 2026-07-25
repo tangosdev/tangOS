@@ -30,7 +30,10 @@ export function fnColor(f: AtlasFunction, v: PaintView): string {
     return (who && v.authorColors?.get(who)) || AUTHOR_FALLBACK
   }
   if (f.matched) return c.matched
-  if (typeof f.div === 'number' && v.showNearMiss) return c.nearMiss
+  // A committed src file that is NOT matched (e.g. a // NONMATCHING hand-asm/near-miss
+  // draft) still represents work done, so color it as a draft even when there is no
+  // near-miss `div`. Matches the draft rule in layout.ts.
+  if ((typeof f.div === 'number' || !!f.srcPath) && v.showNearMiss) return c.nearMiss
   return c.unmatched
 }
 
