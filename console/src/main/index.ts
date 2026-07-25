@@ -2894,7 +2894,13 @@ async function driveBatch(agentName: string): Promise<void> {
         label: `Land ${agentName} matches`,
         category: 'matching',
         readOnly: false,
-        command: '{python} tools/crackloop.py land --output {out} --wl {wl} --no-claims'
+        // --no-claims only when we have no key to claim WITH. It was hardcoded on because the
+        // claims key had expired, which quietly turned off the one mechanism that tells other
+        // contributors what this console is working on - two of them ground the same overlay
+        // for a day before anyone noticed. With a key present, let crackloop lock the ranges.
+        command: `{python} tools/crackloop.py land --output {out} --wl {wl}${
+          secretsEnv().CLAIMS_API_KEY || process.env.CLAIMS_API_KEY ? '' : ' --no-claims'
+        }`
       }
       const landRes = await runTool({
         tool: landTool,
