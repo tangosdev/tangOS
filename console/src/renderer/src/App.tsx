@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Settings2, FolderOpen, RefreshCw, MessageCircle, Bug } from 'lucide-react'
+import { Settings2, FolderOpen, RefreshCw, MessageCircle, Bug, KeyRound } from 'lucide-react'
 import type {
   RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchItem, Review, AiAgent, BackgroundPrefs,
   MatchingPrefs
@@ -12,6 +12,7 @@ import Requirements from './components/Requirements'
 import Controller from './components/Controller'
 import AiDetail from './components/AiDetail'
 import SettingsPanel from './components/Settings'
+import KeyVault from './components/KeyVault'
 import AtlasView from './components/AtlasView'
 import TangoHelper from './components/TangoHelper'
 import TangoTour from './components/TangoTour'
@@ -48,6 +49,7 @@ export default function App(): JSX.Element {
   const [agents, setAgents] = useState<AiAgent[]>([])
   const [cart, setCart] = useState<BatchItem[]>([]) // functions picked in the Viewer, to assign as a custom batch
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [vaultOpen, setVaultOpen] = useState(false)
   const [reportsEnabled, setReportsEnabled] = useState(false)
   const [version, setVersion] = useState('')
   const [useAgents, setUseAgents] = useState(false)
@@ -76,6 +78,7 @@ export default function App(): JSX.Element {
   })
   const popRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef<HTMLDivElement>(null)
+  const vaultRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const unsubReload = window.tangos.onDescriptorReloaded((info) => {
@@ -198,6 +201,22 @@ export default function App(): JSX.Element {
       document.removeEventListener('keydown', onKey)
     }
   }, [settingsOpen])
+
+  useEffect(() => {
+    if (!vaultOpen) return
+    function onDown(e: MouseEvent): void {
+      if (vaultRef.current && !vaultRef.current.contains(e.target as Node)) setVaultOpen(false)
+    }
+    function onKey(e: KeyboardEvent): void {
+      if (e.key === 'Escape') setVaultOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [vaultOpen])
 
   function applyActivity(ev: ActivityEvent): void {
     setRuns((prev) => {
@@ -389,7 +408,7 @@ export default function App(): JSX.Element {
               <button
                 className={`tb-btn icononly ${settingsOpen ? 'active' : ''}`}
                 onClick={() => setSettingsOpen((o) => !o)}
-                title="Settings - keys, theme, repo"
+                title="Settings - theme, repo, matching"
               >
                 <Settings2 size={15} />
               </button>
@@ -410,6 +429,25 @@ export default function App(): JSX.Element {
                     matchingPrefs={matchingPrefs}
                     onMatchingPrefs={updateMatchingPrefs}
                   />
+                )}
+              </div>
+            </div>
+          )}
+          {showControls && (
+            <div className="pop-wrap" data-tour="keyvault" ref={vaultRef}>
+              <button
+                className={`tb-btn icononly ${vaultOpen ? 'active' : ''}`}
+                onClick={() => setVaultOpen((o) => !o)}
+                title="API keys - stored encrypted on this machine"
+              >
+                <KeyRound size={15} />
+              </button>
+              <div className={`bubble-pop aero-panel solid${vaultOpen ? ' open' : ''}`}>
+                {vaultOpen && (
+                  <>
+                    <div className="section-title">API keys</div>
+                    <KeyVault />
+                  </>
                 )}
               </div>
             </div>

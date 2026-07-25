@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { FolderOpen, Bug, ChevronRight, Trash2 } from 'lucide-react'
 import type { RepoState, BackgroundPrefs, MatchingPrefs } from '../../../shared/types'
-import KeyVault from './KeyVault'
 import SyncRepo from './SyncRepo'
 
 /** Clear-all-stats with an inline two-click confirm (no native dialog): the first click arms it,
@@ -223,8 +222,6 @@ export default function Settings({
         </button>
       </div>
 
-      <div className="section-title" style={{ marginTop: 14 }}>API keys</div>
-      <KeyVault />
     </div>
   )
 }
