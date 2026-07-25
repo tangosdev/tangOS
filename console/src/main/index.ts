@@ -1546,6 +1546,7 @@ function agentsSnapshot(): AiAgent[] {
       effort: agentEfforts[provider],
       attempts: agentAttempts[provider],
       stopping: stopping.has(provider),
+      exhausted: exhausted.get(provider),
       connected: apiDriving.has(provider),
       currentBatchId: aiStats.currentBatchId(provider),
       stats: aiStats.statsFor(provider),
@@ -2779,6 +2780,7 @@ async function driveBatch(agentName: string): Promise<void> {
       pushState() // climb the bar mid-run
     }
   }
+  const runStartedAt = Date.now()
   try {
     const res = await runTool({
       tool,
@@ -2855,6 +2857,27 @@ async function driveBatch(agentName: string): Promise<void> {
       resultFileTail: rawOut.slice(-3000)
     })
 
+    // Out-of-usage detection. An explicit signal (the driver saw a 402 / "insufficient" / quota /
+    // billing message) stops this agent right away. Otherwise a run that banked nothing and returned
+    // faster than any real batch could is a "quick failure"; QUICK_FAIL_LIMIT of those back to back is
+    // the key running dry. Any productive OR slow run clears the streak, so a genuine work-hard-find-
+    // nothing batch never trips it. Only fast-and-empty runs accumulate.
+    const bankedSomething = landed.length > 0 || nearMissNames.length > 0
+    const drvOut = res.output || ''
+    const outOfUsage =
+      /\b402\b|payment required|insufficient|out of (credit|quota|balance)|quota (exceeded|exhausted)|billing|no credit/i.test(drvOut)
+    if (outOfUsage) {
+      autoStopExhausted(agentName, 'API reported out of usage (credit/quota exhausted)')
+    } else if (!bankedSomething && Date.now() - runStartedAt < QUICK_FAIL_MS) {
+      const n = (quickFailStreak.get(agentName) ?? 0) + 1
+      quickFailStreak.set(agentName, n)
+      if (n >= QUICK_FAIL_LIMIT) {
+        autoStopExhausted(agentName, `${n} fast empty runs in a row (key likely out of usage)`)
+      }
+    } else {
+      quickFailStreak.delete(agentName) // a real (or productive) run resets the streak
+    }
+
     // Land the run into the repo. The driver only WRITES matching sources to a scratch dir + the
     // results file; without this step matches never reach src/ and near-misses never reach the DB.
     // `crackloop land` banks the sources, ingests near-misses into nearmiss/db.jsonl, runs the
@@ -2922,8 +2945,31 @@ async function driveBatch(agentName: string): Promise<void> {
 // the "two 6/14s" symptom).
 const driveLoopActive = new Set<string>()
 const driveStopRequested = new Set<string>() // Stop ends the whole queue walk, not just the current batch
+
+// A keyed API provider whose key runs out of usage otherwise loops forever, burning a failed call per
+// batch against a wall it can't get past. Detect that and stop just that agent (the others keep going).
+// The signal is empirical: a batch that does real work takes minutes; a quota-walled one fails in
+// seconds. So a run that comes back fast AND banks nothing is a "quick failure"; QUICK_FAIL_MS in a row
+// of those means the key is dry. An explicit out-of-usage message from the driver skips the wait.
+const QUICK_FAIL_MS = 20_000
+const QUICK_FAIL_LIMIT = 5
+const quickFailStreak = new Map<string, number>() // per-agent consecutive fast-and-empty runs
+const exhausted = new Map<string, string>() // agent -> reason; set when auto-stopped, shown on the box
+
+/** Stop one agent's drive loop because its API key ran out of usage. Leaves every other agent running. */
+function autoStopExhausted(agentName: string, reason: string): void {
+  agentLoop.delete(agentName) // no more batches get generated for it
+  driveStopRequested.add(agentName) // the loop breaks after the current (already-finished) batch
+  quickFailStreak.delete(agentName)
+  exhausted.set(agentName, reason)
+  report('drive', { agent: agentName, status: 'auto-stopped', reason })
+  pushState() // surface the exhausted note on the box
+}
+
 async function startDriveLoop(agentName: string): Promise<void> {
   if (driveLoopActive.has(agentName) || apiDriving.has(agentName)) return
+  exhausted.delete(agentName) // a manual (re)start clears a prior out-of-usage stop
+  quickFailStreak.delete(agentName)
   driveLoopActive.add(agentName)
   driveStopRequested.delete(agentName)
   try {

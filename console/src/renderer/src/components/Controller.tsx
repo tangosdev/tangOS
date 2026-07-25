@@ -339,6 +339,10 @@ export default function Controller({
                       {batch?.note && <span className="aib-note">{batch.note}</span>}
                       {liveLine && <span className={`aib-live mono${live ? '' : ' done'}`}>▸ {liveLine}</span>}
                     </>
+                  ) : a.exhausted ? (
+                    <span className="aib-exhausted" title={`Auto-stopped: ${a.exhausted}. Assign or drive it again to retry once the key has usage.`}>
+                      ⚠ out of usage - auto-stopped
+                    </span>
                   ) : (
                     <span className="aib-idle">{available ? 'idle - ready to assign' : 'offline'}</span>
                   )}

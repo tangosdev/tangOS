@@ -368,6 +368,7 @@ export interface AiAgent {
   effort?: string // reasoning-effort level; valid values depend on the model family (see efforts.ts)
   attempts?: number // console-driven agents: max match attempts per function (glm_refine --attempts)
   stopping?: boolean // Stop was pressed mid-drive; the post-run pipeline (land/paramclone/push) is finishing
+  exhausted?: string // api AIs: auto-stopped because the key ran out of usage. The reason, shown on the box.
   connected: boolean // mcp: a live session exists; api: currently driving a batch
   sessions?: number // mcp: number of live sessions collapsed under this name
   currentBatchId?: string

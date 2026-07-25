@@ -977,6 +977,7 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 }
 .aib-task-label { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .aib-idle { font-size: 12px; color: var(--aero-muted); font-style: italic; }
+.aib-exhausted { font-size: 12px; font-weight: 600; color: #9a3412; background: rgba(234,88,12,0.14); border: 1px solid rgba(234,88,12,0.4); border-radius: 8px; padding: 3px 8px; }
 .aib-prog { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--aero-muted); font-weight: 700; }
 .aib-bar { flex: 1; height: 6px; border-radius: 999px; background: rgba(0,0,0,0.1); overflow: hidden; }
 .aib-bar > span { display: block; height: 100%; border-radius: 999px; transition: width 300ms ease; }
