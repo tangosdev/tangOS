@@ -503,12 +503,22 @@ export default function Controller({
                           <ShoppingCart size={12} /> Add chosen functions ({cartCount})
                         </button>
                       )}
-                      {canDrive && (
+                      {/* Always reserve the drive row for API agents so the box doesn't resize when a
+                          queue appears. It's live only when canDrive; otherwise it sits disabled with a
+                          recessed/inverted look until there's a queue to work. */}
+                      {a.kind === 'api' && (
                         <div className="aib-drive-row">
                           <button
                             className="mini-btn go"
+                            disabled={!canDrive}
                             onClick={() => drive(a.name)}
-                            title={`Work through the queue (${queueRemaining} function${queueRemaining === 1 ? '' : 's'}) via this AI's API key`}
+                            title={
+                              canDrive
+                                ? `Work through the queue (${queueRemaining} function${queueRemaining === 1 ? '' : 's'}) via this AI's API key`
+                                : queueRemaining > 0
+                                  ? 'Busy - finish the current action first, then this works through the queue'
+                                  : 'Add functions to the queue first, then this drives through them via the API key'
+                            }
                           >
                             <Play size={12} /> Drive queue ({queueRemaining})
                           </button>

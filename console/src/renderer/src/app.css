@@ -898,7 +898,11 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 .app-seg button.on { color: #fff; }
 
 /* workspace: controller (big) left, requirements rail right */
-.ctl-workspace { grid-template-columns: 1fr 340px; padding: 14px; }
+/* Bound the single grid row to the workspace height (minmax(0,1fr), not the default
+   auto/content row) so the Controller can't grow past the viewport. Without this a short
+   window let the agent boxes size to content and run over the pinned footer instead of the
+   inner .ctl-grid scrolling. */
+.ctl-workspace { grid-template-columns: 1fr 340px; grid-template-rows: minmax(0, 1fr); padding: 14px; }
 .right-rail { display: flex; flex-direction: column; gap: 14px; overflow: auto; min-height: 0; }
 /* all requirements satisfied: the rail collapses to hug the compact "all set" chip docked on the
    right edge, and the Controller takes the freed width. Expanding the chip restores panel width. */
@@ -1056,6 +1060,14 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
    Amber tinted-pill, matching the .repo-warn warning idiom so it reads across themes. */
 .aib-note { font-size: 11px; line-height: 1.35; font-weight: 600; padding: 4px 8px; border-radius: 8px; color: #7c4a03; background: rgba(234,179,8,0.16); border: 1px solid rgba(234,179,8,0.45); }
 .mini-btn.go { color: #fff; background: rgb(var(--aero-primary-rgb)); border-color: rgb(var(--aero-primary-rgb)); }
+/* Disabled drive button: keep the row's footprint but read as recessed/inverted and inert -
+   muted fill, no white text, and an inset shadow so it looks pressed-in rather than raised. */
+.mini-btn.go:disabled {
+  cursor: default; color: var(--aero-muted);
+  background: rgba(var(--aero-primary-rgb) / 0.1); border-color: rgba(var(--aero-primary-rgb) / 0.22);
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.16), inset 0 0 0 1px rgba(0,0,0,0.03);
+}
+.mini-btn.go:disabled:hover { filter: none; }
 
 /* controller footer: writes/review centered (bottom-middle) + github bottom-right */
 .ctl-footer {
