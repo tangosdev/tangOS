@@ -60,6 +60,13 @@ const api = {
     ipcRenderer.on('draft:add', l)
     return () => ipcRenderer.removeListener('draft:add', l)
   },
+  // Fired when the main process finishes a background regen of the local chaos-db, so the atlas
+  // can reload fresh data instead of sitting on the stale copy it was showing.
+  onAtlasRefreshed: (cb: () => void): (() => void) => {
+    const l = (): void => cb()
+    ipcRenderer.on('atlas:refreshed', l)
+    return () => ipcRenderer.removeListener('atlas:refreshed', l)
+  },
   githubCredits: (): Promise<GithubCredits> => ipcRenderer.invoke('github:credits'),
   // Shared contributor colors (repo-committed login->hex, applied on everyone's Atlas legend/map).
   contributorColors: (): Promise<{ colors: Record<string, string>; you: string | null }> =>

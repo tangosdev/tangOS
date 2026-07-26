@@ -60,6 +60,7 @@ export interface TangosApi {
   openModulePopout(module: string): Promise<void>
   addDraftItem(item: BatchItem): Promise<void>
   onDraftAdd(cb: (item: BatchItem) => void): () => void
+  onAtlasRefreshed(cb: () => void): () => void
   githubCredits(): Promise<GithubCredits>
   contributorColors(): Promise<{ colors: Record<string, string>; you: string | null }>
   proposeContributorColor(color: string): Promise<{ ok: boolean; error?: string; prUrl?: string }>

@@ -229,6 +229,19 @@ export default function AtlasView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // The main process regenerates the local chaos-db in the background when it is stale. When that
+  // finishes, reload - but only if we are actually showing local data, so a manual Live view is not
+  // yanked out from under the user.
+  useEffect(() => {
+    return window.tangos.onAtlasRefreshed(() => {
+      setSource((s) => {
+        if (s === 'local') void load('local')
+        return s
+      })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function generate(): Promise<void> {
     setGenerating(true)
     try {
@@ -606,7 +619,16 @@ export default function AtlasView({
               </ul>
             ) : (
               <p className="ad-empty hint">
-                {history?.note || (historyLoading ? '' : 'No attempts logged for this function yet.')}
+                {history?.note ||
+                  (historyLoading
+                    ? ''
+                    : // A banked draft (near-miss tip on disk, or a NONMATCHING src file) is not the
+                      // same as a logged attempt: only the console driver writes MATCH_RESULT rows, so
+                      // a hand-banked draft shows here with an empty history. Say the draft exists so
+                      // "no attempts logged" is not misread as "no draft".
+                      history?.tip || selectedFn.div != null || selectedFn.srcPath
+                      ? 'Draft on record (see above) — no console attempts logged yet.'
+                      : 'No draft and no attempts logged for this function yet.')}
               </p>
             )}
           </div>

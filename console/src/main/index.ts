@@ -1787,11 +1787,55 @@ ipcMain.handle('repo:preflight', async () => {
 
 ipcMain.handle('atlas:load', () => {
   if (!state.descriptor || !state.repoPath) return null
-  if (atlasCache.repo === state.repoPath && atlasCache.local !== undefined) return atlasCache.local
+  if (atlasCache.repo === state.repoPath && atlasCache.local !== undefined) {
+    maybeRegenChaosDb(state.repoPath) // fire-and-forget: refresh in the background if the file is stale
+    return atlasCache.local
+  }
   const db = readAtlas(state.repoPath, state.descriptor)
   atlasCache = { ...atlasCache, repo: state.repoPath, local: db }
+  maybeRegenChaosDb(state.repoPath)
   return db
 })
+
+// Regenerate the local chaos-db.json in the background when it is older than the committed data it
+// summarizes, so the atlas is never silently days stale (it drifted 3 days behind once, showing
+// already-matched functions as unmatched drafts). Staleness = the newest of src/, nearmiss/db.jsonl
+// or config/ was modified after chaos-db.json was written. Only one regen runs at a time; on success
+// the local cache is dropped and the renderer is told to reload. Never blocks the atlas load.
+let chaosRegenRunning = false
+function maybeRegenChaosDb(repoPath: string): void {
+  if (chaosRegenRunning) return
+  try {
+    const rel = state.descriptor?.data?.dbPath || 'chaos-db.json'
+    const dbFile = isAbsolute(rel) ? rel : join(repoPath, rel)
+    if (!existsSync(dbFile) || !existsSync(join(repoPath, 'tools/chaos_db_ci.py'))) return
+    const dbAt = statSync(dbFile).mtimeMs
+    const newest = (...paths: string[]): number =>
+      Math.max(0, ...paths.map((p) => (existsSync(p) ? statSync(p).mtimeMs : 0)))
+    // Cheap staleness probe: the near-miss DB and the config dir stamp move on almost every landing,
+    // and are single stat()s (no directory walk of src/, which has ~11k files).
+    const dataAt = newest(join(repoPath, 'nearmiss/db.jsonl'), join(repoPath, 'config'), join(repoPath, 'src'))
+    if (dataAt <= dbAt) return // already current
+  } catch {
+    return
+  }
+  chaosRegenRunning = true
+  const py = currentRuntime().python || 'python'
+  const child = spawn(
+    py,
+    ['tools/chaos_db_ci.py', '--out', 'chaos-db.json', '--contrib-out', 'contributions.json'],
+    { cwd: repoPath, env: { ...process.env, PYTHONUTF8: '1' } }
+  )
+  child.on('error', () => {
+    chaosRegenRunning = false
+  })
+  child.on('exit', (code) => {
+    chaosRegenRunning = false
+    if (code !== 0 || state.repoPath !== repoPath) return
+    atlasCache = { ...atlasCache, local: undefined } // force a fresh read on the next atlas:load
+    mainWindow?.webContents.send('atlas:refreshed')
+  })
+}
 
 ipcMain.handle('github:credits', async () => {
   return githubCredits(state.descriptor?.project?.github ?? '', secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN)
