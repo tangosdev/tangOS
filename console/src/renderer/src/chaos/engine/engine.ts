@@ -371,9 +371,9 @@ export class ChaosEngine {
     this.wake()
   }
 
-  /** Finish the drag: collect every function FULLY inside the box (clipping a neighbor's edge must
-   *  not grab it - treemap tiles are wall-to-wall) and hand them to the host. A sub-5px drag is a
-   *  plain right-click, not a selection - ignored. */
+  /** Finish the drag: collect every function the box TOUCHES (AABB overlap, so clipping a
+   *  tile's edge grabs it too) and hand them to the host. A sub-5px drag is a plain
+   *  right-click, not a selection - ignored. */
   marqueeEnd(): void {
     const m = this.marquee
     this.marquee = null
@@ -388,7 +388,8 @@ export class ChaosEngine {
     const fns: AtlasFunction[] = []
     for (const i of out) {
       const n = this.world.fns[i]
-      if (n.x >= rect.x && n.y >= rect.y && n.x + n.w <= rect.x + rect.w && n.y + n.h <= rect.y + rect.h)
+      // Touch, not contain: the box grabs any tile it overlaps at all.
+      if (n.x < rect.x + rect.w && n.x + n.w > rect.x && n.y < rect.y + rect.h && n.y + n.h > rect.y)
         fns.push(n.f)
     }
     if (fns.length) this.cb.onMarqueeSelect(fns, m.add)

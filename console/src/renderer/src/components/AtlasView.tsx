@@ -11,7 +11,8 @@ import {
   Users,
   ExternalLink,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Lock
 } from 'lucide-react'
 import type {
   AtlasDb,
@@ -421,6 +422,7 @@ export default function AtlasView({
         cartRefs={draftRefs}
         onToggleCart={(f) => {
           if (f.matched) return // matched functions are done - never basket them (mirrors the detail panel)
+          if (f.claim && !draftRefs.has(f.name)) return // held by someone else on Live - don't basket it
           if (draftRefs.has(f.name)) onRemove(f.name)
           else
             onAdd({
@@ -434,9 +436,11 @@ export default function AtlasView({
             })
         }}
         onMarqueeSelect={(fns, add) => {
-          // Right-drag box: unmatched functions inside become the cart; Ctrl adds to what's there.
+          // Right-drag box: unmatched, unclaimed functions it touches become the cart; Ctrl adds to
+          // what's there. Claimed (active/partial in CLAIMS.md on Live) are skipped so the box never
+          // baskets work someone else holds.
           const items = fns
-            .filter((f) => !f.matched)
+            .filter((f) => !f.matched && !f.claim)
             .map((f) => ({
               id: `${Date.now()}-${f.name}`,
               ref: f.name,
@@ -681,7 +685,16 @@ export default function AtlasView({
               <span className="fn-author" title="author">{f.author ?? ''}</span>
               <span className="fn-size">{f.size}b</span>
               <span className="fn-add">
-                {!f.matched && (draftRefs.has(f.name) ? (
+                {!f.matched && f.claim && !draftRefs.has(f.name) ? (
+                  <span
+                    className="claim-badge"
+                    title={`Claimed (${f.claim.status}) by ${f.claim.handle} - coordinate in CLAIMS.md before taking it`}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--aero-claimed, #d68a12)', fontSize: 11 }}
+                  >
+                    <Lock size={12} strokeWidth={2.5} />
+                    held
+                  </span>
+                ) : !f.matched && (draftRefs.has(f.name) ? (
                   <button
                     className="bubble-btn added"
                     title="Remove from batch"

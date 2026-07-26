@@ -108,6 +108,9 @@ export interface TangosData {
   dbPath?: string
   committedDbUrl?: string
   claimsApi?: string
+  // Raw URL of the live CLAIMS.md. Optional: if absent the console derives it from
+  // committedDbUrl (same owner/repo, main branch, /CLAIMS.md).
+  claimsMdUrl?: string
 }
 
 export interface ClaimsResult {
@@ -394,6 +397,9 @@ export interface AtlasFunction {
   floor?: string
   sim?: number
   sibling?: string
+  // Overlaid on the LIVE atlas only: an active/partial CLAIMS.md hold by another
+  // contributor. Present => someone is grinding this; the batcher must not basket it.
+  claim?: { handle: string; status: string }
 }
 
 export interface AtlasStats {

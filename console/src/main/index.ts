@@ -19,6 +19,7 @@ import { registerAll, cliCommand } from './connect'
 import { runTool } from './runTool'
 import { preflight } from './preflight'
 import { readAtlas } from './atlas'
+import { deriveClaimsUrl, fetchHeldClaims, overlayClaims } from './claims'
 import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
 import { fetchColors, openColorPr, viewerLogin } from './contributorColors'
@@ -1395,6 +1396,13 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
       )
     }
     const db = (await r.json()) as AtlasDb
+    // Overlay live CLAIMS.md holds so the Viewer can dim taken work and the cart can refuse it.
+    // Advisory + best-effort: a failed/slow fetch just leaves functions untagged, never blocks Live.
+    const claimsUrl = deriveClaimsUrl(url, state.descriptor?.data?.claimsMdUrl)
+    if (claimsUrl) {
+      const held = await fetchHeldClaims(claimsUrl)
+      if (held) overlayClaims(db, held)
+    }
     atlasCache = { ...atlasCache, repo: state.repoPath, live: db, liveAt: Date.now() }
     aiStats.seedBestDiv(db.functions) // ground-truth near-miss baseline for the improvement gate
     return db

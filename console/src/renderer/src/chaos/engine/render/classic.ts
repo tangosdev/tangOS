@@ -17,6 +17,9 @@ export interface PaintView {
 
 const AUTHOR_FALLBACK = '#9aa7b5'
 const LABEL_FONT = '600 11px "Segoe UI", system-ui, sans-serif'
+// Amber wash over a function another contributor holds (active/partial CLAIMS.md, Live only),
+// so hand-picking can see it is taken and the marquee visibly skips it.
+const CLAIM_TINT = 'rgba(240,170,40,0.55)'
 
 function resolveAuthor(v: PaintView, a?: string): string {
   return a ? v.authorResolve?.get(a) ?? a : ''
@@ -58,9 +61,15 @@ export function paintTiles(
   const shave = 0.5 * invZ
   for (const i of world.query(view, scratch)) {
     const n = world.fns[i]
+    const w = Math.max(shave, n.w - shave)
+    const h = Math.max(shave, n.h - shave)
     ctx.globalAlpha = isDimmed(n.f, v) ? 0.14 : 1
     ctx.fillStyle = fnColor(n.f, v)
-    ctx.fillRect(n.x, n.y, Math.max(shave, n.w - shave), Math.max(shave, n.h - shave))
+    ctx.fillRect(n.x, n.y, w, h)
+    if (n.f.claim && !isDimmed(n.f, v)) {
+      ctx.fillStyle = CLAIM_TINT
+      ctx.fillRect(n.x, n.y, w, h)
+    }
   }
   ctx.globalAlpha = 1
 }
