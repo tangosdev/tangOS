@@ -660,48 +660,6 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 .claim-chip.mine { background: rgba(var(--aero-matched-rgb) / 0.18); color: rgb(var(--aero-matched-rgb)); border-color: rgba(var(--aero-matched-rgb) / 0.45); cursor: pointer; }
 .claim-chip.open { background: rgba(var(--aero-primary-rgb) / 0.12); color: rgb(var(--aero-primary-rgb)); border-color: rgba(var(--aero-primary-rgb) / 0.3); cursor: pointer; }
 .claim-chip.open:hover, .claim-chip.mine:hover { filter: brightness(1.06); }
-
-/* Claimed functions get a gold, occasionally-shining "hands off" treatment: a gold border ring,
-   a gold inlay wash, and a metallic highlight that sweeps across once every 5s. */
-.fn-row.claimed,
-.atlas-detail-card.claimed {
-  position: relative;
-  overflow: hidden;
-  box-shadow: inset 0 0 0 1.5px rgba(212,160,23,0.9), 0 0 9px rgba(212,160,23,0.28);
-}
-.fn-row.claimed {
-  background-image: linear-gradient(180deg, rgba(255,216,120,0.24), rgba(212,160,23,0.12));
-  border-radius: 8px;
-}
-.fn-row.claimed:hover {
-  background-image: linear-gradient(180deg, rgba(255,216,120,0.34), rgba(212,160,23,0.2));
-}
-.atlas-detail-card.claimed {
-  background-image: linear-gradient(180deg, rgba(255,216,120,0.16), rgba(212,160,23,0.06));
-}
-.fn-row.claimed::after,
-.atlas-detail-card.claimed::after {
-  content: '';
-  position: absolute; top: -20%; bottom: -20%; left: 0; width: 55%;
-  pointer-events: none;
-  background: linear-gradient(100deg,
-    rgba(255,255,255,0) 25%,
-    rgba(255,250,235,0.35) 45%,
-    rgba(255,255,255,0.95) 50%,
-    rgba(255,250,235,0.35) 55%,
-    rgba(255,255,255,0) 75%);
-  transform: translateX(-200%) skewX(-16deg);
-  animation: gold-shine 5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  mix-blend-mode: screen;
-}
-/* Idle most of the cycle, then a quick ~1s sweep across. */
-@keyframes gold-shine {
-  0%, 80% { transform: translateX(-200%) skewX(-16deg); }
-  100% { transform: translateX(360%) skewX(-16deg); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .fn-row.claimed::after, .atlas-detail-card.claimed::after { animation: none; opacity: 0; }
-}
 .bubble-btn {
   width: 26px; height: 26px; border-radius: 50%; border: 1px solid rgba(var(--aero-primary-rgb) / 0.5);
   cursor: pointer; display: grid; place-items: center; color: #fff; flex: none; padding: 0;

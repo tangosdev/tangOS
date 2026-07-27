@@ -17,10 +17,9 @@ export interface PaintView {
 
 const AUTHOR_FALLBACK = '#9aa7b5'
 const LABEL_FONT = '600 11px "Segoe UI", system-ui, sans-serif'
-// Gold wash + gold border over a function another contributor holds (active/partial CLAIMS.md,
-// Live only), so hand-picking can see it is taken and the marquee visibly skips it.
-const CLAIM_TINT = 'rgba(255,198,70,0.5)'
-const CLAIM_BORDER = 'rgba(212,160,23,0.95)'
+// Light-red wash over a function another contributor holds (active/partial CLAIMS.md, Live only),
+// so hand-picking can see it is taken and the marquee visibly skips it.
+const CLAIM_TINT = 'rgba(255,90,90,0.42)'
 
 function resolveAuthor(v: PaintView, a?: string): string {
   return a ? v.authorResolve?.get(a) ?? a : ''
@@ -70,10 +69,6 @@ export function paintTiles(
     if (n.f.claim && !isDimmed(n.f, v)) {
       ctx.fillStyle = CLAIM_TINT
       ctx.fillRect(n.x, n.y, w, h)
-      const lw = 1.5 * invZ
-      ctx.strokeStyle = CLAIM_BORDER
-      ctx.lineWidth = lw
-      ctx.strokeRect(n.x + lw / 2, n.y + lw / 2, w - lw, h - lw)
     }
   }
   ctx.globalAlpha = 1

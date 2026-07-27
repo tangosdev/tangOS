@@ -11,8 +11,7 @@ import {
   Users,
   ExternalLink,
   Maximize2,
-  Minimize2,
-  Lock
+  Minimize2
 } from 'lucide-react'
 import type {
   AtlasDb,
@@ -510,7 +509,7 @@ export default function AtlasView({
 
       <div className="atlas-right">
       {selectedFn && (
-        <div className={`atlas-detail aero-panel atlas-detail-card${selectedFn.claim && !selectedFn.matched ? ' claimed' : ''}`}>
+        <div className="atlas-detail aero-panel atlas-detail-card">
           <div className="atlas-detail-top">
             <span className="ad-name mono">{selectedFn.name}</span>
             <span className="ad-meta">
@@ -680,7 +679,7 @@ export default function AtlasView({
         {shown.map((f) => {
           return (
             <div
-              className={`fn-row${selectedFn?.id === f.id ? ' sel' : ''}${f.claim && !f.matched ? ' claimed' : ''}`}
+              className={`fn-row${selectedFn?.id === f.id ? ' sel' : ''}`}
               data-fnid={f.id}
               key={f.id}
               style={{ cursor: 'pointer' }}
@@ -693,16 +692,7 @@ export default function AtlasView({
               <span className="fn-author" title="author">{f.author ?? ''}</span>
               <span className="fn-size">{f.size}b</span>
               <span className="fn-add">
-                {!f.matched && f.claim && !draftRefs.has(f.name) ? (
-                  <span
-                    className="claim-badge"
-                    title={`Claimed (${f.claim.status}) by ${f.claim.handle} - coordinate in CLAIMS.md before taking it`}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: 'var(--aero-claimed, #d68a12)', fontSize: 11 }}
-                  >
-                    <Lock size={12} strokeWidth={2.5} />
-                    held
-                  </span>
-                ) : !f.matched && (draftRefs.has(f.name) ? (
+                {!f.matched && !f.claim && (draftRefs.has(f.name) ? (
                   <button
                     className="bubble-btn added"
                     title="Remove from batch"
