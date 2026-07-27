@@ -67,6 +67,15 @@ export default function AtlasView({
   const [myLogin, setMyLogin] = useState<string | null>(null)
   const [recentStems, setRecentStems] = useState<Set<string>>(new Set()) // fn names matched in last 24h
 
+  // Clear everything the operator has picked or opened: empty the batch cart, close the open
+  // function, and drop the module drill-in. Wired to the "Clear selection" button and a bare
+  // right-click on the map.
+  const clearSelection = (): void => {
+    onReplace([])
+    setSelectedFn(null)
+    setModuleFilter(null)
+  }
+
   // Prior tries for the selected function (attempt log + near-miss tip). Operator planning only.
   useEffect(() => {
     if (!selectedFn) {
@@ -418,6 +427,7 @@ export default function AtlasView({
             if (layoutMode === 'ov') setModuleFilter(f.module)
           }
         }}
+        onDeselectAll={clearSelection}
         selectedId={selectedFn?.id}
         cartRefs={draftRefs}
         onToggleCart={(f) => {
@@ -500,7 +510,7 @@ export default function AtlasView({
 
       <div className="atlas-right">
       {selectedFn && (
-        <div className="atlas-detail aero-panel atlas-detail-card">
+        <div className={`atlas-detail aero-panel atlas-detail-card${selectedFn.claim && !selectedFn.matched ? ' claimed' : ''}`}>
           <div className="atlas-detail-top">
             <span className="ad-name mono">{selectedFn.name}</span>
             <span className="ad-meta">
@@ -540,14 +550,12 @@ export default function AtlasView({
                 </button>
               ))}
             <button
-              className="run-icon"
-              title="close"
-              onClick={() => {
-                setSelectedFn(null)
-                setModuleFilter(null)
-              }}
+              className="aero-button danger"
+              title="Close this function and clear the whole batch selection"
+              onClick={clearSelection}
             >
-              <X size={14} />
+              <X size={14} style={{ verticalAlign: -2, marginRight: 5 }} />
+              Clear selection
             </button>
           </div>
 
@@ -672,7 +680,7 @@ export default function AtlasView({
         {shown.map((f) => {
           return (
             <div
-              className={`fn-row${selectedFn?.id === f.id ? ' sel' : ''}`}
+              className={`fn-row${selectedFn?.id === f.id ? ' sel' : ''}${f.claim && !f.matched ? ' claimed' : ''}`}
               data-fnid={f.id}
               key={f.id}
               style={{ cursor: 'pointer' }}

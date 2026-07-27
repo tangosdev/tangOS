@@ -24,9 +24,11 @@ export interface EngineCallbacks {
   onFunction: (f: AtlasFunction) => void
   // Space over the focused function while WASD-travelling: toggle it in the batch cart.
   onToggleCart: (f: AtlasFunction) => void
-  // Right-drag marquee finished: the functions fully inside the box. add=true (Ctrl held) means
+  // Right-drag marquee finished: the functions the box touches. add=true (Ctrl held) means
   // union with the existing selection; false means replace it.
   onMarqueeSelect: (fns: AtlasFunction[], add: boolean) => void
+  // Right-click with no drag: clear the selection (empty the cart + close the open function).
+  onDeselectAll: () => void
 }
 
 export interface ViewOptions {
@@ -379,7 +381,11 @@ export class ChaosEngine {
     this.marquee = null
     this.wake()
     if (!m || !this.world) return
-    if (Math.abs(m.x1 - m.x0) < 5 && Math.abs(m.y1 - m.y0) < 5) return
+    // A right-click that never dragged is a "clear selection" gesture, not a box.
+    if (Math.abs(m.x1 - m.x0) < 5 && Math.abs(m.y1 - m.y0) < 5) {
+      this.cb.onDeselectAll()
+      return
+    }
     const a = this.cam.screenToWorld(Math.min(m.x0, m.x1), Math.min(m.y0, m.y1))
     const b = this.cam.screenToWorld(Math.max(m.x0, m.x1), Math.max(m.y0, m.y1))
     const rect = { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y }
