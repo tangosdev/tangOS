@@ -62,12 +62,16 @@ export default function AtlasView({
   const [history, setHistory] = useState<FunctionHistory | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [gh, setGh] = useState<GithubCredits | null>(null)
-  // Shop cosmetics: bought contributor colors (login->hex) and function stars, fetched from the
-  // same backend the website viewer reads so every atlas matches. Colors are bought in Hermit's
-  // Discord shop, not picked here.
+  // Atlas cosmetics from the backend: the RESOLVED contributor color map (custom + de-conflicted
+  // defaults, so nobody shares a shade) and function stars. Backend is authoritative; kept live by
+  // the SSE stream below, so a shop color buy shows within a second.
   const [sharedColors, setSharedColors] = useState<Record<string, string>>({})
   const [stars, setStars] = useState<{ function: string; by: string }[]>([])
-  const [recentStems, setRecentStems] = useState<Set<string>>(new Set()) // fn names matched in last 24h
+  // Contributor match numbers from the backend: career totals + matches today (the ▲ badge).
+  const [counts, setCounts] = useState<{ totals: Record<string, number>; daily: Record<string, number> }>({
+    totals: {},
+    daily: {}
+  })
 
   // Clear everything the operator has picked or opened: empty the batch cart, close the open
   // function, and drop the module drill-in. Wired to the "Clear selection" button and a bare
@@ -118,8 +122,19 @@ export default function AtlasView({
         setStars(r.stars)
       })
       .catch(() => {})
-    // functions matched on origin/main in the last 24h - drives the green ▲ per contributor
-    window.tangos.recentAdds(24).then((s) => alive && setRecentStems(new Set(s))).catch(() => {})
+    window.tangos.atlasCounts().then((c) => alive && setCounts(c)).catch(() => {})
+    // Live push from the VPS: colors/stars and counts update the instant they change.
+    const off = window.tangos.onAtlasLive((event, data) => {
+      if (!alive) return
+      if (event === 'cosmetics') {
+        const d = data as { colors?: Record<string, string>; stars?: { function: string; by: string }[] }
+        if (d.colors) setSharedColors(d.colors)
+        if (Array.isArray(d.stars)) setStars(d.stars)
+      } else if (event === 'counts') {
+        const d = data as { totals?: Record<string, number>; daily?: Record<string, number> }
+        setCounts({ totals: d.totals ?? {}, daily: d.daily ?? {} })
+      }
+    })
     window.tangos
       .viewerPrefsGet()
       .then((p) => {
@@ -129,6 +144,7 @@ export default function AtlasView({
       .catch(() => {})
     return () => {
       alive = false
+      off()
     }
   }, [])
 
@@ -145,45 +161,43 @@ export default function AtlasView({
   const keyToLogin = useMemo(() => new Map(Object.entries(gh?.keyToLogin ?? {})), [gh])
   const loginFor = (f: AtlasFunction): string => (f.author ? keyToLogin.get(f.author) ?? f.author : '')
 
-  // matched-function count per canonical login, seeded with everyone who has a PR/commit
+  // matched-function count per canonical login. The backend's career totals are the live,
+  // authoritative source (same numbers the website shows); the db-derived count is a fallback
+  // for a first paint before the counts arrive or when offline.
   const loginCounts = useMemo(() => {
     const m = new Map<string, number>()
-    if (db) for (const f of db.functions) if (f.matched && f.author) {
-      const login = keyToLogin.get(f.author) ?? f.author
-      if (/\[bot\]$/i.test(login)) continue
-      m.set(login, (m.get(login) ?? 0) + 1)
+    if (Object.keys(counts.totals).length) {
+      for (const [login, n] of Object.entries(counts.totals)) if (!/\[bot\]$/i.test(login)) m.set(login, n)
+    } else if (db) {
+      for (const f of db.functions) if (f.matched && f.author) {
+        const login = keyToLogin.get(f.author) ?? f.author
+        if (/\[bot\]$/i.test(login)) continue
+        m.set(login, (m.get(login) ?? 0) + 1)
+      }
     }
     for (const l of gh?.logins ?? []) if (!m.has(l.login)) m.set(l.login, 0)
     for (const p of gh?.prAuthors ?? []) if (!m.has(p)) m.set(p, 0)
     return m
-  }, [db, gh, keyToLogin])
+  }, [db, gh, keyToLogin, counts])
 
-  // matched-in-the-last-24h count per canonical login (the green ▲ badge in the legend)
+  // matches-today per login (the green ▲ badge), straight from the backend's daily counter -
+  // the same one that drives the milestone posts, so it counts real matches, not file touches.
   const recentByLogin = useMemo(() => {
     const m = new Map<string, number>()
-    if (db && recentStems.size) for (const f of db.functions) {
-      if (!f.matched || !f.author || !recentStems.has(f.name)) continue
-      const login = keyToLogin.get(f.author) ?? f.author
-      if (/\[bot\]$/i.test(login)) continue
-      m.set(login, (m.get(login) ?? 0) + 1)
-    }
+    for (const [login, n] of Object.entries(counts.daily)) if (n > 0 && !/\[bot\]$/i.test(login)) m.set(login, n)
     return m
-  }, [db, recentStems, keyToLogin])
+  }, [counts])
 
   const authorColors = useMemo(() => {
     const out = new Map<string, string>()
-    // Rank real contributors (count >= 1) by matches desc, same ordering as the website, so the
-    // palette index -> color assignment is identical across atlases.
+    // The backend resolves the authoritative color per contributor (custom + de-conflicted
+    // defaults); use it directly so every atlas matches. Palette is only a fallback for a
+    // contributor the backend hasn't ranked yet.
+    const shared = new Map(Object.entries(sharedColors).map(([k, v]) => [k.toLowerCase(), v]))
     ;[...loginCounts.entries()]
       .filter(([, n]) => n >= 1)
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .forEach(([name], i) => out.set(name, PALETTE[i % PALETTE.length]))
-    // Shop-bought colors override the palette (case-insensitive on login).
-    const shared = new Map(Object.entries(sharedColors).map(([k, v]) => [k.toLowerCase(), v]))
-    for (const name of out.keys()) {
-      const pick = shared.get(name.toLowerCase())
-      if (pick) out.set(name, pick)
-    }
+      .forEach(([name], i) => out.set(name, shared.get(name.toLowerCase()) ?? PALETTE[i % PALETTE.length]))
     return out
   }, [loginCounts, sharedColors])
 

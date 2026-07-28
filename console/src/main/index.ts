@@ -22,7 +22,7 @@ import { readAtlas } from './atlas'
 import { deriveClaimsUrl, fetchHeldClaims, overlayClaims } from './claims'
 import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
-import { fetchCosmetics, type Cosmetics } from './cosmetics'
+import { fetchCosmetics, fetchCounts, connectAtlasLive, bustCosmeticsCache, type Cosmetics, type Counts } from './cosmetics'
 import { startDeviceFlow, pollForToken } from './githubAuth'
 import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
 import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
@@ -1850,6 +1850,12 @@ ipcMain.handle('github:credits', async () => {
 // retired).
 ipcMain.handle('atlas:cosmetics', async (): Promise<Cosmetics> => {
   return fetchCosmetics(state.descriptor?.data?.claimsApi)
+})
+
+// Contributor match numbers from the backend (career totals + matches today), the source
+// for the legend counts and the recent-activity badge.
+ipcMain.handle('atlas:counts', async (): Promise<Counts> => {
+  return fetchCounts(state.descriptor?.data?.claimsApi)
 })
 
 // GitHub device-flow sign-in: return the user code + verification URL to show, open the
@@ -3697,6 +3703,17 @@ app.whenReady().then(() => {
     }, 8000)
   }
   createWindow()
+  // Live atlas push from the VPS: contributor colors, stars, and match counts stream in
+  // and forward straight to the renderer, so a shop color buy or a new match shows up
+  // within a second without any polling. One connection for the app's life; it
+  // auto-reconnects across redeploys and re-derives its URL from the current descriptor.
+  connectAtlasLive(
+    () => state.descriptor?.data?.claimsApi,
+    (event, data) => {
+      if (event === 'cosmetics') bustCosmeticsCache()
+      mainWindow?.webContents.send('atlas:live', { event, data })
+    }
+  )
   initAutoUpdate() // check the public releases feed for a newer build
   // Debug hotkeys: Ctrl+Shift+D writes a snapshot (screenshot + state + dom) to the debug folder;
   // Ctrl+Shift+I toggles DevTools. Available in every build so bugs can be captured anywhere.

@@ -74,6 +74,15 @@ const api = {
     colors: Record<string, string>
     stars: { function: string; by: string; at: string }[]
   }> => ipcRenderer.invoke('atlas:cosmetics'),
+  // Contributor match numbers from the backend: career totals + matches today.
+  atlasCounts: (): Promise<{ totals: Record<string, number>; daily: Record<string, number> }> =>
+    ipcRenderer.invoke('atlas:counts'),
+  // Live atlas pushes from the VPS (cosmetics/counts/claims). The callback fires per event.
+  onAtlasLive: (cb: (event: string, data: unknown) => void): (() => void) => {
+    const l = (_e: unknown, msg: { event: string; data: unknown }): void => cb(msg.event, msg.data)
+    ipcRenderer.on('atlas:live', l)
+    return () => ipcRenderer.removeListener('atlas:live', l)
+  },
 
   pickRepo: (): Promise<RepoState> => ipcRenderer.invoke('repo:pick'),
   setRepo: (path: string): Promise<RepoState> => ipcRenderer.invoke('repo:set', path),
