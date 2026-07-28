@@ -191,9 +191,13 @@ export async function fetchRemote(repo: string): Promise<boolean> {
  *  "func_02048720"), which are the function names the Atlas keys on. */
 export async function recentlyAddedSrc(repo: string, branch: string, sinceHours: number): Promise<string[]> {
   await git(repo, ['fetch', '--quiet', 'origin', branch])
+  // A + M, not just A: most matches land by editing an existing NONMATCHING stub into a
+  // real match (a modify), so filtering to added-only files badly undercounts a
+  // contributor's recent work. The caller cross-references these stems against the
+  // matched set in the loaded atlas, so a stub still unmatched never counts anyway.
   const r = await git(repo, [
     'log', `origin/${branch}`, `--since=${sinceHours} hours ago`,
-    '--diff-filter=A', '--name-only', '--pretty=format:'
+    '--diff-filter=AM', '--name-only', '--pretty=format:'
   ])
   if (r.code !== 0) return []
   const stems = new Set<string>()

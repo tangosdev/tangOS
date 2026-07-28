@@ -22,7 +22,7 @@ import { readAtlas } from './atlas'
 import { deriveClaimsUrl, fetchHeldClaims, overlayClaims } from './claims'
 import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
-import { fetchColors, openColorPr, viewerLogin } from './contributorColors'
+import { fetchCosmetics, type Cosmetics } from './cosmetics'
 import { startDeviceFlow, pollForToken } from './githubAuth'
 import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
 import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
@@ -1246,9 +1246,6 @@ const DEFAULT_ATTEMPTS = 4
 let viewerPrefs: ViewerPrefs = { theme: 'classic', contributorColors: false }
 // Animated gradient-background pref (on by default); the palette follows the active theme.
 let bgPrefs: BackgroundPrefs = { enabled: true }
-// Your confirmed contributor color: overlays your own legend entry immediately (and across
-// restarts) while the color PR waits to merge, so the pick never visually reverts.
-let myContributorColor: string | null = null
 // Draft-source toggles for agents (near-miss tips / Ghidra scaffolds). Policy only — never paste C.
 let matchingPrefs: MatchingPrefs = { allowNearMiss: true, allowGhidra: false }
 function settingsFile(): string {
@@ -1275,7 +1272,6 @@ function saveSettings(): void {
         autoPushEnabled: state.autoPushEnabled,
         viewerPrefs,
         bgPrefs,
-        myContributorColor,
         matchingPrefs,
         // Whether the MCP server is on RIGHT NOW = whether the user last left it on. The next
         // launch auto-starts it (update restarts kept killing agents' connection point).
@@ -1303,7 +1299,6 @@ function loadSettings(): {
   autoPushEnabled?: boolean
   viewerPrefs?: Partial<ViewerPrefs>
   bgPrefs?: Partial<BackgroundPrefs>
-  myContributorColor?: string | null
   matchingPrefs?: Partial<MatchingPrefs>
   mcpRunning?: boolean
 } {
@@ -1849,34 +1844,12 @@ ipcMain.handle('github:credits', async () => {
   return githubCredits(state.descriptor?.project?.github ?? '', secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN)
 })
 
-// Shared contributor colors: the repo-committed login->hex map, plus who "you" are (the stored
-// token's login) so the legend knows which entry gets the picker. YOUR locally-saved pick overlays
-// your own entry so a pending (unmerged) color never visually reverts under a stale shared fetch.
-ipcMain.handle('colors:get', async (): Promise<{ colors: Record<string, string>; you: string | null }> => {
-  const repo = state.repoPath
-  const slug = repo && (await isGitRepo(repo)) ? await remoteSlug(repo) : null
-  const branch = slug && repo ? await defaultBranch(repo) : 'main'
-  const token = secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN
-  const [colors, you] = await Promise.all([fetchColors(slug, branch, repo), viewerLogin(token)])
-  if (you && myContributorColor) colors[you] = myContributorColor
-  return { colors, you }
-})
-
-// Confirm YOUR color: persist the pick locally (instant + revert-proof for you) and open a one-file
-// PR against the repo (only your own key can change; branches auto-delete on merge).
-ipcMain.handle('colors:propose', async (_e, color: string): Promise<{ ok: boolean; error?: string; prUrl?: string }> => {
-  const repo = state.repoPath
-  if (!repo || !(await isGitRepo(repo))) return { ok: false, error: 'not a git checkout' }
-  const slug = await remoteSlug(repo)
-  if (!slug) return { ok: false, error: 'no GitHub origin remote' }
-  const token = secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN
-  if (!token) return { ok: false, error: 'sign into GitHub in Settings first' }
-  const branch = await defaultBranch(repo)
-  const r = await openColorPr(repo, slug, branch, token, String(color))
-  if (!r.ok) return { ok: false, error: r.error }
-  myContributorColor = String(color)
-  saveSettings()
-  return { ok: true, prUrl: r.prUrl }
+// Atlas cosmetics from the shop backend: contributor colors + function stars, the same
+// source the website viewer reads, so every atlas looks identical. Colors are bought in
+// Hermit's Discord shop now, not picked here (the old contributor-colors.json PR flow is
+// retired).
+ipcMain.handle('atlas:cosmetics', async (): Promise<Cosmetics> => {
+  return fetchCosmetics(state.descriptor?.data?.claimsApi)
 })
 
 // GitHub device-flow sign-in: return the user code + verification URL to show, open the
@@ -2108,6 +2081,32 @@ async function liveMatchedNames(): Promise<Set<string> | null> {
   }
 }
 
+/** Best-effort Random top-up for a short similarity batch: pull up to `limit` random unmatched
+ * functions to fill the rest of a batch so a drained similarity pool never leaves an agent idle.
+ * Uses the same `worklist --random` plan as the Random role - a fast stdout scheduler (no corpus
+ * rank), so this is cheap. Returns [] on any failure; the top-up is optional, so a failed pull just
+ * keeps the (short) similarity batch as-is. */
+async function fetchRandomTopUp(limit: number): Promise<string[]> {
+  if (!state.repoPath || !state.descriptor) return []
+  const plan = genPlanFor('Random', limit)
+  const tool = state.descriptor.tools.find((t) => t.id === plan.schedId)
+  if (!tool) return []
+  try {
+    const res = await runTool({
+      tool,
+      values: plan.values,
+      runtime: currentRuntime(),
+      source: 'user',
+      repoPath: state.repoPath,
+      allowMutations: true,
+      extraEnv: secretsEnv()
+    })
+    return (res.output || '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{'))
+  } catch {
+    return []
+  }
+}
+
 async function genDraft(role: string | undefined, count: number): Promise<BatchDraft> {
   if (!state.repoPath || !state.descriptor) throw new Error('no repo loaded')
   // Functions already handed out (in a still-open batch) - never generate these again so
@@ -2235,15 +2234,17 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   const matchedLive = await liveMatchedNames()
   let droppedMatched = 0
   const items: BatchItem[] = []
-  for (const line of lines) {
-    if (items.length >= count) break
+  // Absorb one scheduler row into the batch (dedup against taken + already-matched-on-main, cap at
+  // count). Factored out so the Random top-up below reuses the exact same filtering.
+  const absorb = (line: string): void => {
+    if (items.length >= count) return
     try {
       const r = JSON.parse(line) as {
         name: string; module?: string; addr?: string; size?: string; target_hex?: string
         coddog_sim?: number; siblings?: { name: string; sim: number }[]
       }
-      if (taken.has(r.name)) continue // already assigned elsewhere, or a same-name sibling above
-      if (matchedLive?.has(r.name)) { droppedMatched++; continue } // already matched on main since this clone synced
+      if (taken.has(r.name)) return // already assigned elsewhere, or a same-name sibling above
+      if (matchedLive?.has(r.name)) { droppedMatched++; return } // already matched on main since this clone synced
       const addr = r.addr ? parseInt(r.addr, 16) : undefined
       const size = r.size ? parseInt(r.size, 16) : undefined
       const sib = r.siblings?.[0]
@@ -2268,10 +2269,27 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
       /* skip malformed rows */
     }
   }
+  for (const line of lines) absorb(line)
   try {
     unlinkSync(outPath)
   } catch {
     /* ignore */
+  }
+  // Top-up-on-short with random. The similarity pool (Drafter/default) deterministically drains to
+  // the SAME top-N once everything similar is already taken or matched-on-main, so an agent that has
+  // worked it once goes idle on an empty queue. When the primary plan comes up short, fill the rest
+  // with random unmatched functions (worklist --random reshuffles every run) so work keeps flowing.
+  // Skipped for roles with a purpose-built pool: Hard matcher (size floor - random small funcs defeat
+  // it), Refiner (near-miss pile, not raw unmatched), and Random (already random).
+  let randomFill = 0
+  if (items.length < count && role !== 'Hard matcher' && role !== 'Refiner' && role !== 'Random') {
+    const before = items.length
+    const need = count - items.length
+    // Same over-fetch headroom as the primary plan: dedup drops taken/matched rows, so ask for more
+    // than `need` or a mostly-taken pool lands short again.
+    for (const line of await fetchRandomTopUp(need + taken.size + Math.max(need, 16) + liveDropBudget))
+      absorb(line)
+    randomFill = items.length - before
   }
   if (droppedMatched) console.log(`[genDraft] skipped ${droppedMatched} target(s) already matched on main (clone may be behind)`)
   if (!items.length) {
@@ -2291,13 +2309,20 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   // Landed short of what was asked? Say why. A high dropped-as-matched count means the clone is
   // behind main (the fix is to sync, not to grind); otherwise the role's pool is simply drained.
   let note: string | undefined
-  if (items.length < count) {
+  if (randomFill > 0) {
+    // Mixed batch: similarity ran short and random fill made up the difference. Flag it so the agent
+    // knows the random targets have no matched sibling to scaffold from (their "% like" label is absent).
+    note =
+      `Similarity pool ran short - ${randomFill} of ${items.length} target${randomFill === 1 ? '' : 's'} ` +
+      `were pulled at random to fill the batch. Those have no matched sibling; draft them from disasm.`
+  } else if (items.length < count) {
     note =
       droppedMatched > 0
         ? `Got ${items.length} of ${count} - ${droppedMatched} candidate${droppedMatched === 1 ? ' was' : 's were'} already matched on main. Your clone is behind; hit Refresh (or pull) to sync, then generate again.`
         : `Got ${items.length} of ${count} - that's all the unmatched targets this role can find right now.`
   }
-  return { title: `${label} batch (${items.length})`, prompt, items, note } satisfies BatchDraft
+  const title = randomFill > 0 ? `${label} + random batch (${items.length})` : `${label} batch (${items.length})`
+  return { title, prompt, items, note } satisfies BatchDraft
 }
 
 ipcMain.handle('batch:generate', async (_e, arg: number | { count?: number; role?: string } = 16) => {
@@ -3639,7 +3664,6 @@ app.whenReady().then(() => {
         : viewerPrefs.contributorColors
   }
   bgPrefs = { enabled: typeof saved.bgPrefs?.enabled === 'boolean' ? saved.bgPrefs.enabled : bgPrefs.enabled }
-  myContributorColor = typeof saved.myContributorColor === 'string' ? saved.myContributorColor : null
   matchingPrefs = {
     allowNearMiss:
       typeof saved.matchingPrefs?.allowNearMiss === 'boolean'

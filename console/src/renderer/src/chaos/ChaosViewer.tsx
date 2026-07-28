@@ -24,7 +24,8 @@ export default function ChaosViewer({
   authorResolve,
   authorFilter = null,
   showNearMiss = true,
-  layout = 'ov'
+  layout = 'ov',
+  starredIds
 }: {
   db: AtlasDb
   moduleFilter: string | null
@@ -42,6 +43,7 @@ export default function ChaosViewer({
   authorFilter?: string | null
   showNearMiss?: boolean
   layout?: LayoutMode
+  starredIds?: Set<string>
 }): JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -101,9 +103,10 @@ export default function ChaosViewer({
       selectedId,
       cartRefs,
       themeId: 'classic',
-      layout
+      layout,
+      starredIds
     })
-  }, [colorBy, authorColors, authorResolve, authorFilter, moduleFilter, showNearMiss, selectedId, cartRefs, layout])
+  }, [colorBy, authorColors, authorResolve, authorFilter, moduleFilter, showNearMiss, selectedId, cartRefs, layout, starredIds])
 
   const refocus = (): void => canvasRef.current?.focus()
 

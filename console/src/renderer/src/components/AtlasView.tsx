@@ -25,9 +25,11 @@ import type { LayoutMode } from '../chaos/types'
 import { sortFns, SORT_LABELS, type SortKey } from '../atlas/sort'
 
 const pct = (n: number, d: number): string => (d ? `${((n / d) * 100).toFixed(1)}%` : '0%')
+// Same palette + rank ordering as the website viewer (tangos-web CONTRIB_PALETTE), so a
+// contributor gets the identical color on every atlas. Bought shop colors override it.
 const PALETTE = [
-  '#4363d8', '#e6194B', '#3cb44b', '#f58231', '#911eb4', '#00a0b0', '#f032e6', '#469990',
-  '#9A6324', '#a83232', '#808000', '#7d4bd8', '#0ea5e9', '#d97706', '#059669', '#db2777'
+  '#38bdf8', '#f472b6', '#a78bfa', '#fb923c', '#facc15', '#34d399',
+  '#f87171', '#22d3ee', '#c084fc', '#fbbf24', '#4ade80', '#e879f9'
 ]
 
 export default function AtlasView({
@@ -60,10 +62,11 @@ export default function AtlasView({
   const [history, setHistory] = useState<FunctionHistory | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [gh, setGh] = useState<GithubCredits | null>(null)
-  // Shared contributor colors (login->hex, committed to the repo so everyone sees the same) and
-  // which legend entry is YOURS (the signed-in GitHub login - only that one gets a picker).
+  // Shop cosmetics: bought contributor colors (login->hex) and function stars, fetched from the
+  // same backend the website viewer reads so every atlas matches. Colors are bought in Hermit's
+  // Discord shop, not picked here.
   const [sharedColors, setSharedColors] = useState<Record<string, string>>({})
-  const [myLogin, setMyLogin] = useState<string | null>(null)
+  const [stars, setStars] = useState<{ function: string; by: string }[]>([])
   const [recentStems, setRecentStems] = useState<Set<string>>(new Set()) // fn names matched in last 24h
 
   // Clear everything the operator has picked or opened: empty the batch cart, close the open
@@ -108,14 +111,14 @@ export default function AtlasView({
     window.tangos.githubCredits().then(setGh).catch(() => {})
     let alive = true
     window.tangos
-      .contributorColors()
+      .atlasCosmetics()
       .then((r) => {
         if (!alive) return
         setSharedColors(r.colors)
-        setMyLogin(r.you)
+        setStars(r.stars)
       })
       .catch(() => {})
-    // functions matched (src added to origin/main) in the last 24h - drives the green ▲ per contributor
+    // functions matched on origin/main in the last 24h - drives the green ▲ per contributor
     window.tangos.recentAdds(24).then((s) => alive && setRecentStems(new Set(s))).catch(() => {})
     window.tangos
       .viewerPrefsGet()
@@ -128,35 +131,6 @@ export default function AtlasView({
       alive = false
     }
   }, [])
-
-  // Pick YOUR color: purely visual until confirmed. Picking recolors the map locally (nothing
-  // saved, nothing pushed); the confirm button then opens a one-file PR and persists the pick
-  // locally so it never reverts while the PR waits to merge.
-  const [colorDraft, setColorDraft] = useState<string | null>(null)
-  const [colorBusy, setColorBusy] = useState(false)
-  const [colorNote, setColorNote] = useState<string | null>(null)
-  function pickMyColor(hex: string): void {
-    if (!myLogin) return
-    const login = myLogin
-    setColorDraft(hex)
-    setSharedColors((c) => ({ ...c, [login]: hex })) // local preview only
-  }
-  async function confirmMyColor(): Promise<void> {
-    if (!colorDraft) return
-    setColorBusy(true)
-    try {
-      const r = await window.tangos.proposeContributorColor(colorDraft)
-      if (r.ok) {
-        setColorDraft(null)
-        setColorNote(r.prUrl ? 'color PR opened - it shows for everyone once merged' : 'color already set upstream')
-      } else {
-        setColorNote(r.error ?? 'could not open the color PR')
-      }
-    } finally {
-      setColorBusy(false)
-      window.setTimeout(() => setColorNote(null), 8000)
-    }
-  }
 
   const pickColorBy = (c: 'status' | 'author'): void => {
     setColorBy(c)
@@ -198,8 +172,13 @@ export default function AtlasView({
 
   const authorColors = useMemo(() => {
     const out = new Map<string, string>()
-    ;[...loginCounts.entries()].sort((a, b) => b[1] - a[1]).forEach(([name], i) => out.set(name, PALETTE[i % PALETTE.length]))
-    // Shared repo-committed picks override the generated palette (case-insensitive on login).
+    // Rank real contributors (count >= 1) by matches desc, same ordering as the website, so the
+    // palette index -> color assignment is identical across atlases.
+    ;[...loginCounts.entries()]
+      .filter(([, n]) => n >= 1)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .forEach(([name], i) => out.set(name, PALETTE[i % PALETTE.length]))
+    // Shop-bought colors override the palette (case-insensitive on login).
     const shared = new Map(Object.entries(sharedColors).map(([k, v]) => [k.toLowerCase(), v]))
     for (const name of out.keys()) {
       const pick = shared.get(name.toLowerCase())
@@ -207,6 +186,18 @@ export default function AtlasView({
     }
     return out
   }, [loginCounts, sharedColors])
+
+  // Bought stars (Hermit's shop) -> function ids for the map's gold marker.
+  const starredIds = useMemo(() => {
+    if (!db || !stars.length) return undefined
+    const byName = new Map(db.functions.map((f) => [f.name, f.id]))
+    const ids = new Set<string>()
+    for (const s of stars) {
+      const id = byName.get(s.function)
+      if (id) ids.add(id)
+    }
+    return ids
+  }, [db, stars])
 
   async function load(src: 'local' | 'live', force = false): Promise<void> {
     setLoading(true)
@@ -326,8 +317,8 @@ export default function AtlasView({
           <h2 style={{ margin: 0 }}>Atlas</h2>
           {liveEnabled && (
             <div className="seg" title="Live = the whole team's published progress (recommended). Local = your generated data.">
-              <button className={source === 'live' ? 'on' : ''} onClick={() => load('live', true)}><Cloud size={12} /> Live</button>
-              <button className={source === 'local' ? 'on' : ''} onClick={generate} title="Recount from your repo (reads src/ + symbols now)"><HardDrive size={12} /> Local</button>
+              <button className={source === 'live' ? 'on' : ''} onClick={() => load('live')} title="Show the team's published progress"><Cloud size={12} /> Live</button>
+              <button className={source === 'local' ? 'on' : ''} onClick={() => load('local')} title="Show your locally generated data"><HardDrive size={12} /> Local</button>
             </div>
           )}
           <span className="hint" style={{ margin: 0 }}>
@@ -377,30 +368,8 @@ export default function AtlasView({
                     </span>
                   )}
                 </button>
-                {myLogin && name.toLowerCase() === myLogin.toLowerCase() && (
-                  <>
-                    <input
-                      type="color"
-                      className="contrib-color"
-                      value={authorColors.get(name) ?? '#8896a5'}
-                      title="Preview your contributor color (local only until you confirm)"
-                      onChange={(e) => pickMyColor(e.target.value)}
-                    />
-                    {colorDraft && (
-                      <button
-                        className="mini-btn contrib-confirm"
-                        disabled={colorBusy}
-                        onClick={confirmMyColor}
-                        title="Confirm: opens a small PR setting your color for everyone"
-                      >
-                        {colorBusy ? 'opening PR…' : 'confirm'}
-                      </button>
-                    )}
-                  </>
-                )}
               </span>
             ))}
-            {colorNote && <span className="hint" style={{ margin: 0 }}>{colorNote}</span>}
             {authorFilter && (
               <button className="mini-btn" style={{ flex: 'none' }} onClick={() => setAuthorFilter(null)}>clear</button>
             )}
@@ -469,6 +438,7 @@ export default function AtlasView({
         authorFilter={authorFilter}
         showNearMiss={showNearMiss}
         layout={layoutMode}
+        starredIds={starredIds}
       />
       {/* Bottom bar INSIDE the map column, so "centered" means centered on the atlas box and the
           popout/fullscreen buttons sit at the map's bottom-right corner. */}
