@@ -68,11 +68,12 @@ const api = {
     return () => ipcRenderer.removeListener('atlas:refreshed', l)
   },
   githubCredits: (): Promise<GithubCredits> => ipcRenderer.invoke('github:credits'),
-  // Shared contributor colors (repo-committed login->hex, applied on everyone's Atlas legend/map).
-  contributorColors: (): Promise<{ colors: Record<string, string>; you: string | null }> =>
-    ipcRenderer.invoke('colors:get'),
-  proposeContributorColor: (color: string): Promise<{ ok: boolean; error?: string; prUrl?: string }> =>
-    ipcRenderer.invoke('colors:propose', color),
+  // Atlas cosmetics from the shop backend (contributor colors + function stars), the same
+  // source the website viewer reads so every atlas looks identical.
+  atlasCosmetics: (): Promise<{
+    colors: Record<string, string>
+    stars: { function: string; by: string; at: string }[]
+  }> => ipcRenderer.invoke('atlas:cosmetics'),
 
   pickRepo: (): Promise<RepoState> => ipcRenderer.invoke('repo:pick'),
   setRepo: (path: string): Promise<RepoState> => ipcRenderer.invoke('repo:set', path),

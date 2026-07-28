@@ -13,9 +13,11 @@ export interface PaintView {
   authorFilter: string | null
   moduleFilter: string | null
   showNearMiss: boolean
+  starredIds?: Set<string>
 }
 
 const AUTHOR_FALLBACK = '#9aa7b5'
+const STAR_GOLD = '#fbbf24'
 const LABEL_FONT = '600 11px "Segoe UI", system-ui, sans-serif'
 // Light-red wash over a function another contributor holds (active/partial CLAIMS.md, Live only),
 // so hand-picking can see it is taken and the marquee visibly skips it.
@@ -59,6 +61,7 @@ export function paintTiles(
   invZ: number
 ): void {
   const shave = 0.5 * invZ
+  const starred = v.starredIds
   for (const i of world.query(view, scratch)) {
     const n = world.fns[i]
     const w = Math.max(shave, n.w - shave)
@@ -70,8 +73,37 @@ export function paintTiles(
       ctx.fillStyle = CLAIM_TINT
       ctx.fillRect(n.x, n.y, w, h)
     }
+    if (starred?.has(n.f.id) && !isDimmed(n.f, v)) {
+      // Gold outline round the whole tile plus a star glyph when it's big enough to carry
+      // one - the same treatment as the website viewer's bought stars.
+      ctx.strokeStyle = STAR_GOLD
+      ctx.lineWidth = 1.5 * invZ
+      ctx.strokeRect(n.x + 0.75 * invZ, n.y + 0.75 * invZ, w - 1.5 * invZ, h - 1.5 * invZ)
+      const s = Math.min(w, h)
+      if (s > 12 * invZ) {
+        const r = Math.min(5 * invZ, s * 0.3)
+        drawStar(ctx, n.x + w - r * 1.4, n.y + r * 1.4, r)
+        ctx.fillStyle = STAR_GOLD
+        ctx.fill()
+      }
+    }
   }
   ctx.globalAlpha = 1
+}
+
+// 5-point star path centered on (cx, cy) in the current (world) transform; caller fills.
+function drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, outer: number): void {
+  const inner = outer * 0.45
+  ctx.beginPath()
+  for (let i = 0; i < 10; i++) {
+    const angle = -Math.PI / 2 + (i * Math.PI) / 5
+    const radius = i % 2 === 0 ? outer : inner
+    const x = cx + Math.cos(angle) * radius
+    const y = cy + Math.sin(angle) * radius
+    if (i === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
+  ctx.closePath()
 }
 
 /** One world-locked ground fill under everything - the tile gaps and module

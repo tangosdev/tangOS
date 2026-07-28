@@ -44,6 +44,8 @@ export interface ViewOptions {
   // Function NAMES currently in the batch cart - painted with a glowing rainbow overlay so you can
   // spot your picks anywhere on the map. Names (not ids) to match the cart's ref-keyed membership.
   cartRefs?: Set<string>
+  // Function IDs carrying a bought star (Hermit's shop): gold outline + glyph, same as the website.
+  starredIds?: Set<string>
 }
 
 declare global {
@@ -196,7 +198,8 @@ export class ChaosEngine {
       'authorFilter',
       'moduleFilter',
       'showNearMiss',
-      'themeId'
+      'themeId',
+      'starredIds'
     ]
     if (bakeKeys.some((k) => prev[k] !== this.opts[k])) this.needBake = true
     if (next.layout && next.layout !== prev.layout) {
@@ -649,7 +652,8 @@ export class ChaosEngine {
       authorResolve: this.opts.authorResolve,
       authorFilter: this.opts.authorFilter,
       moduleFilter: this.opts.moduleFilter,
-      showNearMiss: this.opts.showNearMiss
+      showNearMiss: this.opts.showNearMiss,
+      starredIds: this.opts.starredIds
     }
   }
 
