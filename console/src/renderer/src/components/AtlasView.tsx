@@ -53,6 +53,9 @@ export default function AtlasView({
   const [live, setLive] = useState<{
     stats: { totalFunctions: number; matchedFunctions: number; totalBytes: number; matchedBytes: number }
     matched: Set<string>
+    // Whole records the VPS pushed (new match, new author, new near-miss), applied over the
+    // loaded atlas so a tile gains its contributor colour the moment the work lands.
+    records: Map<string, Partial<AtlasFunction>>
   } | null>(null)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -90,7 +93,9 @@ export default function AtlasView({
     if (!rawDb || !live || source !== 'live') return rawDb
     const functions = rawDb.functions.map((f) => {
       const matched = live.matched.has(f.id)
-      return matched === f.matched ? f : { ...f, matched }
+      const rec = live.records.get(f.id)
+      if (matched === f.matched && !rec) return f
+      return { ...f, ...rec, matched }
     })
     return { ...rawDb, functions, stats: { ...rawDb.stats, ...live.stats } }
   }, [rawDb, live, source])
@@ -148,7 +153,8 @@ export default function AtlasView({
     window.tangos
       .atlasProgress()
       .then((p) => {
-        if (alive && p.ready) setLive({ stats: p.stats, matched: new Set(p.matched) })
+        if (alive && p.ready)
+          setLive({ stats: p.stats, matched: new Set(p.matched), records: new Map() })
       })
       .catch(() => {})
     // Live push from the VPS: colors/stars, counts, and match progress the instant they change.
@@ -169,6 +175,7 @@ export default function AtlasView({
           matched?: string[]
           added?: string[]
           removed?: string[]
+          changed?: Array<Partial<AtlasFunction> & { id: string }>
         }
         if (!d.ready || !d.stats) return
         const stats = d.stats
@@ -176,7 +183,9 @@ export default function AtlasView({
           const next = new Set<string>(d.matched ?? (prev ? [...prev.matched] : []))
           for (const id of d.added ?? []) next.add(id)
           for (const id of d.removed ?? []) next.delete(id)
-          return { stats, matched: next }
+          const records = new Map(prev?.records ?? [])
+          for (const r of d.changed ?? []) records.set(r.id, r)
+          return { stats, matched: next, records }
         })
       }
     })
@@ -385,10 +394,11 @@ export default function AtlasView({
           </span>
           <div style={{ flex: 1 }} />
           {source === 'live' && (
-            <button className="mini-btn" onClick={() => load('live', true)} disabled={loading} title="re-fetch the team's latest published progress (bypasses cache)">
-              <RefreshCw size={12} className={loading ? 'spin' : ''} style={{ verticalAlign: -2, marginRight: 4 }} />
-              Refresh
-            </button>
+            // No refresh button: Live is a push feed from the backend, so the map, the bars
+            // and the contributor legend are already current to within seconds of a merge.
+            <span className="hint" style={{ margin: 0 }} title="the backend pushes matches, claims and colors as they land">
+              live · updates automatically
+            </span>
           )}
           {source === 'local' && (
             <button className="mini-btn" onClick={generate} disabled={generating}>
