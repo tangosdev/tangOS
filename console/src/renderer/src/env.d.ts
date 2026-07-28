@@ -66,6 +66,8 @@ export interface TangosApi {
     colors: Record<string, string>
     stars: { function: string; by: string; at: string }[]
   }>
+  atlasCounts(): Promise<{ totals: Record<string, number>; daily: Record<string, number> }>
+  onAtlasLive(cb: (event: string, data: unknown) => void): () => void
   githubSignin(): Promise<{ userCode: string; verificationUri: string }>
   onGithubSignedin(cb: (r: { ok: boolean; error?: string }) => void): () => void
   pickRepo(): Promise<RepoState>
