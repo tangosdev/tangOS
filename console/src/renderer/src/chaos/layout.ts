@@ -74,7 +74,11 @@ export function buildWorld(
     const keyOf = (f: AtlasFunction): string => {
       if (mode === 'ov') return f.module
       if (mode === 'match') {
-        return f.matched ? 'matched' : typeof f.div === 'number' || f.srcPath ? 'draft' : 'unmatched'
+        if (f.matched) return 'matched'
+        // Reproduces the ROM with nothing left to chase - its own band, so it stops
+        // inflating the draft pile with work nobody is ever going to pick up.
+        if (f.noMatch) return 'no match needed'
+        return typeof f.div === 'number' || f.srcPath ? 'draft' : 'unmatched'
       }
       return f.matched && f.author ? authorResolve?.get(f.author) ?? f.author : 'unmatched'
     }
@@ -88,8 +92,8 @@ export function buildWorld(
     }
     const modItems = [...groups.values()]
     if (mode === 'match') {
-      // fixed progression: uncleared land first, then drafts, then matched
-      const order = ['unmatched', 'draft', 'matched']
+      // fixed progression: uncleared land first, then drafts, then the done piles
+      const order = ['unmatched', 'draft', 'no match needed', 'matched']
       modItems.sort((a, b) => order.indexOf(a.module) - order.indexOf(b.module))
     } else {
       modItems.sort((a, b) => b.value - a.value)

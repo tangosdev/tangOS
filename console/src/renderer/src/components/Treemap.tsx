@@ -5,10 +5,32 @@ import type { AtlasDb, AtlasFunction } from '../../../shared/types'
 const MATCHED = '#3fc45f'
 const UNMATCHED = '#b9cadb'
 const NEARMISS = '#eab308'
+// Reproduces the ROM with no match left to chase. Hatched, so it never reads as the
+// claim wash on the main map, which is also red.
+const NOMATCH = '#a8324a'
+const NOMATCH_HATCH = 'rgba(255,214,224,0.55)'
 const H = 264
 
 interface FnRect { x: number; y: number; w: number; h: number; f: AtlasFunction }
 interface ModRect { module: string; x: number; y: number; w: number; h: number }
+
+/** Diagonal hatch clipped to one tile, at a fixed ~4px pitch (this map has no zoom). */
+function hatch(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
+  if (w < 4 || h < 4) return // too small to read as stripes - flat red says enough
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(x, y, w, h)
+  ctx.clip()
+  ctx.strokeStyle = NOMATCH_HATCH
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  for (let d = -h; d < w; d += 4) {
+    ctx.moveTo(x + d, y + h)
+    ctx.lineTo(x + d + h, y)
+  }
+  ctx.stroke()
+  ctx.restore()
+}
 
 /** Chaos-Viewer-style treemap. Geometry (the expensive squarify) is cached and only
  *  recomputed when the data or size changes; recoloring/highlighting just repaints. */
@@ -113,13 +135,19 @@ export default function Treemap({
       const f = r.f
       const dim = (!!moduleFilter && f.module !== moduleFilter) || (!!authorFilter && resolve(f.author) !== authorFilter)
       ctx.globalAlpha = dim ? 0.14 : 1
-      if (colorBy === 'author') {
+      if (f.noMatch) {
+        // red in every mode, contributor coloring included - nobody will ever author it
+        ctx.fillStyle = NOMATCH
+      } else if (colorBy === 'author') {
         const who = resolve(f.author)
         ctx.fillStyle = f.matched ? (who && authorColors?.get(who)) || '#9aa7b5' : UNMATCHED
       } else {
         ctx.fillStyle = f.matched ? MATCHED : (typeof f.div === 'number' || !!f.srcPath) && showNearMiss ? NEARMISS : UNMATCHED
       }
-      ctx.fillRect(r.x, r.y, Math.max(0.5, r.w - 0.5), Math.max(0.5, r.h - 0.5))
+      const rw = Math.max(0.5, r.w - 0.5)
+      const rh = Math.max(0.5, r.h - 0.5)
+      ctx.fillRect(r.x, r.y, rw, rh)
+      if (f.noMatch && !dim) hatch(ctx, r.x, r.y, rw, rh)
       if (selectedId && f.id === selectedId) selRect = r
     }
     ctx.globalAlpha = 1
@@ -155,6 +183,33 @@ export default function Treemap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [geom, w, drawH, colorBy, authorColors, authorResolve, authorFilter, moduleFilter, showNearMiss, selectedId])
 
+  /** Hover text via the canvas title. This map has no bubble layer of its own, and the
+   *  red tiles are useless without the sentence explaining why they are red. */
+  function onMove(e: React.MouseEvent): void {
+    const cvs = canvasRef.current
+    if (!cvs) return
+    const b = cvs.getBoundingClientRect()
+    const x = e.clientX - b.left
+    const y = e.clientY - b.top
+    const fr = geom.fnRects.find((m) => x >= m.x && x <= m.x + m.w && y >= m.y && y <= m.y + m.h)
+    if (!fr) {
+      if (cvs.title) cvs.title = ''
+      return
+    }
+    const f = fr.f
+    const status = f.matched
+      ? 'matched'
+      : f.noMatch
+        ? `needs no match - ${f.noMatch.reason}`
+        : f.div != null
+          ? `near-miss (div ${f.div})`
+          : f.srcPath
+            ? 'draft'
+            : 'unmatched'
+    const next = `${f.name}\n${status}`
+    if (cvs.title !== next) cvs.title = next
+  }
+
   function onClick(e: React.MouseEvent): void {
     const cvs = canvasRef.current
     if (!cvs) return
@@ -175,7 +230,7 @@ export default function Treemap({
 
   return (
     <div className={`atlas-treemap aero-panel${fill ? ' fill' : ''}`} ref={wrapRef}>
-      <canvas ref={canvasRef} onClick={onClick} style={{ display: 'block', cursor: 'pointer', borderRadius: 8 }} />
+      <canvas ref={canvasRef} onClick={onClick} onMouseMove={onMove} style={{ display: 'block', cursor: 'pointer', borderRadius: 8 }} />
     </div>
   )
 }

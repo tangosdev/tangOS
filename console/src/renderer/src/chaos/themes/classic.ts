@@ -9,6 +9,8 @@ export const classic: Theme = {
     nearMiss: '#eab308',
     unmatched: '#b9cadb',
     draft: '#b9cadb',
+    noMatch: '#a8324a',
+    noMatchHatch: 'rgba(255,214,224,0.55)',
     moduleStroke: '#0d3a5c',
     selection: '#0d3a5c',
     background: 'transparent',

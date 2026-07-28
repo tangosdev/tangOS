@@ -400,6 +400,10 @@ export interface AtlasFunction {
   // Overlaid on the LIVE atlas only: an active/partial CLAIMS.md hold by another
   // contributor. Present => someone is grinding this; the batcher must not basket it.
   claim?: { handle: string; status: string }
+  // Set when the src file's banner tags it NONMATCHING (ASM-PRIMITIVE) or
+  // NONMATCHING (NOT-C-EXPRESSIBLE): it already reproduces the ROM and there is no match
+  // left to chase, so it is not pending work. `reason` is the hover explanation.
+  noMatch?: { bucket: 'asm-primitive' | 'not-c-expressible'; reason: string }
 }
 
 export interface AtlasStats {

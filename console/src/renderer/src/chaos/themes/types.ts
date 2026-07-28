@@ -4,6 +4,10 @@ export interface ThemeColors {
   unmatched: string
   /** srcPath present but neither matched nor a recorded divergence. */
   draft: string
+  /** Reproduces the ROM with no match left to chase (asm primitive / exit stub).
+   *  Painted with a hatch so it never reads as the claim wash, which is also red. */
+  noMatch: string
+  noMatchHatch: string
   moduleStroke: string
   selection: string
   background: string

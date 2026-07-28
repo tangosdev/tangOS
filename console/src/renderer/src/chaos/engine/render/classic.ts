@@ -29,6 +29,9 @@ function resolveAuthor(v: PaintView, a?: string): string {
 
 export function fnColor(f: AtlasFunction, v: PaintView): string {
   const c = v.theme.colors
+  // Needs no match (asm primitive / exit stub): red in every mode, including contributor
+  // coloring - nobody is going to author it, so a contributor shade would be a lie.
+  if (f.noMatch) return c.noMatch
   if (v.colorBy === 'author') {
     if (!f.matched) return c.unmatched
     const who = resolveAuthor(v, f.author)
@@ -69,6 +72,7 @@ export function paintTiles(
     ctx.globalAlpha = isDimmed(n.f, v) ? 0.14 : 1
     ctx.fillStyle = fnColor(n.f, v)
     ctx.fillRect(n.x, n.y, w, h)
+    if (n.f.noMatch && !isDimmed(n.f, v)) hatch(ctx, n.x, n.y, w, h, v.theme.colors.noMatchHatch, invZ)
     if (n.f.claim && !isDimmed(n.f, v)) {
       ctx.fillStyle = CLAIM_TINT
       ctx.fillRect(n.x, n.y, w, h)
@@ -89,6 +93,35 @@ export function paintTiles(
     }
   }
   ctx.globalAlpha = 1
+}
+
+/** Diagonal hatch clipped to one tile. Spacing is held at ~4 SCREEN px via invZ so the
+ *  texture stays legible at every zoom instead of collapsing into a solid block. This is
+ *  what keeps "needs no match" red apart from the claim wash, which is also red. */
+function hatch(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  color: string,
+  invZ: number
+): void {
+  const gap = 4 * invZ
+  if (w < gap || h < gap) return // too small to read as stripes - flat red says enough
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(x, y, w, h)
+  ctx.clip()
+  ctx.strokeStyle = color
+  ctx.lineWidth = 1 * invZ
+  ctx.beginPath()
+  for (let d = -h; d < w; d += gap) {
+    ctx.moveTo(x + d, y + h)
+    ctx.lineTo(x + d + h, y)
+  }
+  ctx.stroke()
+  ctx.restore()
 }
 
 // 5-point star path centered on (cx, cy) in the current (world) transform; caller fills.
