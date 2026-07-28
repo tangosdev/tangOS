@@ -22,7 +22,7 @@ import { readAtlas } from './atlas'
 import { deriveClaimsUrl, fetchHeldClaims, overlayClaims } from './claims'
 import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
-import { fetchCosmetics, fetchCounts, connectAtlasLive, bustCosmeticsCache, type Cosmetics, type Counts } from './cosmetics'
+import { fetchCosmetics, fetchCounts, fetchProgress, connectAtlasLive, bustCosmeticsCache, type Cosmetics, type Counts, type LiveProgress } from './cosmetics'
 import { startDeviceFlow, pollForToken } from './githubAuth'
 import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
 import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
@@ -1856,6 +1856,12 @@ ipcMain.handle('atlas:cosmetics', async (): Promise<Cosmetics> => {
 // for the legend counts and the recent-activity badge.
 ipcMain.handle('atlas:counts', async (): Promise<Counts> => {
   return fetchCounts(state.descriptor?.data?.claimsApi)
+})
+
+// Live progress computed by the VPS from the repo itself (exact stats + matched ids), so the
+// atlas can move as soon as work lands rather than waiting on the published data refresh.
+ipcMain.handle('atlas:progress', async (): Promise<LiveProgress> => {
+  return fetchProgress(state.descriptor?.data?.claimsApi)
 })
 
 // GitHub device-flow sign-in: return the user code + verification URL to show, open the

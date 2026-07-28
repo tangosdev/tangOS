@@ -45,7 +45,15 @@ export default function AtlasView({
   draftRefs: Set<string>
   liveEnabled: boolean
 }): JSX.Element {
-  const [db, setDb] = useState<AtlasDb | null>(null)
+  // The loaded atlas as fetched/generated. The VPS's live match state is overlaid onto it
+  // below; `db` is what the rest of the view renders.
+  const [rawDb, setDb] = useState<AtlasDb | null>(null)
+  // Live progress from the VPS: exact stats + matched id set, arriving seconds after a
+  // merge instead of waiting on the published atlas refresh.
+  const [live, setLive] = useState<{
+    stats: { totalFunctions: number; matchedFunctions: number; totalBytes: number; matchedBytes: number }
+    matched: Set<string>
+  } | null>(null)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [source, setSource] = useState<'local' | 'live'>('local')
@@ -72,6 +80,20 @@ export default function AtlasView({
     totals: {},
     daily: {}
   })
+
+  // Merge the VPS's live match state onto the loaded atlas. The backend reproduces the exact
+  // rule the published atlas is built with, so when it has data it is simply fresher: the
+  // progress bars and the map tiles both follow it, while authors/near-miss keep coming from
+  // the loaded copy. Only applied to LIVE data - local generated data is the operator's own
+  // repo state and must not be overwritten by what's on main.
+  const db = useMemo<AtlasDb | null>(() => {
+    if (!rawDb || !live || source !== 'live') return rawDb
+    const functions = rawDb.functions.map((f) => {
+      const matched = live.matched.has(f.id)
+      return matched === f.matched ? f : { ...f, matched }
+    })
+    return { ...rawDb, functions, stats: { ...rawDb.stats, ...live.stats } }
+  }, [rawDb, live, source])
 
   // Clear everything the operator has picked or opened: empty the batch cart, close the open
   // function, and drop the module drill-in. Wired to the "Clear selection" button and a bare
@@ -123,7 +145,13 @@ export default function AtlasView({
       })
       .catch(() => {})
     window.tangos.atlasCounts().then((c) => alive && setCounts(c)).catch(() => {})
-    // Live push from the VPS: colors/stars and counts update the instant they change.
+    window.tangos
+      .atlasProgress()
+      .then((p) => {
+        if (alive && p.ready) setLive({ stats: p.stats, matched: new Set(p.matched) })
+      })
+      .catch(() => {})
+    // Live push from the VPS: colors/stars, counts, and match progress the instant they change.
     const off = window.tangos.onAtlasLive((event, data) => {
       if (!alive) return
       if (event === 'cosmetics') {
@@ -133,6 +161,23 @@ export default function AtlasView({
       } else if (event === 'counts') {
         const d = data as { totals?: Record<string, number>; daily?: Record<string, number> }
         setCounts({ totals: d.totals ?? {}, daily: d.daily ?? {} })
+      } else if (event === 'progress') {
+        // Full matched set on connect, added/removed deltas afterwards.
+        const d = data as {
+          ready?: boolean
+          stats?: { totalFunctions: number; matchedFunctions: number; totalBytes: number; matchedBytes: number }
+          matched?: string[]
+          added?: string[]
+          removed?: string[]
+        }
+        if (!d.ready || !d.stats) return
+        const stats = d.stats
+        setLive((prev) => {
+          const next = new Set<string>(d.matched ?? (prev ? [...prev.matched] : []))
+          for (const id of d.added ?? []) next.add(id)
+          for (const id of d.removed ?? []) next.delete(id)
+          return { stats, matched: next }
+        })
       }
     })
     window.tangos

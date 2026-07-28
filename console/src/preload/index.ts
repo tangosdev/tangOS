@@ -77,6 +77,12 @@ const api = {
   // Contributor match numbers from the backend: career totals + matches today.
   atlasCounts: (): Promise<{ totals: Record<string, number>; daily: Record<string, number> }> =>
     ipcRenderer.invoke('atlas:counts'),
+  // Live match state from the VPS: exact stats + matched function ids.
+  atlasProgress: (): Promise<{
+    ready: boolean
+    stats: { totalFunctions: number; matchedFunctions: number; totalBytes: number; matchedBytes: number }
+    matched: string[]
+  }> => ipcRenderer.invoke('atlas:progress'),
   // Live atlas pushes from the VPS (cosmetics/counts/claims). The callback fires per event.
   onAtlasLive: (cb: (event: string, data: unknown) => void): (() => void) => {
     const l = (_e: unknown, msg: { event: string; data: unknown }): void => cb(msg.event, msg.data)
