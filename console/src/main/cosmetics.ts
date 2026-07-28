@@ -74,6 +74,39 @@ export async function fetchCosmetics(claimsApi?: string | null): Promise<Cosmeti
   return cache?.value ?? { colors: {}, stars: [] }
 }
 
+export interface LiveProgress {
+  ready: boolean
+  stats: { totalFunctions: number; matchedFunctions: number; totalBytes: number; matchedBytes: number }
+  matched: string[]
+}
+
+/** Live decomp progress computed by the VPS from the repo itself: exact stats plus the
+ *  matched function ids. Lets the atlas move seconds after a merge instead of waiting for
+ *  the published data to refresh. Best-effort; `ready:false` means fall back to the file. */
+export async function fetchProgress(claimsApi?: string | null): Promise<LiveProgress> {
+  const empty: LiveProgress = {
+    ready: false,
+    stats: { totalFunctions: 0, matchedFunctions: 0, totalBytes: 0, matchedBytes: 0 },
+    matched: []
+  }
+  try {
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), 15000)
+    try {
+      const res = await fetch(`${apiBase(claimsApi)}/progress`, { signal: ac.signal })
+      if (res.ok) {
+        const j = (await res.json()) as Partial<LiveProgress>
+        if (j.ready && j.stats) return { ready: true, stats: j.stats, matched: j.matched ?? [] }
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    /* offline - fall through */
+  }
+  return empty
+}
+
 /** Contributor match numbers from the backend: career totals + matches today (the
  *  recent-activity badge). Best-effort; empty on failure. */
 export async function fetchCounts(claimsApi?: string | null): Promise<Counts> {

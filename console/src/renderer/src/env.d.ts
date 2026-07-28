@@ -67,6 +67,11 @@ export interface TangosApi {
     stars: { function: string; by: string; at: string }[]
   }>
   atlasCounts(): Promise<{ totals: Record<string, number>; daily: Record<string, number> }>
+  atlasProgress(): Promise<{
+    ready: boolean
+    stats: { totalFunctions: number; matchedFunctions: number; totalBytes: number; matchedBytes: number }
+    matched: string[]
+  }>
   onAtlasLive(cb: (event: string, data: unknown) => void): () => void
   githubSignin(): Promise<{ userCode: string; verificationUri: string }>
   onGithubSignedin(cb: (r: { ok: boolean; error?: string }) => void): () => void
