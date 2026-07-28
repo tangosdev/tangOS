@@ -22,7 +22,7 @@ import { readAtlas } from './atlas'
 import { deriveClaimsUrl, fetchHeldClaims, overlayClaims } from './claims'
 import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
-import { fetchCosmetics, fetchCounts, fetchProgress, connectAtlasLive, bustCosmeticsCache, type Cosmetics, type Counts, type LiveProgress } from './cosmetics'
+import { fetchCosmetics, fetchCounts, fetchProgress, fetchAtlas, connectAtlasLive, bustCosmeticsCache, type Cosmetics, type Counts, type LiveProgress } from './cosmetics'
 import { startDeviceFlow, pollForToken } from './githubAuth'
 import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
 import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
@@ -1368,6 +1368,21 @@ let atlasCache: { repo: string | null; local?: AtlasDb | null; live?: AtlasDb | 
 const LIVE_TTL_MS = 60_000
 const LIVE_FORCE_THROTTLE_MS = 20_000
 async function loadLiveDb(force: boolean): Promise<AtlasDb> {
+  // Prefer the backend's live atlas: it is computed from the repo continuously and is
+  // current to within seconds, where the committed file waits on a CI republish. Falls back
+  // to the published file whenever the backend has nothing yet (cold start, offline).
+  const fromVps = (await fetchAtlas(state.descriptor?.data?.claimsApi)) as AtlasDb | null
+  if (fromVps) {
+    const claimsUrlLive = deriveClaimsUrl(state.descriptor?.data?.committedDbUrl ?? '', state.descriptor?.data?.claimsMdUrl)
+    if (claimsUrlLive) {
+      const held = await fetchHeldClaims(claimsUrlLive)
+      if (held) overlayClaims(fromVps, held)
+    }
+    atlasCache = { ...atlasCache, repo: state.repoPath, live: fromVps, liveAt: Date.now() }
+    aiStats.seedBestDiv(fromVps.functions)
+    return fromVps
+  }
+
   const url = state.descriptor?.data?.committedDbUrl
   if (!url) throw new Error('this repo has no committedDbUrl in tangos.json')
   const cached = atlasCache.repo === state.repoPath ? atlasCache.live : undefined

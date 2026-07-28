@@ -74,6 +74,26 @@ export async function fetchCosmetics(claimsApi?: string | null): Promise<Cosmeti
   return cache?.value ?? { colors: {}, stars: [] }
 }
 
+/** The whole atlas straight from the VPS - same shape the published chaos-db has, but
+ *  current to within seconds. Null when the backend has no data yet (cold start), so the
+ *  caller can fall back to the published file. */
+export async function fetchAtlas(claimsApi?: string | null): Promise<unknown | null> {
+  try {
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), 20000)
+    try {
+      const res = await fetch(`${apiBase(claimsApi)}/atlas`, { signal: ac.signal })
+      if (!res.ok) return null
+      const j = (await res.json()) as { ready?: boolean; functions?: unknown[] }
+      return j?.ready && Array.isArray(j.functions) && j.functions.length ? j : null
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    return null
+  }
+}
+
 export interface LiveProgress {
   ready: boolean
   stats: { totalFunctions: number; matchedFunctions: number; totalBytes: number; matchedBytes: number }
