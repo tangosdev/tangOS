@@ -469,6 +469,7 @@ export default function AtlasView({
         cartRefs={draftRefs}
         onToggleCart={(f) => {
           if (f.matched) return // matched functions are done - never basket them (mirrors the detail panel)
+          if (f.noMatch) return // reproduces the ROM with no match to chase - not work, never basket it
           if (f.claim && !draftRefs.has(f.name)) return // held by someone else on Live - don't basket it
           if (draftRefs.has(f.name)) onRemove(f.name)
           else
@@ -485,9 +486,9 @@ export default function AtlasView({
         onMarqueeSelect={(fns, add) => {
           // Right-drag box: unmatched, unclaimed functions it touches become the cart; Ctrl adds to
           // what's there. Claimed (active/partial in CLAIMS.md on Live) are skipped so the box never
-          // baskets work someone else holds.
+          // baskets work someone else holds, and so are the red no-match-needed tiles.
           const items = fns
-            .filter((f) => !f.matched && !f.claim)
+            .filter((f) => !f.matched && !f.claim && !f.noMatch)
             .map((f) => ({
               id: `${Date.now()}-${f.name}`,
               ref: f.name,
@@ -555,14 +556,16 @@ export default function AtlasView({
               {selectedFn.module} · 0x{selectedFn.addr.toString(16).padStart(8, '0')} · {selectedFn.size}b ·{' '}
               {selectedFn.matched
                 ? 'matched'
-                : selectedFn.div != null
-                  ? `near-miss (div ${selectedFn.div})`
-                  : selectedFn.srcPath
-                    ? 'draft'
-                    : 'unmatched'}
+                : selectedFn.noMatch
+                  ? 'needs no match'
+                  : selectedFn.div != null
+                    ? `near-miss (div ${selectedFn.div})`
+                    : selectedFn.srcPath
+                      ? 'draft'
+                      : 'unmatched'}
             </span>
             <div style={{ flex: 1 }} />
-            {!selectedFn.matched &&
+            {!selectedFn.matched && !selectedFn.noMatch &&
               (draftRefs.has(selectedFn.name) ? (
                 <button className="aero-button danger" onClick={() => onRemove(selectedFn.name)}>
                   <Minus size={14} style={{ verticalAlign: -2, marginRight: 5 }} />
@@ -596,6 +599,14 @@ export default function AtlasView({
               Clear selection
             </button>
           </div>
+
+          {/* Why this one is red and carries no Add button. The same sentence the map hovers. */}
+          {selectedFn.noMatch && (
+            <div className="ad-nomatch">
+              <b>Needs no match</b>
+              <span> {selectedFn.noMatch.reason}</span>
+            </div>
+          )}
 
           {/* Prior tries: plan before queueing — data from repo logs, not pasted into agent prompts */}
           <div className="ad-history">
@@ -725,13 +736,17 @@ export default function AtlasView({
               title="Fly to this function on the map"
               onClick={() => setSelectedFn(f)}
             >
-              <span className={`status-dot ${f.matched ? 'ok' : ''}`} style={f.matched ? {} : { background: 'var(--aero-unmatched)' }} />
+              <span
+                className={`status-dot ${f.matched ? 'ok' : ''}`}
+                style={f.matched ? {} : { background: f.noMatch ? 'var(--aero-nomatch, #a8324a)' : 'var(--aero-unmatched)' }}
+                title={f.noMatch ? `needs no match: ${f.noMatch.reason}` : undefined}
+              />
               <span className="fn-name mono">{f.name}</span>
               <span className="fn-mod">{f.module}</span>
               <span className="fn-author" title="author">{f.author ?? ''}</span>
               <span className="fn-size">{f.size}b</span>
               <span className="fn-add">
-                {!f.matched && !f.claim && (draftRefs.has(f.name) ? (
+                {!f.matched && !f.claim && !f.noMatch && (draftRefs.has(f.name) ? (
                   <button
                     className="bubble-btn added"
                     title="Remove from batch"

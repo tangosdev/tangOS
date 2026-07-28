@@ -844,6 +844,12 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   background: rgba(234, 179, 8, 0.12); border: 1px solid rgba(234, 179, 8, 0.28);
 }
 .ad-tip b { font-weight: 700; }
+/* "needs no match" note - red to match the hatched tile on the map */
+.ad-nomatch {
+  font-size: 12px; padding: 6px 8px; border-radius: 8px; margin-bottom: 6px;
+  background: rgba(168, 50, 74, 0.12); border: 1px solid rgba(168, 50, 74, 0.34);
+}
+.ad-nomatch b { font-weight: 700; }
 .ad-attempt-list {
   list-style: none; margin: 0; padding: 0; max-height: 160px; overflow: auto;
   display: flex; flex-direction: column; gap: 3px;

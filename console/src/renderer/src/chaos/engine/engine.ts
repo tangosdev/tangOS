@@ -864,7 +864,8 @@ export class ChaosEngine {
     }
     if (this.bubble.currentText === fn.f.name) return
     if (now - this.restSince >= 90) {
-      this.bubble.show(fn.f.name, fn.x + fn.w / 2, fn.y, now)
+      // A red tile is only useful if it says why, so the no-match reason rides along.
+      this.bubble.show(fn.f.name, fn.x + fn.w / 2, fn.y, now, fn.f.noMatch?.reason ?? '')
     } else {
       this.pendingBubble = true
     }
