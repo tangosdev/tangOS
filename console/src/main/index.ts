@@ -1038,6 +1038,12 @@ function logAttemptFromRun(
 // spare ready the instant it finishes one - it never parks waiting for the scheduler mid-loop. (One
 // active + one queued.) Console-driven agents don't need it: their drive loop generates on demand.
 const LOOP_QUEUE_DEPTH = 2
+// A next_batch response can be lost to an MCP transport drop AFTER pullNextBatch already flipped the
+// batch to active. Within this window, a re-poll from the SAME agent that has not worked a single
+// target of that batch gets it REDELIVERED rather than skipped, so a dropped delivery costs a retry,
+// not a whole batch. Kept under the 3-min "stuck batch" threshold in kickLoopReassign so a genuinely
+// abandoned active batch still retires normally.
+const REDELIVER_WINDOW_MS = 2 * 60_000
 // One scheduler run in flight per agent - the heavy coddog runs must never overlap.
 const loopReassigning = new Set<string>()
 // After a failed generation, don't auto-retry until this timestamp - a permanently-failing scheduler
@@ -1213,6 +1219,22 @@ function notifyBatchWaiters(): void {
 
 /** Resolve immediately if work is queued, else block up to timeoutMs for an enqueue (then null). */
 function waitForBatch(agentName: string | undefined, timeoutMs: number): Promise<Batch | null> {
+  // At-least-once delivery. next_batch marks a batch active the moment it's pulled, so a response
+  // lost to a transport drop leaves the batch active-but-undelivered - the next poll would skip it as
+  // "already active" and the agent perceives a batch that never arrived ("no second batch after the
+  // first"). If this agent holds a freshly-activated batch it hasn't worked a single target of,
+  // re-hand THAT same batch instead of advancing, so a dropped delivery is redelivered on retry.
+  if (agentName) {
+    const undelivered = state.batches.find(
+      (b) =>
+        b.status === 'active' &&
+        b.pulledBy === agentName &&
+        b.items.length > 0 &&
+        b.items.every((i) => !i.worked && !i.done) &&
+        Date.now() - (b.activatedAt ?? b.createdAt) < REDELIVER_WINDOW_MS
+    )
+    if (undelivered) return Promise.resolve(undelivered)
+  }
   const now = pullNextBatch(agentName)
   if (now) return Promise.resolve(now)
   // Nothing queued, but if this is a looping agent sitting on a batch it's evidently finished with

@@ -589,6 +589,10 @@ export class McpManager {
 
     return new Promise((resolve, reject) => {
       const http = createServer(app)
+      // next_batch parks a response open for ~45s. Enable TCP keepalive so an idle OS/NAT reaper does
+      // not silently tear down the held connection mid-wait (the "transport dropped mid-call" on
+      // next_batch). Redelivery (waitForBatch) makes a drop non-destructive; this makes it rarer.
+      http.on('connection', (socket) => socket.setKeepAlive(true, 20_000))
       http.on('error', reject)
       http.listen(port, '127.0.0.1', () => {
         this.httpServer = http
