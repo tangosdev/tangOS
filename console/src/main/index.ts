@@ -1254,6 +1254,55 @@ function waitForBatch(agentName: string | undefined, timeoutMs: number): Promise
   })
 }
 
+/** FINAL hand-over check: a batch can sit queued for minutes (or was hand-picked off a stale atlas),
+ *  and main moves the whole time. Right before an agent gets the batch, drop every target that main
+ *  has since finished - matched, or tagged needs-no-match - so nobody is handed completed work.
+ *  Best-effort (offline delivers as-is). Returns null when the whole batch was already done, having
+ *  retired it. Items this agent already worked in-batch are left alone so progress accounting holds. */
+async function pruneStaleItems(b: Batch): Promise<Batch | null> {
+  const live = await liveDoneSets()
+  if (!live) return b
+  const stale = b.items.filter(
+    (i) => !i.done && !i.worked && (live.matched.has(i.ref) || live.noMatch.has(i.ref))
+  )
+  if (!stale.length) return b
+  const staleRefs = new Set(stale.map((s) => s.ref))
+  b.items = b.items.filter((i) => !staleRefs.has(i.ref) || i.done || i.worked)
+  report('batch', {
+    event: 'stale-pruned',
+    batchId: b.id,
+    dropped: stale.map((s) => s.ref),
+    remaining: b.items.length
+  })
+  if (!b.items.length) {
+    b.status = 'done' // nothing left to do - retire it; the caller moves on to the next batch
+    pushState()
+    return null
+  }
+  const n = stale.length
+  b.note = [b.note, `${n} target${n === 1 ? ' was' : 's were'} dropped at hand-over - already finished on main.`]
+    .filter(Boolean)
+    .join(' ')
+  pushState()
+  return b
+}
+
+/** waitForBatch + the final stale check. When pruning retires an entire batch, keep waiting for the
+ *  next one within the same deadline (topping the loop queue back up), so an agent's long-poll never
+ *  returns a batch of already-done work and never goes hungry because its queued batch went stale. */
+async function waitForBatchChecked(agentName: string | undefined, timeoutMs: number): Promise<Batch | null> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) return null
+    const b = await waitForBatch(agentName, remaining)
+    if (!b) return null
+    const pruned = await pruneStaleItems(b)
+    if (pruned) return pruned
+    if (agentName) ensureLoopQueue(agentName) // the retired batch freed a queue slot - refill it
+  }
+}
+
 function currentRuntime(): TangosRuntime {
   return state.descriptor?.runtime ?? { cwd: '.', python: 'python', shell: false }
 }
@@ -1338,7 +1387,7 @@ const mcp = new McpManager(() => ({
   allowMutations: state.allowMutations,
   enabledToolIds: state.enabledToolIds,
   matchingPrefs,
-  batchApi: { next: pullNextBatch, wait: waitForBatch, list: () => state.batches },
+  batchApi: { next: pullNextBatch, wait: waitForBatchChecked, list: () => state.batches },
   run: runToolSafely
 }))
 mcp.onClientsChange = () => pushState()
@@ -1444,6 +1493,35 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** Overlay main's FINISHED state onto a locally generated atlas: matched-on-main can only ADD (the
+ *  operator's own unpushed matches stay green), and needs-no-match tags ride along. A stale clone
+ *  then shows main's completed work as completed - not as selectable yellow near-misses - so the
+ *  Viewer's cart/marquee guards actually refuse it. When no live copy is cached yet (or it has aged
+ *  past the TTL), kick a background refresh and tell the renderer to reload once it lands; offline
+ *  the overlay is simply a no-op and local data shows as-is. */
+function overlayLiveDone(db: AtlasDb | null): AtlasDb | null {
+  const liveAge = atlasCache.repo === state.repoPath && atlasCache.liveAt ? Date.now() - atlasCache.liveAt : Infinity
+  if (liveAge > LIVE_TTL_MS && (state.descriptor?.data?.committedDbUrl || state.descriptor?.data?.claimsApi)) {
+    void loadLiveDb(false)
+      .then(() => mainWindow?.webContents.send('atlas:refreshed'))
+      .catch(() => {})
+  }
+  const live = atlasCache.repo === state.repoPath ? atlasCache.live : undefined
+  if (!db || !live) return db
+  const byName = new Map(live.functions.map((f) => [f.name, f]))
+  let changed = false
+  const functions = db.functions.map((f) => {
+    const lf = byName.get(f.name)
+    if (!lf) return f
+    const matched = f.matched || lf.matched
+    const noMatch = f.noMatch ?? lf.noMatch
+    if (matched === f.matched && noMatch === f.noMatch) return f
+    changed = true
+    return { ...f, matched, noMatch }
+  })
+  return changed ? { ...db, functions } : db
 }
 
 function repoState(): RepoState {
@@ -1829,12 +1907,12 @@ ipcMain.handle('atlas:load', () => {
   if (!state.descriptor || !state.repoPath) return null
   if (atlasCache.repo === state.repoPath && atlasCache.local !== undefined) {
     maybeRegenChaosDb(state.repoPath) // fire-and-forget: refresh in the background if the file is stale
-    return atlasCache.local
+    return overlayLiveDone(atlasCache.local)
   }
   const db = readAtlas(state.repoPath, state.descriptor)
   atlasCache = { ...atlasCache, repo: state.repoPath, local: db }
   maybeRegenChaosDb(state.repoPath)
-  return db
+  return overlayLiveDone(db)
 })
 
 // Regenerate the local chaos-db.json in the background when it is older than the committed data it
@@ -1923,12 +2001,12 @@ ipcMain.handle('atlas:current', () => {
   // Whatever's already loaded (live preferred), else local - never fetches. For popouts.
   if (atlasCache.repo === state.repoPath) {
     if (atlasCache.live) return atlasCache.live
-    if (atlasCache.local) return atlasCache.local
+    if (atlasCache.local) return overlayLiveDone(atlasCache.local)
   }
   if (!state.descriptor || !state.repoPath) return null
   const db = readAtlas(state.repoPath, state.descriptor)
   atlasCache = { ...atlasCache, repo: state.repoPath, local: db }
-  return db
+  return overlayLiveDone(db)
 })
 
 ipcMain.handle('atlas:loadLive', (_e, force?: boolean) => loadLiveDb(!!force))
@@ -2078,7 +2156,7 @@ ipcMain.handle('atlas:generate', async () => {
   if (!state.repoPath || !state.descriptor?.data?.generate) {
     throw new Error('this repo has no data.generate command in tangos.json')
   }
-  return regenAtlasDb('user')
+  return overlayLiveDone(await regenAtlasDb('user'))
 })
 
 // A role shapes BOTH what the scheduler picks and the default batch size:
@@ -2114,17 +2192,24 @@ export const roleBatchSize = (role?: string): number => (role === 'Hard matcher'
 
 // Generate a batch scheduled for this AI's role (similarity, large-function sweep, spread
 // survey, or near-miss refine). Each target carries scaffolding metadata for the agent.
-// Names of functions already matched in the LIVE committed data (chaos-db on the chaos-data branch).
+// Names that are FINISHED per the LIVE committed data (chaos-db on the chaos-data branch): matched
+// on main, plus the needs-no-match set (NONMATCHING asm-primitive / not-C-expressible - never work).
 // coddog judges "matched" from the local src/ tree, which goes stale the moment main gets ahead, so
 // a clone that's behind re-hands functions others already merged. Best-effort: returns null when the
-// repo has no committedDbUrl or the fetch fails, so batch generation still works offline.
-async function liveMatchedNames(): Promise<Set<string> | null> {
-  if (!state.descriptor?.data?.committedDbUrl) return null
+// repo has no live data source or the fetch fails, so batch generation still works offline.
+async function liveDoneSets(): Promise<{ matched: Set<string>; noMatch: Set<string> } | null> {
+  if (!state.descriptor?.data?.committedDbUrl && !state.descriptor?.data?.claimsApi) return null
   // Passive (force=false): reuses the shared TTL cache and the CDN, so generating batch after batch
   // no longer spams the feed toward a 429. Falls back to null offline/on failure.
   try {
     const db = await loadLiveDb(false)
-    return new Set(db.functions.filter((f) => f.matched).map((f) => f.name))
+    const matched = new Set<string>()
+    const noMatch = new Set<string>()
+    for (const f of db.functions) {
+      if (f.matched) matched.add(f.name)
+      else if (f.noMatch) noMatch.add(f.name)
+    }
+    return { matched, noMatch }
   } catch {
     return null
   }
@@ -2167,7 +2252,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   // 20" quietly lands short. coddog ranks the whole corpus regardless of limit (it only truncates
   // the result), so a bigger limit is nearly free. Extra headroom when the live-matched cross-check
   // is on: on a clone that's behind main, a chunk of each pull is dropped as already-matched
-  // upstream (see the matchedLive filter below), so budget for that drop instead of landing short.
+  // upstream (see the liveDone filter below), so budget for that drop instead of landing short.
   const liveDropBudget = state.descriptor.data?.committedDbUrl ? count * 2 : 0
   const plan = genPlanFor(role, count + taken.size + Math.max(count, 16) + liveDropBudget)
   // The planned scheduler, falling back to coddog, then any read-only limit+out tool.
@@ -2278,9 +2363,10 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
     else hint = 'The scheduler ran but wrote nothing. Check the output below and that the repo is fully set up (deps + extracted ROM).'
     throw new Error(`Batch scheduler (${sched.id}) produced no worklist - exit ${res.exitCode ?? '?'}.\n\n${hint}\n\n--- scheduler output ---\n${tail}`)
   }
-  // Cross-check the LIVE matched set so a behind clone doesn't get handed functions already merged on
-  // main (the reported "20 of 40 were already done" bug). Best-effort; null = fall back to local view.
-  const matchedLive = await liveMatchedNames()
+  // Cross-check the LIVE done sets so a behind clone doesn't get handed functions already merged on
+  // main (the reported "20 of 40 were already done" bug) or ones tagged needs-no-match. Best-effort;
+  // null = fall back to local view.
+  const liveDone = await liveDoneSets()
   let droppedMatched = 0
   const items: BatchItem[] = []
   // Absorb one scheduler row into the batch (dedup against taken + already-matched-on-main, cap at
@@ -2293,7 +2379,8 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
         coddog_sim?: number; siblings?: { name: string; sim: number }[]
       }
       if (taken.has(r.name)) return // already assigned elsewhere, or a same-name sibling above
-      if (matchedLive?.has(r.name)) { droppedMatched++; return } // already matched on main since this clone synced
+      // Already matched on main since this clone synced, or tagged needs-no-match - never hand it out.
+      if (liveDone && (liveDone.matched.has(r.name) || liveDone.noMatch.has(r.name))) { droppedMatched++; return }
       const addr = r.addr ? parseInt(r.addr, 16) : undefined
       const size = r.size ? parseInt(r.size, 16) : undefined
       const sib = r.siblings?.[0]
@@ -2340,11 +2427,11 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
       absorb(line)
     randomFill = items.length - before
   }
-  if (droppedMatched) console.log(`[genDraft] skipped ${droppedMatched} target(s) already matched on main (clone may be behind)`)
+  if (droppedMatched) console.log(`[genDraft] skipped ${droppedMatched} target(s) already finished on main - matched or needs-no-match (clone may be behind)`)
   if (!items.length) {
     throw new Error(
       droppedMatched
-        ? `Every candidate for this batch is already matched on main (${droppedMatched} skipped) - your clone is behind. Hit Refresh, then generate again.`
+        ? `Every candidate for this batch is already finished on main (${droppedMatched} skipped as matched or needs-no-match) - your clone is behind. Hit Refresh, then generate again.`
         : 'scheduler returned no functions'
     )
   }
@@ -2367,7 +2454,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   } else if (items.length < count) {
     note =
       droppedMatched > 0
-        ? `Got ${items.length} of ${count} - ${droppedMatched} candidate${droppedMatched === 1 ? ' was' : 's were'} already matched on main. Your clone is behind; hit Refresh (or pull) to sync, then generate again.`
+        ? `Got ${items.length} of ${count} - ${droppedMatched} candidate${droppedMatched === 1 ? ' was' : 's were'} already finished on main (matched or needs-no-match). Your clone is behind; hit Refresh (or pull) to sync, then generate again.`
         : `Got ${items.length} of ${count} - that's all the unmatched targets this role can find right now.`
   }
   const title = randomFill > 0 ? `${label} + random batch (${items.length})` : `${label} batch (${items.length})`
@@ -2526,11 +2613,37 @@ function pruneDoneBatches(): void {
     for (const it of b.items) if (!stillOpen.has(it.ref)) enrichedRows.delete(it.ref)
 }
 
-ipcMain.handle('batch:enqueue', (_e, draft: BatchDraft) => addBatch(draft))
+/** Vet a draft's picks against the LIVE done sets before it enters the queue. A hand-picked cart can
+ *  come off a stale local atlas that still paints main-finished functions as work; drop those here
+ *  with a visible note, and refuse a cart that is ENTIRELY done so the operator learns why instead of
+ *  an agent quietly receiving nothing. genDraft output was just filtered, so re-vetting it is a cheap
+ *  cache hit. Best-effort: offline vets nothing. */
+async function vetDraftItems(draft: BatchDraft): Promise<BatchDraft> {
+  const live = await liveDoneSets()
+  if (!live) return draft
+  const items = draft.items ?? []
+  const kept = items.filter((i) => !live.matched.has(i.ref) && !live.noMatch.has(i.ref))
+  const n = items.length - kept.length
+  if (!n) return draft
+  if (!kept.length)
+    throw new Error(
+      `All ${items.length} picked function${items.length === 1 ? ' is' : 's are'} already finished on main ` +
+        '(matched or needs-no-match). Your atlas view is stale - refresh it and pick again.'
+    )
+  return {
+    ...draft,
+    items: kept,
+    note: [draft.note, `${n} pick${n === 1 ? ' was' : 's were'} dropped - already finished on main.`]
+      .filter(Boolean)
+      .join(' ')
+  }
+}
+
+ipcMain.handle('batch:enqueue', async (_e, draft: BatchDraft) => addBatch(await vetDraftItems(draft)))
 
 // Address a batch to one AI by name: only that agent's next_batch (or console-driven run) gets it.
-ipcMain.handle('batch:assign', (_e, payload: { draft: BatchDraft; agentName: string }) =>
-  addBatch(payload.draft, payload.agentName)
+ipcMain.handle('batch:assign', async (_e, payload: { draft: BatchDraft; agentName: string }) =>
+  addBatch(await vetDraftItems(payload.draft), payload.agentName)
 )
 
 /** Generate a role-aware batch and address it to one AI, setting/clearing its loop flag.
@@ -2757,6 +2870,13 @@ async function driveBatch(agentName: string): Promise<void> {
       : agentEfforts[agentName] ?? effortDefault[agentName] ?? ''
   const batch = state.batches.find((b) => b.targetAgent === agentName && b.status !== 'done')
   if (!batch) throw new Error(`no batch assigned to ${agentName} - assign one first`)
+  // Final hand-over check (same as next_batch): main may have finished some of these targets while
+  // the batch sat queued. If the whole batch is already done, it was retired - return so the drive
+  // loop advances to (or generates) the next batch instead of grinding completed work.
+  if (!(await pruneStaleItems(batch))) {
+    report('drive', { agent: agentName, status: 'skipped', reason: 'batch already finished on main' })
+    return
+  }
   // Build the driver worklist with FULL context. Prefer coddog's preserved enriched row (from
   // genDraft); for a target without one (a batch hand-picked in the Atlas), enrich on demand via
   // `worklist --addr`. Enrich in parallel (capped) with a live "Preparing N/M" status - 50 picks
