@@ -85,7 +85,8 @@ export function matchConventionsGuide(desc: TangosDescriptor, opts: MatchGuideOp
       ? `Near-miss tips: ON — you MAY use ${nearMiss}` +
         (hasNearMissTool ? ' and nearmiss_* tools' : '') +
         '. Keep compiling tip C; never bank non-reproducing C as a green src/ match.'
-      : 'Near-miss tips: OFF — do NOT open nearmiss/db.jsonl, nearmiss_* tools, or // NONMATCHING tip C for these targets. Work them from scratch.'
+      : 'Near-miss tips: OFF — do NOT open nearmiss/db.jsonl, nearmiss_* tools, or // NONMATCHING tip C for these targets. Work them from scratch.',
+    'A raw byte transcription (`asm{}`/`dcd 0x...` dump of the disassembly) is never a match — the console rejects it at verify, bank, and push; write real C or bank the near-miss instead.'
   ]
 
   if (allowNear && desc.project.nearMissNote) {
