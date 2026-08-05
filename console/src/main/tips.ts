@@ -17,6 +17,42 @@ const DEFAULTS = `# Tango's messages - edit this file, then reopen tangOS (or re
 # Separate messages with a blank line. Lines starting with # are ignored.
 
 [smile] Hi, I'm Tango!
+This is the Chaos Controller. Every AI you connect shows up as a box here - queue it work and watch it match functions live.
+
+[handsup] Connect an AI
+Flip the MCP switch on (top-right of the controller), then paste the prompt into your AI so it can connect.
+
+[tongue] Hand out work
+Pick a batch size and hit "Add to queue" on an AI's box - it gets functions ranked by how close they are to code already solved. The ∞ button keeps it fed until you stop it.
+
+[thinking] Use API keys
+Add an LLM key in Settings (the gear) and that provider shows up as its own box - "Drive queue" works it through everything queued.
+
+[smile] Hand-pick in the Viewer
+Click functions in the Chaos Viewer (or right-drag a box around them) to fill your cart, then "Add chosen functions" hands them to any AI.
+
+[smile] Pick a role
+Give each AI a role from its dropdown. The one tagged "(recommended)" is what it is currently best at.
+
+[thinking] Dig into an AI
+Click any box to pop out its stats - matches, hit rate, tokens, and the function sizes it handles best.
+
+[handsup] The three switches
+Writes lets tools change files, Review keeps changes on a review branch, and Push opens a rolling PR of matched work. All three ON is the full pipeline.
+
+[handsup] Two apps, one toggle
+Use the slider up top to flip between the Controller and the Chaos Viewer map of the whole game.
+`
+
+// Earlier shipped defaults, verbatim - see ensureTips: an unedited file gets reseeded so old
+// installs pick up the current messages; hand-edited files are left alone.
+const LEGACY_DEFAULTS = [
+  `# Tango's messages - edit this file, then reopen tangOS (or reload) to see changes.
+# One message per block: the FIRST line is the title, the rest is the body.
+# Start the title with an emotion in brackets to set his face: [smile] [thinking] [shy] [tongue] [handsup] [idle]
+# Separate messages with a blank line. Lines starting with # are ignored.
+
+[smile] Hi, I'm Tango!
 This is the Chaos Controller. Every AI you connect shows up as a box here - assign it work and watch it match functions live.
 
 [handsup] Connect an AI
@@ -37,6 +73,7 @@ Click any box to pop out its stats - matches, hit rate, tokens, and the function
 [handsup] Two apps, one toggle
 Use the slider up top to flip between the Controller and the Chaos Viewer map of the whole game.
 `
+]
 
 const FALLBACK: Tip[] = [{ title: "Hi, I'm Tango!", body: 'Welcome to the Chaos Controller.' }]
 
@@ -44,10 +81,13 @@ function tipsFile(): string {
   return join(app.getPath('userData'), 'tango-tips.txt')
 }
 
-/** Seed the editable file on first run. */
+/** Seed the editable file on first run; reseed an old install whose file was never hand-edited. */
 export function ensureTips(): void {
   try {
-    if (!existsSync(tipsFile())) writeFileSync(tipsFile(), DEFAULTS)
+    if (!existsSync(tipsFile())) return writeFileSync(tipsFile(), DEFAULTS)
+    const current = readFileSync(tipsFile(), 'utf8').replace(/\r/g, '').trim()
+    if (LEGACY_DEFAULTS.some((l) => l.replace(/\r/g, '').trim() === current))
+      writeFileSync(tipsFile(), DEFAULTS)
   } catch {
     /* ignore */
   }

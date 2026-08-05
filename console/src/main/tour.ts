@@ -21,6 +21,61 @@ const DEFAULTS = `# Tango's intro tour - the first-run walkthrough. Reword the t
 #   line 2  = the step title
 #   rest    = the body text
 # Emotions: [smile] [thinking] [shy] [tongue] [handsup] [idle]
+# Spots (what to spotlight; omit the @spot to center the step): @toggle @mcp @settings @keyvault @controller @policies
+# Highlight: wrap words in :joke[ ... ] to paint them as a shimmering gradient of Tango's colors.
+# Lines starting with # are ignored.
+
+[smile]
+Hi, I'm Tango!
+New here? Give me a minute and I'll show you around and get your first functions matching. Thank you for the download!
+
+[handsup] @toggle
+Two apps, one switch
+These buttons flip between the Chaos Controller, where your AIs live, and the Chaos Viewer, a map of every function in the game.
+
+[smile] @mcp
+Turn on MCP
+Switch this ON so AIs can connect, then copy the prompt and paste it into your AI (Claude Code, Cursor, and friends).
+
+[thinking] @settings
+Keys and GitHub
+Add an LLM API key here and that provider appears as its own box, ready to drive. Sign into GitHub too, that is how finished matches get pushed up as pull requests. Keys are stored locally and never fully shown.
+
+[smile] @controller
+Your AI crew
+Every connected or keyed AI becomes a box here. Click a box any time to see its stats and what it is best at.
+
+[tongue] @controller
+Queue up work
+Pick a batch size (16 is a good start) and hit "Add to queue". I pick functions that AI is suited for. Or press the ∞ button and it keeps pulling fresh work until you stop it.
+
+[smile] @controller
+Drive it
+For an AI with an API key, hit "Drive queue" and watch it match live. AIs connected over MCP pull from their queue on their own.
+
+[handsup] @toggle
+Hand-pick functions
+Want to choose the work yourself? Flip to the Chaos Viewer, click functions (or right-drag a box around them) to fill your cart, then "Add chosen functions" on any AI's box.
+
+[smile] @policies
+The three switches
+Writes lets tools change files, Review keeps changes on a review branch, and Push opens a rolling PR of matched work. Leave all three ON and the pipeline runs end to end.
+
+[handsup]
+You're ready to go!
+I'll hang out in the corner. Click me any time for tips, and I may have messages for you later!
+`
+
+// Earlier shipped defaults, verbatim. A userData file still matching one of these was never
+// hand-edited, so ensureTour reseeds it with the current DEFAULTS (otherwise Replay tour on an
+// old install shows the outdated walkthrough forever). Edited files are left alone.
+const LEGACY_DEFAULTS = [
+  `# Tango's intro tour - the first-run walkthrough. Reword the titles and bodies freely.
+# One step per block, blank line between blocks. In each block:
+#   line 1  = options: an [emotion] and an optional @spot to highlight (either can be left off)
+#   line 2  = the step title
+#   rest    = the body text
+# Emotions: [smile] [thinking] [shy] [tongue] [handsup] [idle]
 # Spots (what to spotlight; omit the @spot to center the step): @toggle @mcp @settings @controller @policies
 # Highlight: wrap words in :joke[ ... ] to paint them as a shimmering gradient of Tango's colors.
 # Lines starting with # are ignored.
@@ -57,6 +112,7 @@ By default keep these on as it drives the entire pipeline and have many internal
 You're ready to go!
 I'll hang out in the corner. Click me any time for tips, and I may have messages for you later!
 `
+]
 
 const FALLBACK: TourStep[] = [
   { title: "Hi, I'm Tango!", body: 'Welcome to the Chaos Controller.', emotion: 'smile' }
@@ -66,10 +122,13 @@ function tourFile(): string {
   return join(app.getPath('userData'), 'tango-tour.txt')
 }
 
-/** Seed the editable file on first run. */
+/** Seed the editable file on first run; reseed an old install whose file was never hand-edited. */
 export function ensureTour(): void {
   try {
-    if (!existsSync(tourFile())) writeFileSync(tourFile(), DEFAULTS)
+    if (!existsSync(tourFile())) return writeFileSync(tourFile(), DEFAULTS)
+    const current = readFileSync(tourFile(), 'utf8').replace(/\r/g, '').trim()
+    if (LEGACY_DEFAULTS.some((l) => l.replace(/\r/g, '').trim() === current))
+      writeFileSync(tourFile(), DEFAULTS)
   } catch {
     /* ignore */
   }

@@ -15,25 +15,25 @@ interface Step {
 const STEPS: Step[] = [
   {
     title: "Hi, I'm Tango!",
-    body: "New here? Give me 20 seconds and I'll show you around and get your first batch going.",
+    body: "New here? Give me a minute and I'll show you around and get your first functions matching.",
     emotion: 'smile'
   },
   {
     target: '[data-tour="toggle"]',
-    title: 'Two views, one switch',
-    body: 'Up here you flip between the Controller (where your AIs live) and the Chaos Viewer map of the whole game.',
+    title: 'Two apps, one switch',
+    body: 'These buttons flip between the Chaos Controller, where your AIs live, and the Chaos Viewer, a map of every function in the game.',
     emotion: 'handsup'
   },
   {
     target: '[data-tour="mcp"]',
-    title: 'Step 1 - turn on MCP',
-    body: 'Switch this ON so AIs can connect. Then paste the prompt it gives you into your AI (Claude Code, Cursor, and friends).',
+    title: 'Turn on MCP',
+    body: 'Switch this ON so AIs can connect, then copy the prompt and paste it into your AI (Claude Code, Cursor, and friends).',
     emotion: 'smile'
   },
   {
     target: '[data-tour="settings"]',
-    title: 'Step 2 - keys & GitHub',
-    body: "Or add an LLM API key here and sign into GitHub. A keyed provider shows up ready to run - no connecting needed.",
+    title: 'Keys and GitHub',
+    body: 'Add an LLM API key here and that provider appears as its own box, ready to drive. Sign into GitHub too, that is how finished matches get pushed up as pull requests.',
     emotion: 'thinking'
   },
   {
@@ -44,19 +44,31 @@ const STEPS: Step[] = [
   },
   {
     target: '[data-tour="controller"]',
-    title: 'Step 3 - your first batch',
-    body: "Hit “Assign 16” on a box to hand it 16 similar functions. For an API AI, then click “Drive”. Watch it match live - that's it!",
+    title: 'Queue up work',
+    body: 'Pick a batch size (16 is a good start) and hit “Add to queue”. Or press the ∞ button and it keeps pulling fresh work until you stop it.',
     emotion: 'tongue'
   },
   {
-    target: '[data-tour="policies"]',
-    title: 'Safety switches',
-    body: 'Writes lets tools change files; Review routes every change through a diff you approve first. Leave both on to start.',
+    target: '[data-tour="controller"]',
+    title: 'Drive it',
+    body: 'For an AI with an API key, hit “Drive queue” and watch it match live. AIs connected over MCP pull from their queue on their own.',
     emotion: 'smile'
   },
   {
-    title: "You're all set!",
-    body: "I'll hang out in the corner. Click me any time for tips - and I'll wave when there's something new.",
+    target: '[data-tour="toggle"]',
+    title: 'Hand-pick functions',
+    body: "Want to choose the work yourself? Flip to the Chaos Viewer, click functions to fill your cart, then “Add chosen functions” on any AI's box.",
+    emotion: 'handsup'
+  },
+  {
+    target: '[data-tour="policies"]',
+    title: 'The three switches',
+    body: 'Writes lets tools change files, Review keeps changes on a review branch, and Push opens a rolling PR of matched work. Leave all three ON.',
+    emotion: 'smile'
+  },
+  {
+    title: "You're ready to go!",
+    body: "I'll hang out in the corner. Click me any time for tips, and I may have messages for you later!",
     emotion: 'handsup'
   }
 ]
