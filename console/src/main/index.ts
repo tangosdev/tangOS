@@ -26,6 +26,7 @@ import { fetchCosmetics, fetchCounts, fetchProgress, fetchAtlas, connectAtlasLiv
 import { startDeviceFlow, pollForToken } from './githubAuth'
 import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
 import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
+import { classifySource } from './asmPolicy'
 import * as nearMissWatch from './nearMissWatch'
 import { record as report, setReportsEnabled, reportsDir } from './reports'
 import { ensureTips, readTips, openTips } from './tips'
@@ -298,6 +299,23 @@ function agentSlug(name?: string): string {
   return s || 'agent'
 }
 
+/** A verified byte "match" whose SOURCE is a raw asm transcription (an unbannered `dcd 0x...`
+ *  dump - see asmPolicy.ts / decomp repo tools/asm_policy.py). The match is vacuous by
+ *  construction, so refuse to credit/bank/ship it: surface a visible status warning, log a report
+ *  row for forensics, and leave the target WORKED (the queue moves on) but never DONE (no green
+ *  tile, no % matched credit). Deliberately NOT routed to the near-miss DB: a transcription would
+ *  land there as divergence 0 and poison every refiner draft seeded from it. */
+function rejectTranscription(where: string, agent: string | undefined, func: string, file: string): void {
+  report('transcription-gate', { where, agent: agent ?? 'user', func, file })
+  autoPushStatus = {
+    state: 'skipped',
+    message: `${func}: rejected - raw asm transcription (dcd dump), a vacuous byte match (see decomp PR #1072). Not banked, not pushed; write real C or bank a near-miss.`,
+    at: Date.now()
+  }
+  pushState()
+  markItemWorked(func)
+}
+
 /** Attribute the src file(s) for the functions VERIFIED matched this run to this agent, and debounce
  *  a push of just that agent's cumulative work to its own branch/PR.
  *
@@ -319,6 +337,20 @@ async function noteMatchAndPush(
       if (!func) continue
       for (const cand of [`src/${func}.c`, `src/${func}.cpp`]) {
         if (!changed.has(cand) || baselineDirtySrc.has(cand)) continue // absent, or pre-existing dirt
+        // TRANSCRIPTION GATE: read the bytes we are about to claim. The verify said they equal
+        // the ROM - which a raw dcd dump satisfies by construction - so the source text is the
+        // only place the lie shows (asmPolicy.ts). A transcription is never claimed, snapshotted,
+        // or added to the pending set, so it can never reach a PR from here.
+        let text: string | null = null
+        try {
+          text = readFileSync(join(state.repoPath, cand), 'utf8')
+        } catch {
+          /* vanished between verify and claim; the flush's existence check handles it */
+        }
+        if (text != null && classifySource(text) === 'transcribed') {
+          rejectTranscription('bank', agentName, func, cand)
+          continue
+        }
         const owner = claimedFiles.get(cand)
         if (!owner) {
           claimedFiles.set(cand, slug)
@@ -531,6 +563,7 @@ async function runAutoPush(slug: string): Promise<void> {
     const ship: string[] = []
     let landedUpstream = 0
     let heldStale = 0
+    let rejectedTranscribed = 0
     for (const f of files) {
       const up = await upstreamState(state.repoPath, base, f)
       // 'identical' = already landed upstream. 'differs' = upstream has its own version, normally
@@ -553,13 +586,25 @@ async function runAutoPush(slug: string): Promise<void> {
         heldStale++ // stays pending; ships when a fresh match re-snapshots it
         continue
       }
+      // Belt-and-braces TRANSCRIPTION GATE on the exact bytes that would ship (the verified
+      // snapshot). Anything that reached the pending set around the bank gate - the stranded
+      // sweep claims off-bridge work directly, and older sessions' claims survive - is stopped
+      // here for good: a dcd dump can never ship in a "matched" PR (asmPolicy.ts, decomp #1072).
+      if (classifySource(snap) === 'transcribed') {
+        pending.delete(f) // permanently: a rewrite into real C re-enters via a fresh verify
+        verifiedContent.delete(f)
+        rejectedTranscribed++
+        report('transcription-gate', { where: 'ship', agent: slug, file: f })
+        continue
+      }
       ship.push(f)
     }
     pendingByAgent.set(slug, pending)
     if (!ship.length) {
       const why = [
         landedUpstream ? `${landedUpstream} already upstream` : '',
-        heldStale ? `${heldStale} changed since verify (held for re-verify)` : ''
+        heldStale ? `${heldStale} changed since verify (held for re-verify)` : '',
+        rejectedTranscribed ? `${rejectedTranscribed} raw transcription(s) rejected (dcd dump, not a match)` : ''
       ].filter(Boolean).join(', ')
       return set({ state: 'skipped', message: `${slug}: nothing to push${why ? ` (${why})` : ''}` })
     }
@@ -608,7 +653,7 @@ async function runAutoPush(slug: string): Promise<void> {
     set({ state: 'ok', message: `${slug}: ${pr.created ? 'opened' : 'updated'} PR`, prUrl: pr.url })
     report('autopush', {
       agent: slug, branch, base, files: ship.length, consoleVersion: consoleVer,
-      skippedUpstream: landedUpstream, heldStale, prUrl: pr.url, created: pr.created
+      skippedUpstream: landedUpstream, heldStale, rejectedTranscribed, prUrl: pr.url, created: pr.created
     })
   } catch (e) {
     const msg = String((e as Error).message ?? e).slice(-200)
@@ -945,8 +990,24 @@ function afterRun(
     outputTail: (res.output || '').slice(-4000)
   })
   if (tool.id !== 'match') return
-  const ok = res.status === 'ok' && outputIsMatch(res.output)
+  let ok = res.status === 'ok' && outputIsMatch(res.output)
   const func = typeof values.func === 'string' ? values.func : undefined
+  // TRANSCRIPTION GATE: a "MATCHING VERSIONS" verdict on a raw dcd transcription is vacuous - the
+  // dump equals the ROM by construction (asmPolicy.ts). Demote it BEFORE any credit: no match
+  // stat, no done flag, no bank/push. The near-miss stat path below is naturally inert too (a
+  // byte match parses no divergence), so a divergence-0 transcription can never seed the pool.
+  if (ok && state.repoPath && typeof values.c === 'string') {
+    try {
+      const p = isAbsolute(values.c) ? values.c : join(state.repoPath, values.c)
+      if (classifySource(readFileSync(p, 'utf8')) === 'transcribed') {
+        ok = false
+        if (func) rejectTranscription('verify', client?.name, func, values.c)
+      }
+    } catch {
+      /* candidate unreadable - can't classify here; the bank (noteMatchAndPush) and ship
+         (runAutoPush) gates re-read the bytes and re-check before anything leaves the machine */
+    }
+  }
   aiStats.recordMatch(client?.name, ok, parseHexish(values.size), func)
   const div = ok ? null : matchDivergence(res.output)
   const prevBest = aiStats.bestDivFor(func) // BEFORE recordNearMiss updates it - drives near_miss vs no_progress
@@ -2991,7 +3052,9 @@ async function driveBatch(agentName: string): Promise<void> {
   //   "(3/64) func_ov062_02114f98: MATCH"  or  "(4/64) func_...: div=7"
   // (its per-attempt lines follow, indented). Parse the headers as they stream so the bar
   // climbs the instant a match lands (and a Stop mid-run still leaves every completed target
-  // counted). recorded[] avoids double-counting against the final .output reconciliation below.
+  // counted - the driver checkpoints its results file per target, so reconciliation sees them).
+  // recorded[] avoids double-counting misses against the final .output reconciliation below;
+  // hits are recorded THERE, where the results file's C source can be transcription-classified.
   const recorded = new Set<string>()
   const DONE_RE = /^\((\d+)\/(\d+)\)\s+(\S+):\s+(MATCH|div=\d+)/
   let lineBuf = ''
@@ -3007,16 +3070,19 @@ async function driveBatch(agentName: string): Promise<void> {
       const name = m[3]
       const ok = m[4] === 'MATCH'
       if (recorded.has(name)) continue
-      recorded.add(name)
       const item = batch.items.find((i) => i.ref === name)
-      aiStats.recordMatch(agentName, ok, item?.size, name)
-      // a "div=N" line: compiled draft, close but not matching - counts only if it beats the best div
-      if (!ok) aiStats.recordNearMiss(agentName, name, Number(m[4].replace('div=', '')), item?.size)
-      // Every target the driver reaches is WORKED (it advances the analyzed bar) whether it matched,
-      // near-missed, or dead-ended; a hit additionally marks it done.
-      if (item) {
-        item.worked = true
-        if (ok) item.done = true
+      // Every target the driver reaches is WORKED (it advances the analyzed bar) whether it
+      // matched, near-missed, or dead-ended. A streamed MATCH is NOT credited here though: the
+      // results file carries the matched C source, and a raw dcd transcription must be demoted
+      // before it earns a match stat or a done flag (asmPolicy.ts / decomp #1072) - so hits are
+      // left out of `recorded` and the reconciliation below classifies + records them. The bar
+      // still climbs now: progress counts worked||done.
+      if (item) item.worked = true
+      if (!ok) {
+        recorded.add(name)
+        aiStats.recordMatch(agentName, false, item?.size, name)
+        // a "div=N" line: compiled draft, close but not matching - counts only if it beats the best div
+        aiStats.recordNearMiss(agentName, name, Number(m[4].replace('div=', '')), item?.size)
       }
       aiStats.setCurrent(agentName, {
         task: batch.title,
@@ -3042,6 +3108,7 @@ async function driveBatch(agentName: string): Promise<void> {
     })
     let landed: string[] = []
     let nearMissNames: string[] = [] // compiling drafts this run produced but did not match (worth banking)
+    let transcribedRejected: string[] = [] // "matches" demoted by the transcription gate (never landed)
     let tin = 0
     let tout = 0
     let rawOut = ''
@@ -3053,6 +3120,7 @@ async function driveBatch(agentName: string): Promise<void> {
         matches?: Array<string | { name?: string }>
         results?: Array<{ name?: string; matched?: boolean }>
         nearMisses?: Array<{ name?: string; c_source?: string }>
+        sources?: Record<string, string> // landed name -> its matched C source (glm_refine)
         tokensIn?: number
         tokensOut?: number
         inputTokens?: number
@@ -3069,18 +3137,34 @@ async function driveBatch(agentName: string): Promise<void> {
       nearMissNames = (out.nearMisses ?? [])
         .map((n) => n?.name)
         .filter((n): n is string => !!n)
+      // TRANSCRIPTION GATE (driver path): the results file carries each landed function's C
+      // source, so classify BEFORE anything is credited or landed. A transcribed "match" is
+      // demoted to worked-not-done, dropped from `landed` (crackloop land and noteMatchAndPush
+      // never see it), and NOT added to the near-miss set - a divergence-0 transcription in the
+      // DB would poison every refiner draft seeded from it (asmPolicy.ts / decomp #1072).
+      const transcribed = new Set<string>()
+      for (const [n, src] of Object.entries(out.sources ?? {})) {
+        if (typeof src === 'string' && classifySource(src) === 'transcribed') transcribed.add(n)
+      }
+      if (transcribed.size) {
+        landed = landed.filter((n) => !transcribed.has(n))
+        transcribedRejected = [...transcribed]
+        for (const n of transcribed) rejectTranscription('drive', agentName, n, outPath)
+      }
       // Reconcile with the stream via the driver's authoritative results[] (every target it
-      // reached, matched or not). Anything the live parse missed gets recorded here; targets
+      // reached, matched or not). Streamed hits are ALWAYS recorded here (their stat needs the
+      // classification above); anything else the live parse missed gets recorded too. Targets
       // that never ran (e.g. an early Stop) aren't in results[], so a partial run doesn't
       // tank hit rate with un-attempted functions.
       for (const r of out.results ?? []) {
         if (!r.name || recorded.has(r.name)) continue
         recorded.add(r.name)
         const item = batch.items.find((i) => i.ref === r.name)
-        aiStats.recordMatch(agentName, !!r.matched, item?.size, r.name)
+        const real = !!r.matched && !transcribed.has(r.name)
+        aiStats.recordMatch(agentName, real, item?.size, r.name)
         if (item) {
           item.worked = true
-          if (r.matched) item.done = true
+          if (real) item.done = true
         }
       }
       tin = out.tokensIn ?? out.inputTokens ?? 0
@@ -3097,6 +3181,7 @@ async function driveBatch(agentName: string): Promise<void> {
       status: res.status,
       landed: landed.length,
       landedNames: landed,
+      transcribedRejected,
       tokensIn: tin,
       tokensOut: tout,
       driverOutputTail: (res.output || '').slice(-3000),
