@@ -14,6 +14,7 @@ import {
   conventionsOf
 } from './matchConventions'
 import { loadDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
+import { PROJECTS, projectBySlug, slugOf, customIdFor } from '../shared/projects'
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
 import { registerAll, cliCommand } from './connect'
 import { runTool } from './runTool'
@@ -1307,7 +1308,10 @@ function currentRuntime(): TangosRuntime {
   return state.descriptor?.runtime ?? { cwd: '.', python: 'python', shell: false }
 }
 
-// Remember the last-opened repo + each agent's assigned role + reasoning effort across sessions.
+// Each agent's assigned role + reasoning effort, for the ACTIVE project. These stay plain
+// module-level maps so every read site (roleForName, agentsSnapshot, the driver env, the IPC
+// setters) is untouched by project scoping; snapshotActiveProject/loadProjectScoped swap what
+// they hold when the project changes.
 let agentRoles: Record<string, string[]> = {}
 let agentEfforts: Record<string, string> = {}
 // Per-agent max match attempts per function (console-driven agents; glm_refine --attempts).
@@ -1322,11 +1326,101 @@ let matchingPrefs: MatchingPrefs = { allowNearMiss: true, allowGhidra: false }
 function settingsFile(): string {
   return join(app.getPath('userData'), 'tangos-settings.json')
 }
+
+/** Everything remembered per project rather than globally. Agent tallies and role assignments
+ *  describe work done ON a project, so they follow the project rather than the app: switching to
+ *  a decomp you've never touched must show an empty roster, not another game's career numbers. */
+interface PersistedProject {
+  path?: string | null // last known local clone; re-verified on use, may go stale
+  title?: string // last seen descriptor title, so the switcher can label it while offline
+  custom?: boolean // hand-picked folder, not in the built-in registry
+  agentRoles?: Record<string, string[]>
+  agentEfforts?: Record<string, string>
+  agentAttempts?: Record<string, number>
+  agentLoop?: string[]
+  agentStats?: Record<string, { totalMatches: number; matchAttempts: number }>
+  agentBestDiv?: Record<string, number>
+}
+let persistedProjects: Record<string, PersistedProject> = {}
+let activeProjectId: string | null = null
+
+/** Fold the live per-project state back into its settings slot. Called first thing in
+ *  saveSettings, so all ~6 existing save call sites persist to the right project for free. */
+function snapshotActiveProject(): void {
+  if (!activeProjectId) return
+  const slot = (persistedProjects[activeProjectId] ??= {})
+  slot.agentRoles = agentRoles
+  slot.agentEfforts = agentEfforts
+  slot.agentAttempts = agentAttempts
+  slot.agentLoop = [...agentLoop]
+  slot.agentStats = aiStats.serialize()
+  slot.agentBestDiv = aiStats.serializeBestDiv()
+  if (state.repoPath) slot.path = state.repoPath
+  const title = state.descriptor?.project?.title
+  if (title) slot.title = title
+}
+
+/** Point the live maps at another project's slot. Must run AFTER in-flight drives are killed:
+ *  it rebuilds agentLoop, and a surviving driver would keep looping against the new project. */
+function loadProjectScoped(id: string): void {
+  const slot = persistedProjects[id] ?? {}
+  agentRoles = hydrateRoles(slot.agentRoles)
+  agentEfforts = { ...(slot.agentEfforts ?? {}) }
+  agentAttempts = { ...(slot.agentAttempts ?? {}) }
+  agentLoop.clear()
+  for (const n of slot.agentLoop ?? []) agentLoop.add(n)
+  aiStats.swapTo(slot.agentStats, slot.agentBestDiv)
+  aiStats.remapKeys(normalizeName) // fold old per-model/per-session stat keys into one family box
+  activeProjectId = id
+}
+
+// Migrate legacy single-role (string) entries to the multi-role (string[]) format, AND map the
+// old 7-role names onto the pruned 4-role set so a stored assignment never points at a dead role.
+const ROLE_MIGRATE: Record<string, string> = {
+  'Main matcher': 'Drafter',
+  'Explorer': 'Drafter',
+  'Long sweep': 'Hard matcher',
+  'Draft checker': 'Refiner',
+  'Finisher': 'Random',
+  'Verifier': '' // dropped - no equivalent, so it clears
+}
+function hydrateRoles(raw?: Record<string, string | string[]>): Record<string, string[]> {
+  return Object.fromEntries(
+    Object.entries(raw ?? {}).map(([k, v]) => [
+      k,
+      [
+        ...new Set(
+          (Array.isArray(v) ? v : [v])
+            .map((r) => (r in ROLE_MIGRATE ? ROLE_MIGRATE[r] : r))
+            .filter((r) => r && r !== 'Unassigned')
+        )
+      ]
+    ])
+  )
+}
+
+/** Which registry project a folder IS, so a repo opened through the folder dialog lands in the
+ *  right settings slot. Identity comes from the descriptor's own github URL; an unrecognized
+ *  folder gets its own synthesized slot rather than borrowing another project's tallies. */
+function identifyProject(repoPath: string, descriptor: TangosDescriptor | null): string {
+  const byUrl = projectBySlug(descriptor?.project?.github)
+  if (byUrl) return byUrl.id
+  const name = descriptor?.project?.name
+  const byName = name && PROJECTS.find((p) => p.id === name || slugOf(p.github)?.endsWith(`/${name}`))
+  if (byName) return byName.id
+  return customIdFor(repoPath)
+}
+
 function saveSettings(): void {
   try {
+    snapshotActiveProject()
     writeFileSync(
       settingsFile(),
       JSON.stringify({
+        activeProject: activeProjectId,
+        projects: persistedProjects,
+        // Legacy mirror of the ACTIVE project, kept for one release so downgrading to a
+        // pre-switcher build doesn't read an empty settings file and reset the fleet.
         lastRepo: state.repoPath,
         agentRoles,
         agentEfforts,
@@ -1354,6 +1448,8 @@ function saveSettings(): void {
   }
 }
 function loadSettings(): {
+  activeProject?: string
+  projects?: Record<string, PersistedProject>
   lastRepo?: string
   agentRoles?: Record<string, string | string[]> // string = legacy single-role format
   agentEfforts?: Record<string, string>
@@ -1377,6 +1473,33 @@ function loadSettings(): {
     return JSON.parse(readFileSync(settingsFile(), 'utf8'))
   } catch {
     return {}
+  }
+}
+
+/** Fill in `projects` / `activeProject` for a settings file written before the switcher existed.
+ *  The legacy agent blobs were global; every install that has them is an sm64ds install, so they
+ *  move wholesale into whichever project `lastRepo` resolves to. Nothing is merged or split - the
+ *  numbers on screen after the update are the same ones that were there before it. */
+function migrateSettings(saved: ReturnType<typeof loadSettings>): ReturnType<typeof loadSettings> {
+  if (saved.projects) return saved
+  const id = saved.lastRepo
+    ? identifyProject(saved.lastRepo, loadDescriptor(saved.lastRepo).descriptor)
+    : PROJECTS[0].id
+  return {
+    ...saved,
+    activeProject: id,
+    projects: {
+      [id]: {
+        path: saved.lastRepo ?? null,
+        custom: id.startsWith('local:'),
+        agentRoles: hydrateRoles(saved.agentRoles),
+        agentEfforts: saved.agentEfforts,
+        agentAttempts: saved.agentAttempts,
+        agentLoop: saved.agentLoop,
+        agentStats: saved.agentStats,
+        agentBestDiv: saved.agentBestDiv
+      }
+    }
   }
 }
 
@@ -1430,7 +1553,9 @@ let mainWindow: BrowserWindow | null = null
 
 // Cache the loaded Atlas data so popouts + view-switches reuse it instantly
 // instead of re-reading/re-fetching the ~2MB data every time.
-let atlasCache: { repo: string | null; local?: AtlasDb | null; live?: AtlasDb | null; liveAt?: number } = { repo: null }
+// Keyed by PROJECT, not repo path: a viewer-only project has no path, so two of them would
+// otherwise both key on null and serve each other's atlas.
+let atlasCache: { project: string | null; local?: AtlasDb | null; live?: AtlasDb | null; liveAt?: number } = { project: null }
 
 // One shared fetch of the live chaos-db so the Live view AND the batcher's matched-check don't
 // hammer raw GitHub into a 429. Passive callers reuse anything within TTL and hit the CDN (no
@@ -1449,14 +1574,14 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
       const held = await fetchHeldClaims(claimsUrlLive)
       if (held) overlayClaims(fromVps, held)
     }
-    atlasCache = { ...atlasCache, repo: state.repoPath, live: fromVps, liveAt: Date.now() }
+    atlasCache = { ...atlasCache, project: activeProjectId, live: fromVps, liveAt: Date.now() }
     aiStats.seedBestDiv(fromVps.functions)
     return fromVps
   }
 
   const url = state.descriptor?.data?.committedDbUrl
   if (!url) throw new Error('this repo has no committedDbUrl in tangos.json')
-  const cached = atlasCache.repo === state.repoPath ? atlasCache.live : undefined
+  const cached = atlasCache.project === activeProjectId ? atlasCache.live : undefined
   const age = cached && atlasCache.liveAt ? Date.now() - atlasCache.liveAt : Infinity
   // A user Live refresh re-fetches once past the short throttle window; passive callers reuse for the
   // full TTL. Either way, within the window the in-memory copy is served - no network hit.
@@ -1484,7 +1609,7 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
       const held = await fetchHeldClaims(claimsUrl)
       if (held) overlayClaims(db, held)
     }
-    atlasCache = { ...atlasCache, repo: state.repoPath, live: db, liveAt: Date.now() }
+    atlasCache = { ...atlasCache, project: activeProjectId, live: db, liveAt: Date.now() }
     aiStats.seedBestDiv(db.functions) // ground-truth near-miss baseline for the improvement gate
     return db
   } catch (e) {
@@ -1502,13 +1627,13 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
  *  past the TTL), kick a background refresh and tell the renderer to reload once it lands; offline
  *  the overlay is simply a no-op and local data shows as-is. */
 function overlayLiveDone(db: AtlasDb | null): AtlasDb | null {
-  const liveAge = atlasCache.repo === state.repoPath && atlasCache.liveAt ? Date.now() - atlasCache.liveAt : Infinity
+  const liveAge = atlasCache.project === activeProjectId && atlasCache.liveAt ? Date.now() - atlasCache.liveAt : Infinity
   if (liveAge > LIVE_TTL_MS && (state.descriptor?.data?.committedDbUrl || state.descriptor?.data?.claimsApi)) {
     void loadLiveDb(false)
       .then(() => mainWindow?.webContents.send('atlas:refreshed'))
       .catch(() => {})
   }
-  const live = atlasCache.repo === state.repoPath ? atlasCache.live : undefined
+  const live = atlasCache.project === activeProjectId ? atlasCache.live : undefined
   if (!db || !live) return db
   const byName = new Map(live.functions.map((f) => [f.name, f]))
   let changed = false
@@ -1807,6 +1932,21 @@ function setRepo(path: string | null): RepoState {
     state.descriptorPath = null
     state.validationErrors = []
   }
+  // Which project this folder IS. `repo:pick` accepts any directory, so a folder dialog can walk
+  // us to a different project without going through the switcher; when it does, swap the scoped
+  // agent state too, or that project's matches would be tallied under the previous one.
+  const projectId = path ? identifyProject(path, state.descriptor) : activeProjectId
+  if (projectId && projectId !== activeProjectId) {
+    snapshotActiveProject()
+    loadProjectScoped(projectId)
+  }
+  if (projectId) {
+    const slot = (persistedProjects[projectId] ??= {})
+    slot.path = path
+    slot.custom = projectId.startsWith('local:')
+    const title = state.descriptor?.project?.title
+    if (title) slot.title = title
+  }
   // Default: every tool in the new descriptor is enabled (exposed to the AI).
   state.enabledToolIds = state.descriptor ? state.descriptor.tools.map((t) => t.id) : []
   // Seed Ghidra toggle from the repo's matchConventions when opening a repo (near-miss stays as user left it).
@@ -1819,7 +1959,7 @@ function setRepo(path: string | null): RepoState {
   state.reviews = []
   state.baseBranch = null
   enrichedRows.clear() // preserved coddog context belongs to the old repo
-  atlasCache = { repo: state.repoPath }
+  atlasCache = { project: activeProjectId }
   // Auto-push session state is repo-relative: a 20s timer pending across a repo switch would fire
   // runAutoPush against the NEW repoPath using files claimed in the OLD repo (a same-named
   // src/<func>.c in both repos could ship into the wrong repo's PR under an old claim).
@@ -1905,12 +2045,12 @@ ipcMain.handle('repo:preflight', async () => {
 
 ipcMain.handle('atlas:load', () => {
   if (!state.descriptor || !state.repoPath) return null
-  if (atlasCache.repo === state.repoPath && atlasCache.local !== undefined) {
+  if (atlasCache.project === activeProjectId && atlasCache.local !== undefined) {
     maybeRegenChaosDb(state.repoPath) // fire-and-forget: refresh in the background if the file is stale
     return overlayLiveDone(atlasCache.local)
   }
   const db = readAtlas(state.repoPath, state.descriptor)
-  atlasCache = { ...atlasCache, repo: state.repoPath, local: db }
+  atlasCache = { ...atlasCache, project: activeProjectId, local: db }
   maybeRegenChaosDb(state.repoPath)
   return overlayLiveDone(db)
 })
@@ -1999,13 +2139,13 @@ ipcMain.handle('github:signin', async () => {
 
 ipcMain.handle('atlas:current', () => {
   // Whatever's already loaded (live preferred), else local - never fetches. For popouts.
-  if (atlasCache.repo === state.repoPath) {
+  if (atlasCache.project === activeProjectId) {
     if (atlasCache.live) return atlasCache.live
     if (atlasCache.local) return overlayLiveDone(atlasCache.local)
   }
   if (!state.descriptor || !state.repoPath) return null
   const db = readAtlas(state.repoPath, state.descriptor)
-  atlasCache = { ...atlasCache, repo: state.repoPath, local: db }
+  atlasCache = { ...atlasCache, project: activeProjectId, local: db }
   return overlayLiveDone(db)
 })
 
@@ -2058,7 +2198,7 @@ ipcMain.handle('atlas:source', (_e, req: { id: string; srcPath?: string }): Atla
     }
   }
   try {
-    const db = atlasCache.repo === repo ? atlasCache.live ?? atlasCache.local : null
+    const db = atlasCache.project === activeProjectId ? atlasCache.live ?? atlasCache.local : null
     const row = db?.functions.find((f) => f.id === req.id) as unknown as Record<string, unknown> | undefined
     const disasm = row && typeof row.disasm === 'string' ? row.disasm : null
     if (disasm) {
@@ -2134,7 +2274,7 @@ async function regenAtlasDb(source: 'user' | 'ai'): Promise<AtlasDb | null> {
     extraEnv: secretsEnv()
   })
   const db = readAtlas(state.repoPath, state.descriptor)
-  atlasCache = { ...atlasCache, repo: state.repoPath, local: db }
+  atlasCache = { ...atlasCache, project: activeProjectId, local: db }
   if (db) aiStats.seedBestDiv(db.functions) // keep the near-miss gate's baseline current after a land
   return db
 }
@@ -3518,7 +3658,7 @@ ipcMain.handle('repo:pull', async (): Promise<{ ok: boolean; err?: string; behin
     mainWindow?.webContents.send('repo:pullProgress', { label, pct })
   )
   if (res.ok) {
-    atlasCache = { repo: null }
+    atlasCache = { project: null }
     reloadDescriptor('manual')
   }
   const ab = res.ok ? await aheadBehind(repo, db) : null
@@ -3570,7 +3710,7 @@ ipcMain.handle('repo:sync', async (): Promise<{ ok: boolean; branch?: string; he
   }
   const r = await syncToOrigin(repo, (label, pct) => mainWindow?.webContents.send('repo:syncProgress', { label, pct }))
   if (r.ok) {
-    atlasCache = { repo: null }
+    atlasCache = { project: null }
     reloadDescriptor('manual')
     scheduleAtlasRegen()
     pushState()
@@ -3789,35 +3929,8 @@ ipcMain.handle('bug:submit', async (_e, payload: { description: string; screensh
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null) // no native File/Edit/View menu - we use our own chrome
-  const saved = loadSettings()
-  // migrate legacy single-role (string) entries to the multi-role (string[]) format, AND map the
-  // old 7-role names onto the pruned 4-role set so a stored assignment never points at a dead role.
-  const ROLE_MIGRATE: Record<string, string> = {
-    'Main matcher': 'Drafter',
-    'Explorer': 'Drafter',
-    'Long sweep': 'Hard matcher',
-    'Draft checker': 'Refiner',
-    'Finisher': 'Random',
-    'Verifier': '' // dropped - no equivalent, so it clears
-  }
-  agentRoles = Object.fromEntries(
-    Object.entries(saved.agentRoles ?? {}).map(([k, v]) => [
-      k,
-      [
-        ...new Set(
-          (Array.isArray(v) ? v : [v])
-            .map((r) => (r in ROLE_MIGRATE ? ROLE_MIGRATE[r] : r))
-            .filter((r) => r && r !== 'Unassigned')
-        )
-      ]
-    ])
-  )
-  agentEfforts = { ...(saved.agentEfforts ?? {}) }
-  agentAttempts = { ...(saved.agentAttempts ?? {}) }
-  for (const n of saved.agentLoop ?? []) agentLoop.add(n) // restored so startup can resume them
-  aiStats.hydrate(saved.agentStats)
-  aiStats.hydrateBestDiv(saved.agentBestDiv)
-  aiStats.remapKeys(normalizeName) // fold old per-model/per-session stat keys into one family box
+  const saved = migrateSettings(loadSettings())
+  persistedProjects = saved.projects ?? {}
   state.reportsEnabled = saved.reportsEnabled ?? false
   state.tourSeen = saved.tourSeen ?? false
   state.updateNoteSeen = saved.updateNoteSeen ?? ''
@@ -3846,7 +3959,12 @@ app.whenReady().then(() => {
   setReportsEnabled(state.reportsEnabled)
   ensureTips()
   ensureTour()
-  if (saved.lastRepo && looksLikeRepo(saved.lastRepo)) setRepo(saved.lastRepo)
+  // Roles/efforts/loop/stats are per project, so hydrate the active project's slot BEFORE opening
+  // its repo - setRepo's saveSettings would otherwise snapshot empty maps over the stored ones.
+  const bootProject = saved.activeProject ?? PROJECTS[0].id
+  loadProjectScoped(bootProject)
+  const bootPath = persistedProjects[bootProject]?.path
+  if (bootPath && looksLikeRepo(bootPath)) setRepo(bootPath)
   // The MCP server was on when the app last closed (including an update's restart) - bring it
   // back up so connected agents' endpoint comes back without the human re-clicking Start.
   if (saved.mcpRunning && state.descriptor && state.validationErrors.length === 0) {

@@ -292,6 +292,19 @@ class AiStatsStore {
     this.onChange?.()
   }
 
+  /** Point the store at another project's tallies. Unlike clearAll this also drops `current`:
+   *  a task in flight belongs to the batch of the project it was pulled from, so leaving it
+   *  would render the old project's function name on an agent box under the new one. */
+  swapTo(stats?: Record<string, Persisted>, bestDiv?: Record<string, number>): void {
+    this.store.clear()
+    this.session.clear()
+    this.bestDiv.clear()
+    this.current.clear()
+    this.hydrate(stats)
+    this.hydrateBestDiv(bestDiv)
+    this.onChange?.()
+  }
+
   /** Seed per-function best-divergence from ground truth (the chaos-db/atlas near-miss data), so the
    *  near-miss gate respects divergences reached before this console ever observed them - e.g. a
    *  function already sitting at div 3 in the pool. Only LOWERS a known best, never raises it, so a
