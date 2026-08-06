@@ -102,18 +102,19 @@ export function secretsEnv(): Record<string, string> {
   return out
 }
 
-/** The subset of the vault a repo's tools may see: exactly the keys its descriptor declares in
- *  runtime.envKeys.
+/** The vault, minus the named keys.
  *
- *  The vault is shared across projects but a key is not. CLAIMS_API_KEY writes to one project's
- *  coordination board; handing it to a different project's tools means that project's address
- *  ranges get announced on somebody else's claims, which is state we can't take back. A tool
- *  that isn't declared a key should behave as if the key doesn't exist, because for that project
- *  it doesn't. Passing no list yields nothing, so a repo with no envKeys gets no secrets. */
-export function secretsEnvFor(allowed?: string[] | null): Record<string, string> {
-  if (!allowed?.length) return {}
+ *  The vault is global on purpose: an API key is the USER's, not a project's. The same
+ *  Anthropic or DeepSeek key drives an agent on whatever decomp is open, and a contributor
+ *  who adds it once expects it to work everywhere - a project's runtime.envKeys says what it
+ *  NEEDS, not what it is permitted to see.
+ *
+ *  The exception is a key that authenticates to a service scoped to one project. CLAIMS_API_KEY
+ *  writes to a particular coordination board; giving it to a different decomp's tools means that
+ *  decomp's address ranges get announced on somebody else's claims, which is state we cannot take
+ *  back. Those are withheld by the caller, which knows which services this project actually has. */
+export function secretsEnvExcept(withheld: readonly string[] = []): Record<string, string> {
   const all = secretsEnv()
-  const out: Record<string, string> = {}
-  for (const name of allowed) if (name in all) out[name] = all[name]
-  return out
+  for (const name of withheld) delete all[name]
+  return all
 }

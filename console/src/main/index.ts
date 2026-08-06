@@ -25,7 +25,7 @@ import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
 import { fetchCosmetics, fetchCounts, fetchProgress, fetchAtlas, connectAtlasLive, bustCosmeticsCache, type Cosmetics, type Counts, type LiveProgress } from './cosmetics'
 import { startDeviceFlow, pollForToken } from './githubAuth'
-import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv, secretsEnvFor } from './secrets'
+import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv, secretsEnvExcept } from './secrets'
 import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
 import * as nearMissWatch from './nearMissWatch'
 import { record as report, setReportsEnabled, reportsDir } from './reports'
@@ -1337,10 +1337,18 @@ function currentRuntime(): TangosRuntime {
   return state.descriptor?.runtime ?? { cwd: '.', python: 'python', shell: false }
 }
 
-/** The vault keys the ACTIVE project's tools are allowed to see. Everything a child process gets
- *  goes through here, so a key belonging to one decomp never reaches another one's tools. */
+// Keys that authenticate to a service belonging to ONE project rather than to the user. These are
+// the only ones the vault doesn't share freely; everything else (model API keys, the GitHub token)
+// is the user's own and works on whatever decomp is open.
+const PROJECT_SCOPED_KEYS = ['CLAIMS_API_KEY'] as const
+
+/** What the ACTIVE project's tools may see. The vault is global by design - a contributor adds an
+ *  API key once and expects it on every project - so this is everything MINUS any project-scoped
+ *  key this project has no service for. sm64ds declares a claims API, so its runs get the claims
+ *  key; a decomp with no claims board never sees it and so cannot post to somebody else's. */
 function projectEnv(): Record<string, string> {
-  return secretsEnvFor(state.descriptor?.runtime?.envKeys)
+  const withheld = state.descriptor?.data?.claimsApi ? [] : PROJECT_SCOPED_KEYS
+  return secretsEnvExcept(withheld)
 }
 
 // ---- Console roles -----------------------------------------------------------------------------
