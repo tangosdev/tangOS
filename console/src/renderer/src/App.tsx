@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Settings2, FolderOpen, RefreshCw, MessageCircle, Bug, KeyRound } from 'lucide-react'
 import type {
   RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchItem, Review, AiAgent, BackgroundPrefs,
-  MatchingPrefs
+  MatchingPrefs, ProjectSummary
 } from '../../shared/types'
 import RepoPicker from './components/RepoPicker'
+import ProjectMenu from './components/ProjectMenu'
+import CloneGate from './components/CloneGate'
+import { useDismiss } from './useDismiss'
 import DescriptorGate from './components/DescriptorGate'
 import Encyclopedia from './components/Encyclopedia'
 import McpBubble from './components/McpBubble'
@@ -77,9 +80,13 @@ export default function App(): JSX.Element {
     allowNearMiss: true,
     allowGhidra: false
   })
-  const popRef = useRef<HTMLDivElement>(null)
-  const settingsRef = useRef<HTMLDivElement>(null)
-  const vaultRef = useRef<HTMLDivElement>(null)
+  const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [switchingProject, setSwitchingProject] = useState(false)
+  const [capabilities, setCapabilities] = useState<Record<string, boolean>>({})
+  const [splashKey, setSplashKey] = useState(0)
+  const popRef = useDismiss<HTMLDivElement>(mcpOpen, () => setMcpOpen(false))
+  const settingsRef = useDismiss<HTMLDivElement>(settingsOpen, () => setSettingsOpen(false))
+  const vaultRef = useDismiss<HTMLDivElement>(vaultOpen, () => setVaultOpen(false))
 
   useEffect(() => {
     const unsubReload = window.tangos.onDescriptorReloaded((info) => {
@@ -120,6 +127,9 @@ export default function App(): JSX.Element {
       setAutoLand(st.autoLand)
       setAutoPush(st.autoPush)
       setLooping(st.looping)
+      setProjects(st.projects ?? [])
+      setCapabilities(st.capabilities ?? {})
+      setSwitchingProject(!!st.switchingProject)
       setTourSeen(st.tourSeen)
       setUpdateNoteSeen(st.updateNoteSeen)
     })
@@ -140,6 +150,9 @@ export default function App(): JSX.Element {
       setAutoLand(s.autoLand)
       setAutoPush(s.autoPush)
       setLooping(s.looping)
+      setProjects(s.projects ?? [])
+      setCapabilities(s.capabilities ?? {})
+      setSwitchingProject(!!s.switchingProject)
       setTourSeen(s.tourSeen)
       setUpdateNoteSeen(s.updateNoteSeen)
       setRuns((await window.tangos.activitySnapshot()).slice(-MAX_RUNS))
@@ -170,54 +183,6 @@ export default function App(): JSX.Element {
   async function updateMatchingPrefs(p: Partial<MatchingPrefs>): Promise<void> {
     setMatchingPrefs(await window.tangos.matchingPrefsSet(p))
   }
-
-  useEffect(() => {
-    if (!mcpOpen) return
-    function onDown(e: MouseEvent): void {
-      if (popRef.current && !popRef.current.contains(e.target as Node)) setMcpOpen(false)
-    }
-    function onKey(e: KeyboardEvent): void {
-      if (e.key === 'Escape') setMcpOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [mcpOpen])
-
-  useEffect(() => {
-    if (!settingsOpen) return
-    function onDown(e: MouseEvent): void {
-      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) setSettingsOpen(false)
-    }
-    function onKey(e: KeyboardEvent): void {
-      if (e.key === 'Escape') setSettingsOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [settingsOpen])
-
-  useEffect(() => {
-    if (!vaultOpen) return
-    function onDown(e: MouseEvent): void {
-      if (vaultRef.current && !vaultRef.current.contains(e.target as Node)) setVaultOpen(false)
-    }
-    function onKey(e: KeyboardEvent): void {
-      if (e.key === 'Escape') setVaultOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [vaultOpen])
 
   function applyActivity(ev: ActivityEvent): void {
     setRuns((prev) => {
@@ -251,13 +216,58 @@ export default function App(): JSX.Element {
     setEnabledIds(ids)
     await window.tangos.setEnabledTools(ids)
   }
+  // App-level state a component key can't reach, cleared when the project changes.
+  //
+  // `cart` is the one that matters: its entries are function refs from the OLD project, and
+  // assignCart would post them as a batch here, sending an agent after addresses that don't exist
+  // in this ROM. The rest is staleness - the run feed, an open AI overlay, popovers describing a
+  // project that is no longer open.
+  useEffect(() => {
+    setCart([])
+    setDetailName(null)
+    setMcpOpen(false)
+    setSettingsOpen(false)
+    setVaultOpen(false)
+    setEncyOpen(false)
+    void window.tangos.activitySnapshot().then((r) => setRuns(r.slice(-MAX_RUNS)))
+  }, [repo?.projectId])
+
+  /** Raise the splash. Bumping the key REMOUNTS it, which is what actually replays the animation:
+   *  splashSeq only runs on mount, and Splash's pose is a mount-time useMemo. Without this, a
+   *  splash raised while one is already showing would sit there frozen and invisible over the
+   *  whole window (position: fixed, z-index 200) swallowing every click. */
+  function raiseSplash(label: string): void {
+    setSplashKey((k) => k + 1)
+    setSplash(label)
+  }
   function switchApp(target: AppView): void {
     if (target === view) return
-    setSplash(APP_LABEL[target])
+    raiseSplash(APP_LABEL[target])
     // Swap the view only once the splash has fully faded in to cover the screen
     // (splashSeq is opaque from ~350ms), so the destination never flashes underneath.
     window.setTimeout(() => setView(target), 450)
     window.setTimeout(() => setSplash(null), 1750)
+  }
+  /** Switch the whole console to another decomp. Same whoosh as an app switch, and the view is
+   *  deliberately kept - switching project while sitting in the Viewer is the point of having
+   *  this in the titlebar. */
+  async function pickProject(id: string): Promise<void> {
+    if (switchingProject) return
+    const target = projects.find((p) => p.id === id)
+    setSwitchingProject(true)
+    raiseSplash(target?.title ?? 'Loading project')
+    try {
+      // Swap under the opaque part of the splash, as switchApp does.
+      await new Promise((r) => window.setTimeout(r, 450))
+      setRepo(await window.tangos.switchProject(id))
+    } catch (e) {
+      setSplash(null)
+      setReloadNote(String((e as Error).message ?? e))
+      return
+    } finally {
+      setSwitchingProject(false)
+    }
+    window.setTimeout(() => setSplash(null), 1300) // 450 + 1300 = the splash's own 1750ms
   }
   async function changeRepo(): Promise<void> {
     const r = await window.tangos.pickRepo()
@@ -299,7 +309,13 @@ export default function App(): JSX.Element {
   }
 
   const descriptorOk = !!repo?.descriptor && (repo?.validationErrors?.length ?? 0) === 0
+  // Two different questions. showControls: is there a checkout to run tools in? projectReady: do we
+  // know enough to show the project at all - true for a project browsed remotely, where the Viewer
+  // works off the published atlas but nothing is runnable.
   const showControls = !!repo?.path && descriptorOk
+  const viewerOnly = repo?.mode === 'remote'
+  const projectReady = !!repo?.projectId && descriptorOk
+  const activeProject = projects.find((p) => p.active) ?? null
   const detailAgent = detailName ? agents.find((a) => a.name === detailName) ?? null : null
 
   const mcpPill = (
@@ -323,6 +339,7 @@ export default function App(): JSX.Element {
         runs={runs}
         batches={batches}
         looping={looping}
+        capabilities={capabilities}
         cartCount={cart.length}
         onAssignCart={assignCart}
         onClearCart={() => setCart([])}
@@ -350,18 +367,36 @@ export default function App(): JSX.Element {
   // cart actually changes - not on every activity/state re-render that keeps the atlas mounted.
   const draftRefs = useMemo(() => new Set(cart.map((i) => i.ref)), [cart])
 
+  // Keyed by project so both halves REMOUNT on a switch. AtlasView holds ~20 pieces of state and
+  // loads its db, cosmetics, stars and counts from mount-only effects; Controller keeps per-agent
+  // busy/size state and the scheduler's output tail. Without the key, switching while sitting in
+  // the Viewer leaves the previous decomp's atlas on screen under the new project's name.
   let body: JSX.Element
-  if (!repo?.path) body = <div className="center-stage"><RepoPicker onChanged={setRepo} /></div>
-  else if (!repo.hasDescriptor || !descriptorOk) body = <div className="center-stage"><DescriptorGate repo={repo} onChanged={setRepo} /></div>
-  else body = view === 'atlas'
-    ? <AtlasView
+  if (!repo?.path && !repo?.projectId) {
+    body = <div className="center-stage"><RepoPicker onChanged={setRepo} /></div>
+  } else if (!viewerOnly && (!repo?.hasDescriptor || !descriptorOk)) {
+    // A checkout whose own tangos.json is missing or broken - offer to write one.
+    body = <div className="center-stage"><DescriptorGate repo={repo!} onChanged={setRepo} /></div>
+  } else if (view === 'atlas' && descriptorOk) {
+    body = (
+      <AtlasView
+        key={repo!.projectId ?? repo!.path}
         onAdd={addToCart}
         onRemove={removeFromCart}
         onReplace={replaceCart}
         draftRefs={draftRefs}
         liveEnabled={!!repo?.descriptor?.data?.committedDbUrl}
+        localAvailable={!!repo?.path}
       />
-    : consoleBody
+    )
+  } else if (showControls) {
+    body = <Fragment key={repo!.projectId ?? repo!.path}>{consoleBody}</Fragment>
+  } else {
+    // No checkout here. Also where a remote descriptor that failed to fetch or didn't validate
+    // ends up: CloneGate at least names the project and offers to get it, where the bare repo
+    // picker would just say "point it at a decomp repo" with no hint why.
+    body = <CloneGate project={activeProject} onChanged={setRepo} onOpenViewer={() => switchApp('atlas')} />
+  }
 
   return (
     <div className="app">
@@ -370,10 +405,13 @@ export default function App(): JSX.Element {
         <div className="tb-left">
           <div className="brand">
             <span>tang<span className="os">OS</span></span>
-            {!showControls && <span className="sub">Chaos Controller</span>}
+            {!showControls && !repo?.projectId && <span className="sub">Chaos Controller</span>}
           </div>
+          {!!repo?.projectId && (
+            <ProjectMenu projects={projects} busy={switchingProject} onPick={pickProject} />
+          )}
         </div>
-        <div className="tb-center">{showControls && <AppSwitcher view={view} onSwitch={switchApp} />}</div>
+        <div className="tb-center">{projectReady && <AppSwitcher view={view} onSwitch={switchApp} />}</div>
         <div className="tb-right">
           {repo?.path && !showControls && (
             <button className="repo-chip" title={repo.path} onClick={changeRepo}>
@@ -381,12 +419,12 @@ export default function App(): JSX.Element {
               <span className="path">{repo.path}</span>
             </button>
           )}
-          {showControls && (
+          {projectReady && (
             <button className="tb-btn icononly" onClick={() => setBugOpen(true)} title="Report a bug">
               <Bug size={15} />
             </button>
           )}
-          {showControls && repo?.descriptor?.project?.discord && (
+          {projectReady && repo?.descriptor?.project?.discord && (
             <button
               className="tb-btn icononly discord"
               onClick={() => window.tangos.openExternal(repo.descriptor!.project.discord!)}
@@ -490,7 +528,7 @@ export default function App(): JSX.Element {
           onClose={() => setEncyOpen(false)}
         />
       )}
-      {splash && <Splash label={splash} palette={paletteForTheme(theme)} />}
+      {splash && <Splash key={splashKey} label={splash} palette={paletteForTheme(theme)} />}
       {bugOpen && <BugReport repoName={repo?.descriptor?.project?.title} onClose={() => setBugOpen(false)} />}
       {reloadNote && <div className="reload-toast aero-glass">{reloadNote}</div>}
       {version && <div className="app-version" title="Running version">v{version}</div>}

@@ -85,7 +85,9 @@ export function deleteSecret(name: string): void {
   }
 }
 
-/** Decrypt every stored key into a name->value map for injection into a tool's env. */
+/** Decrypt every stored key into a name->value map. The vault is global (one keychain per
+ *  machine), so this is every key the user has ever added, for any project. Prefer
+ *  secretsEnvFor when handing values to a repo's tools. */
 export function secretsEnv(): Record<string, string> {
   if (!encryptionAvailable()) return {}
   const s = load()
@@ -98,4 +100,21 @@ export function secretsEnv(): Record<string, string> {
     }
   }
   return out
+}
+
+/** The vault, minus the named keys.
+ *
+ *  The vault is global on purpose: an API key is the USER's, not a project's. The same
+ *  Anthropic or DeepSeek key drives an agent on whatever decomp is open, and a contributor
+ *  who adds it once expects it to work everywhere - a project's runtime.envKeys says what it
+ *  NEEDS, not what it is permitted to see.
+ *
+ *  The exception is a key that authenticates to a service scoped to one project. CLAIMS_API_KEY
+ *  writes to a particular coordination board; giving it to a different decomp's tools means that
+ *  decomp's address ranges get announced on somebody else's claims, which is state we cannot take
+ *  back. Those are withheld by the caller, which knows which services this project actually has. */
+export function secretsEnvExcept(withheld: readonly string[] = []): Record<string, string> {
+  const all = secretsEnv()
+  for (const name of withheld) delete all[name]
+  return all
 }

@@ -6,6 +6,17 @@ export const DESCRIPTOR_FILENAME = 'tangos.json'
 
 const ARG_TYPES = new Set(['string', 'integer', 'number', 'boolean', 'enum'])
 const ID_RE = /^[a-z0-9_]+$/
+// The jobs Console can hand to a repo's own tools; see TangosConsoleRoles.
+const CONSOLE_ROLES = new Set([
+  'scheduler',
+  'refineScheduler',
+  'randomScheduler',
+  'enrich',
+  'driver',
+  'land',
+  'logAttempt',
+  'verify'
+])
 
 export function descriptorPathFor(repoPath: string): string {
   return join(repoPath, DESCRIPTOR_FILENAME)
@@ -69,6 +80,25 @@ export function validateDescriptor(desc: unknown): string[] {
           if (typeof a.type !== 'string' || !ARG_TYPES.has(a.type)) {
             errs.push(`tool ${id}: arg ${String(a.name)} has invalid type ${String(a.type)}`)
           }
+        }
+      }
+    }
+  }
+
+  // The console block maps Console's jobs onto this repo's tools. A typo here is silent otherwise:
+  // the role just resolves to nothing and the feature quietly disappears, which reads as "the app
+  // is broken" rather than "that id doesn't exist".
+  if (d.console !== undefined) {
+    if (typeof d.console !== 'object' || d.console === null || Array.isArray(d.console)) {
+      errs.push('console must be an object')
+    } else {
+      for (const [role, toolId] of Object.entries(d.console as Record<string, unknown>)) {
+        if (!CONSOLE_ROLES.has(role)) {
+          errs.push(`console: unknown role "${role}"`)
+        } else if (typeof toolId !== 'string' || !toolId) {
+          errs.push(`console.${role}: must be a tool id`)
+        } else if (!ids.has(toolId)) {
+          errs.push(`console.${role}: no tool with id "${toolId}"`)
         }
       }
     }

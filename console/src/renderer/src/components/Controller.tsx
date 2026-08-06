@@ -70,6 +70,7 @@ export default function Controller({
   batches,
   looping,
   cartCount,
+  capabilities,
   onAssignCart,
   onClearCart,
   onOpenViewer,
@@ -87,6 +88,8 @@ export default function Controller({
   batches: Batch[]
   looping: string[]
   cartCount: number
+  /** Which Console jobs this project's tools can actually do (see descriptor.console). */
+  capabilities: Record<string, boolean>
   onAssignCart: (agent: string) => void
   onClearCart: () => void
   onOpenViewer: () => void
@@ -477,12 +480,14 @@ export default function Controller({
                         </button>
                         <button
                           className="mini-btn"
-                          disabled={generating}
+                          disabled={generating || !capabilities.schedule}
                           onClick={() => assign(a.name, a.roles[0])}
                           title={
-                            loopSel
-                              ? 'Start matching: this AI keeps pulling role-fit batches and working them until stopped'
-                              : 'Generate a role-fit batch of this size and add it to the queue - press again to line up more'
+                            !capabilities.schedule
+                              ? "This project has no worklist scheduler yet, so there's nothing to build a batch from. Declare one in tangos.json under console.scheduler."
+                              : loopSel
+                                ? 'Start matching: this AI keeps pulling role-fit batches and working them until stopped'
+                                : 'Generate a role-fit batch of this size and add it to the queue - press again to line up more'
                           }
                         >
                           <Sparkles size={12} />{' '}
@@ -510,14 +515,16 @@ export default function Controller({
                         <div className="aib-drive-row">
                           <button
                             className="mini-btn go"
-                            disabled={!canDrive}
+                            disabled={!canDrive || !capabilities.drive}
                             onClick={() => drive(a.name)}
                             title={
-                              canDrive
-                                ? `Work through the queue (${queueRemaining} function${queueRemaining === 1 ? '' : 's'}) via this AI's API key`
-                                : queueRemaining > 0
-                                  ? 'Busy - finish the current action first, then this works through the queue'
-                                  : 'Add functions to the queue first, then this drives through them via the API key'
+                              !capabilities.drive
+                                ? "This project has no API driver, so there's nothing to work the queue with. Connect an agent over MCP instead, or declare a driver in tangos.json under console.driver."
+                                : canDrive
+                                  ? `Work through the queue (${queueRemaining} function${queueRemaining === 1 ? '' : 's'}) via this AI's API key`
+                                  : queueRemaining > 0
+                                    ? 'Busy - finish the current action first, then this works through the queue'
+                                    : 'Add functions to the queue first, then this drives through them via the API key'
                             }
                           >
                             <Play size={12} /> Drive queue ({queueRemaining})

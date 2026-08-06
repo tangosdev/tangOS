@@ -2,7 +2,7 @@
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
   Batch, BatchDraft, BatchItem, AtlasDb, AtlasSource, Review, GithubCredits, ConnectedClient, SecretsInfo,
-  AiAgent, RepoUpdateStatus, SyncPreview, AppUpdateInfo, ViewerPrefs, BackgroundPrefs
+  AiAgent, RepoUpdateStatus, SyncPreview, AppUpdateInfo, ViewerPrefs, BackgroundPrefs, ProjectSummary
 } from '../../shared/types'
 
 type FullState = {
@@ -24,6 +24,10 @@ type FullState = {
   autoLand: boolean
   autoPush: { enabled: boolean; on: boolean; state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'; message?: string; prUrl?: string; at?: number }
   looping: string[]
+  projects: ProjectSummary[]
+  switchingProject: boolean
+  /** Which Console features this project can offer, by console-role coverage. */
+  capabilities: Record<string, boolean>
 }
 
 interface RegisterOutcome {
@@ -77,6 +81,8 @@ export interface TangosApi {
   onGithubSignedin(cb: (r: { ok: boolean; error?: string }) => void): () => void
   pickRepo(): Promise<RepoState>
   setRepo(path: string): Promise<RepoState>
+  listProjects(): Promise<ProjectSummary[]>
+  switchProject(id: string): Promise<RepoState>
   generatePreview(path?: string): Promise<GenerateReport>
   writeDescriptor(descriptor: TangosDescriptor): Promise<RepoState>
   reloadDescriptor(): Promise<RepoState>

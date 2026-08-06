@@ -13,10 +13,11 @@ import {
   attemptTreeEnabled,
   conventionsOf
 } from './matchConventions'
-import { loadDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
+import { loadDescriptor, validateDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
+import { PROJECTS, projectBySlug, projectById, slugOf, customIdFor, descriptorUrlFor, type ProjectEntry } from '../shared/projects'
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
 import { registerAll, cliCommand } from './connect'
-import { runTool } from './runTool'
+import { runTool, renderArgv } from './runTool'
 import { preflight } from './preflight'
 import { readAtlas } from './atlas'
 import { deriveClaimsUrl, fetchHeldClaims, overlayClaims } from './claims'
@@ -24,7 +25,7 @@ import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
 import { fetchCosmetics, fetchCounts, fetchProgress, fetchAtlas, connectAtlasLive, bustCosmeticsCache, type Cosmetics, type Counts, type LiveProgress } from './cosmetics'
 import { startDeviceFlow, pollForToken } from './githubAuth'
-import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
+import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv, secretsEnvExcept } from './secrets'
 import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
 import { classifySource } from './asmPolicy'
 import * as nearMissWatch from './nearMissWatch'
@@ -48,7 +49,7 @@ import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
   Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
-  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs
+  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs, ProjectSummary, TangosConsoleRoles
 } from '../shared/types'
 
 const DEFAULT_PORT = 4808
@@ -99,6 +100,18 @@ const agentLoop = new Set<string>()
 // Kill switches for in-flight API drivers, keyed by agent name, so the red Stop button can
 // end a drive early. Whatever the driver already landed is kept (matches are recorded live).
 const driveKills = new Map<string, () => void>()
+
+// Bumped every time the active project changes. Long operations capture it before their first
+// await and compare after, so anything that outlives the switch becomes a no-op instead of
+// finishing against the wrong repo.
+//
+// This is the backstop, not the mechanism: switchProject stops what it can first, while repoPath
+// still points at the old project, so work in flight completes correctly. But some of it cannot be
+// stopped - a `crackloop land` child runs for minutes, a GitHub fetch can hang for its full
+// timeout - and for those the epoch is the difference between a stale continuation doing nothing
+// and it writing into the other decomp.
+let projectEpoch = 0
+let switchingProject = false
 
 // Full enriched worklist rows (disasm/callees/pool/...) coddog produced during genDraft, keyed by
 // function name. driveBatch writes THESE as the driver's worklist so its context tool (abrow.py)
@@ -323,7 +336,7 @@ function rejectTranscription(where: string, agent: string | undefined, func: str
  *  MCP `match` tool's target). We deliberately do NOT sweep all of `changedSrcFiles`: the working
  *  tree accumulates near-miss .c files (the refine pool) and other ambient untracked sources, and
  *  blindly grabbing them is what pushed 68 non-matching files into a "matched functions" PR. Each
- *  matched function is mapped to whichever of src/<name>.c|.cpp actually changed - nothing else. */
+ *  matched function is mapped to whichever changed src file carries its name - nothing else. */
 async function noteMatchAndPush(
   agentName: string | undefined,
   matchedFuncs: Iterable<string>
@@ -332,11 +345,14 @@ async function noteMatchAndPush(
   const slug = agentSlug(agentName)
   const mine = pendingByAgent.get(slug) ?? new Set<string>()
   try {
-    const changed = new Set(await changedSrcFiles(state.repoPath))
+    const changed = await changedSrcFiles(state.repoPath)
     for (const func of matchedFuncs) {
       if (!func) continue
-      for (const cand of [`src/${func}.c`, `src/${func}.cpp`]) {
-        if (!changed.has(cand) || baselineDirtySrc.has(cand)) continue // absent, or pre-existing dirt
+      // The file lives wherever this repo's layout puts it (sm64ds: src/<name>.c, pictochat:
+      // src/arm9/<name>.c) - match by basename anywhere under src/, not one hardcoded flat path.
+      for (const cand of changed) {
+        if (!cand.endsWith(`/${func}.c`) && !cand.endsWith(`/${func}.cpp`)) continue
+        if (baselineDirtySrc.has(cand)) continue // pre-existing dirt, not this session's match
         // TRANSCRIPTION GATE: read the bytes we are about to claim. The verify said they equal
         // the ROM - which a raw dcd dump satisfies by construction - so the source text is the
         // only place the lie shows (asmPolicy.ts). A transcription is never claimed, snapshotted,
@@ -534,6 +550,10 @@ async function runAutoPush(slug: string): Promise<void> {
     return
   }
   if (!autoPushActive() || !state.repoPath) return
+  // Pin the repo and project for the whole push. This force-pushes a branch and opens a PR; a
+  // switch mid-flight would aim both at the other decomp's origin.
+  const repo = state.repoPath
+  const e = projectEpoch
   const files = [...(pendingByAgent.get(slug) ?? [])]
   if (!files.length) return
   autoPushBusy.add(slug)
@@ -542,15 +562,15 @@ async function runAutoPush(slug: string): Promise<void> {
     pushState()
   }
   try {
-    if (!(await isGitRepo(state.repoPath))) return set({ state: 'skipped', message: 'not a git checkout - clone the repo to enable pushing' })
-    const gh = await remoteSlug(state.repoPath)
+    if (!(await isGitRepo(repo))) return set({ state: 'skipped', message: 'not a git checkout - clone the repo to enable pushing' })
+    const gh = await remoteSlug(repo)
     if (!gh) return set({ state: 'skipped', message: 'no GitHub "origin" remote to push to' })
     const token = secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN
     if (!token) return set({ state: 'skipped', message: 'no GITHUB_TOKEN - sign into GitHub in Settings' })
 
     set({ state: 'pushing', message: `${slug}: ${files.length} file(s)` })
     const branch = `tangos/${slug}-${SESSION_TAG}`
-    const base = await defaultBranch(state.repoPath)
+    const base = await defaultBranch(repo)
 
     // Gate what actually ships. (1) Fetch so origin/<base> is current - a stale base is how PRs
     // re-included files that had already landed upstream. (2) A file already identical upstream
@@ -558,18 +578,18 @@ async function runAutoPush(slug: string): Promise<void> {
     // whose bytes no longer equal its verified-time snapshot is HELD BACK (still pending) until a
     // re-verify refreshes it - refine loops rewrite candidates, and pushing the current bytes on
     // the strength of an old MATCH is how near-misses shipped in "matched" PRs.
-    await fetchBase(state.repoPath, base)
+    await fetchBase(repo, base)
     const pending = pendingByAgent.get(slug) ?? new Set<string>()
     const ship: string[] = []
     let landedUpstream = 0
     let heldStale = 0
     let rejectedTranscribed = 0
     for (const f of files) {
-      const up = await upstreamState(state.repoPath, base, f)
+      const up = await upstreamState(repo, base, f)
       // 'identical' = already landed upstream. 'differs' = upstream has its own version, normally
       // superseded - EXCEPT when upstream is still NONMATCHING and ours is a verified match: that's
       // a real upgrade (nonmatching -> byte-exact), so ship it instead of silently dropping the win.
-      if (up === 'identical' || (up === 'differs' && !(await upstreamIsNonmatching(state.repoPath, base, f)))) {
+      if (up === 'identical' || (up === 'differs' && !(await upstreamIsNonmatching(repo, base, f)))) {
         pending.delete(f) // landed, or superseded by a real upstream match - not ours to PR
         verifiedContent.delete(f)
         landedUpstream++
@@ -577,7 +597,7 @@ async function runAutoPush(slug: string): Promise<void> {
       }
       let current: string | null = null
       try {
-        current = readFileSync(join(state.repoPath, f), 'utf8')
+        current = readFileSync(join(repo, f), 'utf8')
       } catch {
         /* deleted since verify (e.g. a land-gate unbank) - treat as stale */
       }
@@ -626,8 +646,12 @@ async function runAutoPush(slug: string): Promise<void> {
     // candidate in the seconds between the gate check above and the push could otherwise smuggle
     // unverified bytes into a "matched" PR (the TOCTOU the snapshot gate nearly closed).
     const snapshots = new Map(ship.map((f) => [f, verifiedContent.get(f)!]).filter(([, v]) => v != null) as [string, string][])
+    // Last gate before anything leaves the machine. The gathering above spans several network
+    // round-trips; if the project changed during them, these files and this branch belong to a
+    // repo that is no longer open and the pending set that produced them has been cleared.
+    if (e !== projectEpoch) return set({ state: 'skipped', message: `${slug}: project changed, push abandoned` })
     const pushed = await pushSubsetToBranch(
-      state.repoPath,
+      repo,
       branch,
       base,
       ship,
@@ -712,7 +736,7 @@ async function runStrandedSweep(): Promise<void> {
       priorHarvestSurfaced = true
       await surfacePriorHarvests(repo)
     }
-    const dirty = (await changedSrcFiles(repo)).filter((f) => /^src\/[^/]+\.(c|cpp)$/.test(f))
+    const dirty = (await changedSrcFiles(repo)).filter((f) => /^src\/.+\.(c|cpp)$/.test(f))
     if (!dirty.length) return
     const base = await defaultBranch(repo)
     await fetchBase(repo, base)
@@ -748,7 +772,7 @@ async function runStrandedSweep(): Promise<void> {
         report('strandedSweep', { event: 'capped', checked, skipped: candidates.length - checked })
         break
       }
-      const func = f.replace(/^src\//, '').replace(/\.(c|cpp)$/, '')
+      const func = f.replace(/^.*\//, '').replace(/\.(c|cpp)$/, '') // basename: nested layouts (src/arm9/<name>.c) name-key the same
       const m = meta.get(func)
       if (!m?.addr || !m?.size) continue
       // Skip a candidate whose bytes are unchanged since we last compiled it - re-verifying identical
@@ -778,7 +802,7 @@ async function runStrandedSweep(): Promise<void> {
         repoPath: repo,
         source: 'user',
         allowMutations: true, // match is read-only; this just skips the safe-mode wrap
-        extraEnv: secretsEnv()
+        extraEnv: projectEnv()
       })
       if (res.status === 'ok' && outputIsMatch(res.output)) verified.push(f)
     }
@@ -907,7 +931,7 @@ async function runToolSafely(
     source,
     client,
     allowMutations: state.allowMutations,
-    extraEnv: secretsEnv()
+    extraEnv: projectEnv()
   }
   const mutating = !tool.readOnly
   let res: RunResult
@@ -934,21 +958,30 @@ function runSafeMode(base: Parameters<typeof runTool>[0]): Promise<RunResult> {
 /** Mutating run under safe mode: isolate on the work branch, commit what changed, record a review. */
 async function runSafeModeInner(base: Parameters<typeof runTool>[0]): Promise<RunResult> {
   const tool = base.tool
+  // Pin the repo and the project for the whole run. A tool run takes minutes, and the project can
+  // change under it; re-reading state.repoPath after the await would isolate on one repo and then
+  // commit whatever the OTHER repo's working tree happens to be dirty with, onto its work branch,
+  // labelled with this tool's id, and file it as a review the operator would merge.
+  const repo = state.repoPath!
+  const e = projectEpoch
   try {
-    const { base: from } = await ensureWorkBranch(state.repoPath!)
+    const { base: from } = await ensureWorkBranch(repo)
     if (from !== WORK_BRANCH) state.baseBranch = from
   } catch {
     return runTool(base) // couldn't isolate (e.g. dirty conflict) -> run normally
   }
-  const before = await statusMap(state.repoPath!)
+  const before = await statusMap(repo)
   const res = await runTool(base)
-  const after = await statusMap(state.repoPath!)
+  const after = await statusMap(repo)
   const changed = changedSince(before, after)
   if (changed.length) {
     try {
       const files = []
-      for (const f of changed) files.push({ path: f.path, status: f.status, diff: await diffForFile(state.repoPath!, f) })
-      await commitFiles(state.repoPath!, changed, `tangos: ${tool.id}`)
+      for (const f of changed) files.push({ path: f.path, status: f.status, diff: await diffForFile(repo, f) })
+      await commitFiles(repo, changed, `tangos: ${tool.id}`)
+      // The commit belongs to the old repo and is recorded against it, but the review list is the
+      // CURRENT project's. Switching mid-run means this review has no home in the UI.
+      if (e !== projectEpoch) return res
       state.reviews.push({
         id: randomUUID(),
         toolId: tool.id,
@@ -1089,7 +1122,7 @@ function logAttemptFromRun(
     repoPath: repo,
     source: 'user',
     allowMutations: true,
-    extraEnv: secretsEnv()
+    extraEnv: projectEnv()
   }).catch(() => {
     /* best-effort */
   })
@@ -1368,7 +1401,79 @@ function currentRuntime(): TangosRuntime {
   return state.descriptor?.runtime ?? { cwd: '.', python: 'python', shell: false }
 }
 
-// Remember the last-opened repo + each agent's assigned role + reasoning effort across sessions.
+// Keys that authenticate to a service belonging to ONE project rather than to the user. These are
+// the only ones the vault doesn't share freely; everything else (model API keys, the GitHub token)
+// is the user's own and works on whatever decomp is open.
+const PROJECT_SCOPED_KEYS = ['CLAIMS_API_KEY'] as const
+
+/** What the ACTIVE project's tools may see. The vault is global by design - a contributor adds an
+ *  API key once and expects it on every project - so this is everything MINUS any project-scoped
+ *  key this project has no service for. sm64ds declares a claims API, so its runs get the claims
+ *  key; a decomp with no claims board never sees it and so cannot post to somebody else's. */
+function projectEnv(): Record<string, string> {
+  const withheld = state.descriptor?.data?.claimsApi ? [] : PROJECT_SCOPED_KEYS
+  return secretsEnvExcept(withheld)
+}
+
+// ---- Console roles -----------------------------------------------------------------------------
+// The Controller needs certain jobs done - pick targets, enrich one, drive an agent over them, land
+// the result - and used to find the tools for them by assuming sm64ds's ids and file paths. A repo
+// that named its equivalents anything else got "this repo has no similarity scheduler" despite
+// shipping a complete toolchain. Roles are declared per repo in descriptor.console; these ids are
+// the fallback, so every descriptor written before that block keeps working untouched.
+const LEGACY_ROLE_IDS: Record<keyof TangosConsoleRoles, string> = {
+  scheduler: 'coddog',
+  refineScheduler: 'refine_wl',
+  randomScheduler: 'worklist',
+  enrich: 'worklist',
+  driver: 'glm_refine',
+  land: 'crackloop_land',
+  logAttempt: 'log_attempt',
+  verify: 'match'
+}
+
+/** The tool filling a role: what the repo declared, else the legacy id. */
+function roleTool(role: keyof TangosConsoleRoles): TangosTool | undefined {
+  const tools = state.descriptor?.tools
+  if (!tools?.length) return undefined
+  const declared = state.descriptor?.console?.[role]
+  if (declared) return tools.find((t) => t.id === declared)
+  return tools.find((t) => t.id === LEGACY_ROLE_IDS[role])
+}
+
+/** A scheduler can also be duck-typed: any read-only tool taking `out` and `limit` writes a
+ *  worklist whatever it is called. Kept from genDraft's original fallback chain. */
+function duckSchedulerTool(): TangosTool | undefined {
+  return state.descriptor?.tools?.find(
+    (t) => t.readOnly && t.args?.some((a) => a.name === 'out') && t.args?.some((a) => a.name === 'limit')
+  )
+}
+
+/** What Console can actually offer for this project, so the UI can say a project has no scheduler
+ *  rather than throwing that out of a button press.
+ *
+ *  drive and land also count the legacy synthesized commands: those are real capabilities on a repo
+ *  laid out like sm64ds even though nothing declares them, so reporting them missing there would be
+ *  wrong. Checking the script is actually present keeps the answer honest either way. */
+function consoleCapabilities(): Record<string, boolean> {
+  const hasScript = (rel: string): boolean => !!state.repoPath && existsSync(join(state.repoPath, rel))
+  return {
+    schedule: !!(roleTool('scheduler') ?? duckSchedulerTool()),
+    refine: !!roleTool('refineScheduler'),
+    random: !!roleTool('randomScheduler'),
+    enrich: !!roleTool('enrich'),
+    drive: !!roleTool('driver') || hasScript('tools/glm_refine.py'),
+    land: !!roleTool('land') || hasScript('tools/crackloop.py'),
+    logAttempt: !!roleTool('logAttempt'),
+    verify: !!roleTool('verify'),
+    generate: !!state.descriptor?.data?.generate
+  }
+}
+
+// Each agent's assigned role + reasoning effort, for the ACTIVE project. These stay plain
+// module-level maps so every read site (roleForName, agentsSnapshot, the driver env, the IPC
+// setters) is untouched by project scoping; snapshotActiveProject/loadProjectScoped swap what
+// they hold when the project changes.
 let agentRoles: Record<string, string[]> = {}
 let agentEfforts: Record<string, string> = {}
 // Per-agent max match attempts per function (console-driven agents; glm_refine --attempts).
@@ -1383,11 +1488,104 @@ let matchingPrefs: MatchingPrefs = { allowNearMiss: true, allowGhidra: false }
 function settingsFile(): string {
   return join(app.getPath('userData'), 'tangos-settings.json')
 }
+
+/** Everything remembered per project rather than globally. Agent tallies and role assignments
+ *  describe work done ON a project, so they follow the project rather than the app: switching to
+ *  a decomp you've never touched must show an empty roster, not another game's career numbers. */
+interface PersistedProject {
+  path?: string | null // last known local clone; re-verified on use, may go stale
+  title?: string // last seen descriptor title, so the switcher can label it while offline
+  custom?: boolean // hand-picked folder, not in the built-in registry
+  agentRoles?: Record<string, string[]>
+  agentEfforts?: Record<string, string>
+  agentAttempts?: Record<string, number>
+  agentLoop?: string[]
+  agentStats?: Record<string, { totalMatches: number; matchAttempts: number }>
+  agentBestDiv?: Record<string, number>
+  // The published tangos.json, so a project with no clone here can still be browsed (and browsed
+  // offline). Refreshed in the background; only ever used when there's no local descriptor.
+  descriptorCache?: { at: number; descriptor: TangosDescriptor }
+}
+let persistedProjects: Record<string, PersistedProject> = {}
+let activeProjectId: string | null = null
+
+/** Fold the live per-project state back into its settings slot. Called first thing in
+ *  saveSettings, so all ~6 existing save call sites persist to the right project for free. */
+function snapshotActiveProject(): void {
+  if (!activeProjectId) return
+  const slot = (persistedProjects[activeProjectId] ??= {})
+  slot.agentRoles = agentRoles
+  slot.agentEfforts = agentEfforts
+  slot.agentAttempts = agentAttempts
+  slot.agentLoop = [...agentLoop]
+  slot.agentStats = aiStats.serialize()
+  slot.agentBestDiv = aiStats.serializeBestDiv()
+  if (state.repoPath) slot.path = state.repoPath
+  const title = state.descriptor?.project?.title
+  if (title) slot.title = title
+}
+
+/** Point the live maps at another project's slot. Must run AFTER in-flight drives are killed:
+ *  it rebuilds agentLoop, and a surviving driver would keep looping against the new project. */
+function loadProjectScoped(id: string): void {
+  const slot = persistedProjects[id] ?? {}
+  agentRoles = hydrateRoles(slot.agentRoles)
+  agentEfforts = { ...(slot.agentEfforts ?? {}) }
+  agentAttempts = { ...(slot.agentAttempts ?? {}) }
+  agentLoop.clear()
+  for (const n of slot.agentLoop ?? []) agentLoop.add(n)
+  aiStats.swapTo(slot.agentStats, slot.agentBestDiv)
+  aiStats.remapKeys(normalizeName) // fold old per-model/per-session stat keys into one family box
+  activeProjectId = id
+}
+
+// Migrate legacy single-role (string) entries to the multi-role (string[]) format, AND map the
+// old 7-role names onto the pruned 4-role set so a stored assignment never points at a dead role.
+const ROLE_MIGRATE: Record<string, string> = {
+  'Main matcher': 'Drafter',
+  'Explorer': 'Drafter',
+  'Long sweep': 'Hard matcher',
+  'Draft checker': 'Refiner',
+  'Finisher': 'Random',
+  'Verifier': '' // dropped - no equivalent, so it clears
+}
+function hydrateRoles(raw?: Record<string, string | string[]>): Record<string, string[]> {
+  return Object.fromEntries(
+    Object.entries(raw ?? {}).map(([k, v]) => [
+      k,
+      [
+        ...new Set(
+          (Array.isArray(v) ? v : [v])
+            .map((r) => (r in ROLE_MIGRATE ? ROLE_MIGRATE[r] : r))
+            .filter((r) => r && r !== 'Unassigned')
+        )
+      ]
+    ])
+  )
+}
+
+/** Which registry project a folder IS, so a repo opened through the folder dialog lands in the
+ *  right settings slot. Identity comes from the descriptor's own github URL; an unrecognized
+ *  folder gets its own synthesized slot rather than borrowing another project's tallies. */
+function identifyProject(repoPath: string, descriptor: TangosDescriptor | null): string {
+  const byUrl = projectBySlug(descriptor?.project?.github)
+  if (byUrl) return byUrl.id
+  const name = descriptor?.project?.name
+  const byName = name && PROJECTS.find((p) => p.id === name || slugOf(p.github)?.endsWith(`/${name}`))
+  if (byName) return byName.id
+  return customIdFor(repoPath)
+}
+
 function saveSettings(): void {
   try {
+    snapshotActiveProject()
     writeFileSync(
       settingsFile(),
       JSON.stringify({
+        activeProject: activeProjectId,
+        projects: persistedProjects,
+        // Legacy mirror of the ACTIVE project, kept for one release so downgrading to a
+        // pre-switcher build doesn't read an empty settings file and reset the fleet.
         lastRepo: state.repoPath,
         agentRoles,
         agentEfforts,
@@ -1405,9 +1603,9 @@ function saveSettings(): void {
         viewerPrefs,
         bgPrefs,
         matchingPrefs,
-        // Whether the MCP server is on RIGHT NOW = whether the user last left it on. The next
-        // launch auto-starts it (update restarts kept killing agents' connection point).
-        mcpRunning: !!mcp.url
+        // The user's on/off INTENT, not the instantaneous server state - a boot-time save must
+        // not clobber the auto-start flag before the server has come up (see mcpDesired).
+        mcpRunning: mcpDesired
       })
     )
   } catch {
@@ -1415,6 +1613,8 @@ function saveSettings(): void {
   }
 }
 function loadSettings(): {
+  activeProject?: string
+  projects?: Record<string, PersistedProject>
   lastRepo?: string
   agentRoles?: Record<string, string | string[]> // string = legacy single-role format
   agentEfforts?: Record<string, string>
@@ -1440,6 +1640,39 @@ function loadSettings(): {
     return {}
   }
 }
+
+/** Fill in `projects` / `activeProject` for a settings file written before the switcher existed.
+ *  The legacy agent blobs were global; every install that has them is an sm64ds install, so they
+ *  move wholesale into whichever project `lastRepo` resolves to. Nothing is merged or split - the
+ *  numbers on screen after the update are the same ones that were there before it. */
+function migrateSettings(saved: ReturnType<typeof loadSettings>): ReturnType<typeof loadSettings> {
+  if (saved.projects) return saved
+  const id = saved.lastRepo
+    ? identifyProject(saved.lastRepo, loadDescriptor(saved.lastRepo).descriptor)
+    : PROJECTS[0].id
+  return {
+    ...saved,
+    activeProject: id,
+    projects: {
+      [id]: {
+        path: saved.lastRepo ?? null,
+        custom: id.startsWith('local:'),
+        agentRoles: hydrateRoles(saved.agentRoles),
+        agentEfforts: saved.agentEfforts,
+        agentAttempts: saved.agentAttempts,
+        agentLoop: saved.agentLoop,
+        agentStats: saved.agentStats,
+        agentBestDiv: saved.agentBestDiv
+      }
+    }
+  }
+}
+
+// The PERSISTED on/off intent for the MCP server. Saving `!!mcp.url` instead used to let any
+// boot-time save (migration, project hydrate) persist "off" in the window before the auto-start
+// brought the server up, so auto-start survived exactly one restart. Only an explicit Start/Stop
+// (or the loaded setting itself) moves this; a quiesce during a project switch does not.
+let mcpDesired = false
 
 const mcp = new McpManager(() => ({
   descriptor: state.descriptor!,
@@ -1491,7 +1724,9 @@ let mainWindow: BrowserWindow | null = null
 
 // Cache the loaded Atlas data so popouts + view-switches reuse it instantly
 // instead of re-reading/re-fetching the ~2MB data every time.
-let atlasCache: { repo: string | null; local?: AtlasDb | null; live?: AtlasDb | null; liveAt?: number } = { repo: null }
+// Keyed by PROJECT, not repo path: a viewer-only project has no path, so two of them would
+// otherwise both key on null and serve each other's atlas.
+let atlasCache: { project: string | null; local?: AtlasDb | null; live?: AtlasDb | null; liveAt?: number } = { project: null }
 
 // One shared fetch of the live chaos-db so the Live view AND the batcher's matched-check don't
 // hammer raw GitHub into a 429. Passive callers reuse anything within TTL and hit the CDN (no
@@ -1510,14 +1745,14 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
       const held = await fetchHeldClaims(claimsUrlLive)
       if (held) overlayClaims(fromVps, held)
     }
-    atlasCache = { ...atlasCache, repo: state.repoPath, live: fromVps, liveAt: Date.now() }
+    atlasCache = { ...atlasCache, project: activeProjectId, live: fromVps, liveAt: Date.now() }
     aiStats.seedBestDiv(fromVps.functions)
     return fromVps
   }
 
   const url = state.descriptor?.data?.committedDbUrl
   if (!url) throw new Error('this repo has no committedDbUrl in tangos.json')
-  const cached = atlasCache.repo === state.repoPath ? atlasCache.live : undefined
+  const cached = atlasCache.project === activeProjectId ? atlasCache.live : undefined
   const age = cached && atlasCache.liveAt ? Date.now() - atlasCache.liveAt : Infinity
   // A user Live refresh re-fetches once past the short throttle window; passive callers reuse for the
   // full TTL. Either way, within the window the in-memory copy is served - no network hit.
@@ -1545,7 +1780,7 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
       const held = await fetchHeldClaims(claimsUrl)
       if (held) overlayClaims(db, held)
     }
-    atlasCache = { ...atlasCache, repo: state.repoPath, live: db, liveAt: Date.now() }
+    atlasCache = { ...atlasCache, project: activeProjectId, live: db, liveAt: Date.now() }
     aiStats.seedBestDiv(db.functions) // ground-truth near-miss baseline for the improvement gate
     return db
   } catch (e) {
@@ -1563,13 +1798,13 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
  *  past the TTL), kick a background refresh and tell the renderer to reload once it lands; offline
  *  the overlay is simply a no-op and local data shows as-is. */
 function overlayLiveDone(db: AtlasDb | null): AtlasDb | null {
-  const liveAge = atlasCache.repo === state.repoPath && atlasCache.liveAt ? Date.now() - atlasCache.liveAt : Infinity
+  const liveAge = atlasCache.project === activeProjectId && atlasCache.liveAt ? Date.now() - atlasCache.liveAt : Infinity
   if (liveAge > LIVE_TTL_MS && (state.descriptor?.data?.committedDbUrl || state.descriptor?.data?.claimsApi)) {
     void loadLiveDb(false)
       .then(() => mainWindow?.webContents.send('atlas:refreshed'))
       .catch(() => {})
   }
-  const live = atlasCache.repo === state.repoPath ? atlasCache.live : undefined
+  const live = atlasCache.project === activeProjectId ? atlasCache.live : undefined
   if (!db || !live) return db
   const byName = new Map(live.functions.map((f) => [f.name, f]))
   let changed = false
@@ -1594,8 +1829,56 @@ function repoState(): RepoState {
     validationErrors: state.validationErrors,
     // A ".git" entry (dir or file) means a real checkout. A "Download ZIP" snapshot has none:
     // it can't commit/push and its tooling is likely stale - the renderer warns on this.
-    isGit: !!state.repoPath && existsSync(join(state.repoPath, '.git'))
+    isGit: !!state.repoPath && existsSync(join(state.repoPath, '.git')),
+    projectId: activeProjectId,
+    projectTitle: projectTitleFor(activeProjectId),
+    mode: state.repoPath ? 'local' : 'remote'
   }
+}
+
+/** Display name for a project: the descriptor's own title when it's loaded, else whatever we last
+ *  saw, else the registry's. Lets the switcher label a project it has never opened. */
+function projectTitleFor(id: string | null): string {
+  if (id && id === activeProjectId && state.descriptor?.project?.title) return state.descriptor.project.title
+  if (!id) return ''
+  return persistedProjects[id]?.title || projectById(id)?.title || id
+}
+
+/** Where a project's clone is, if we can find one. The remembered path wins; failing that, look
+ *  for the repo beside the one that's already open. People keep their decomps in one folder, so a
+ *  sibling checkout is worth finding rather than offering to clone a repo the user already has. */
+function resolveProjectPath(id: string, entry?: ProjectEntry): string | null {
+  const remembered = persistedProjects[id]?.path
+  if (remembered && existsSync(join(remembered, DESCRIPTOR_FILENAME))) return remembered
+  const repoName = entry && slugOf(entry.github)?.split('/')[1]
+  const parent = state.repoPath && dirname(state.repoPath)
+  if (!repoName || !parent) return null
+  const guess = join(parent, repoName)
+  if (!existsSync(join(guess, DESCRIPTOR_FILENAME))) return null
+  // Only claim it if it really IS this project - a same-named folder could be anything.
+  return identifyProject(guess, loadDescriptor(guess).descriptor) === id ? guess : null
+}
+
+/** Every project the switcher can offer: the built-in registry, plus any hand-picked folder that
+ *  has its own settings slot, with the clone path re-verified. */
+function listProjects(): ProjectSummary[] {
+  const rows: ProjectSummary[] = []
+  const add = (id: string, entry?: ProjectEntry): void => {
+    const path = resolveProjectPath(id, entry)
+    rows.push({
+      id,
+      title: projectTitleFor(id),
+      glyph: entry?.glyph ?? (projectTitleFor(id).slice(0, 2).toUpperCase() || '??'),
+      github: entry?.github ?? '',
+      path,
+      cloned: !!path,
+      active: id === activeProjectId,
+      custom: !entry
+    })
+  }
+  for (const e of PROJECTS) add(e.id, e)
+  for (const id of Object.keys(persistedProjects)) if (!projectById(id)) add(id)
+  return rows
 }
 
 function mcpState(): McpState {
@@ -1792,7 +2075,10 @@ function fullState() {
     agentFanout: state.agentFanout,
     autoLand: state.autoLand,
     autoPush: { enabled: state.autoPushEnabled, on: autoPushActive(), ...autoPushStatus },
-    looping: [...agentLoop]
+    looping: [...agentLoop],
+    projects: listProjects(),
+    switchingProject,
+    capabilities: consoleCapabilities()
   }
 }
 
@@ -1849,7 +2135,10 @@ function watchDescriptor(repoPath: string | null): void {
   }
 }
 
-function setRepo(path: string | null): RepoState {
+/** `remote` = the repo's published tangos.json, for a project that isn't cloned here. It gives the
+ *  Viewer everything it needs (the atlas comes off a URL) while the Controller has no repo to run
+ *  tools in, so `path` stays null and everything already guarded on it stays off. */
+function setRepo(path: string | null, remote?: TangosDescriptor | null): RepoState {
   state.repoPath = path
   if (path && looksLikeRepo(path)) {
     const { descriptor, descriptorPath, errors } = loadDescriptor(path)
@@ -1863,13 +2152,35 @@ function setRepo(path: string | null): RepoState {
       state.descriptorPath = null
       state.validationErrors = []
     }
+  } else if (remote) {
+    state.descriptor = remote
+    state.descriptorPath = null
+    state.validationErrors = validateDescriptor(remote)
   } else {
     state.descriptor = null
     state.descriptorPath = null
     state.validationErrors = []
   }
-  // Default: every tool in the new descriptor is enabled (exposed to the AI).
-  state.enabledToolIds = state.descriptor ? state.descriptor.tools.map((t) => t.id) : []
+  // Which project this folder IS. `repo:pick` accepts any directory, so a folder dialog can walk
+  // us to a different project without going through the switcher; when it does, swap the scoped
+  // agent state too, or that project's matches would be tallied under the previous one.
+  const projectId = path ? identifyProject(path, state.descriptor) : activeProjectId
+  if (projectId && projectId !== activeProjectId) {
+    snapshotActiveProject()
+    loadProjectScoped(projectId)
+  }
+  if (projectId) {
+    const slot = (persistedProjects[projectId] ??= {})
+    // Only record a path we actually opened. Browsing a project remotely must not erase where its
+    // clone lives - a checkout on a drive that happens to be offline today comes back tomorrow.
+    if (path) slot.path = path
+    slot.custom = projectId.startsWith('local:')
+    const title = state.descriptor?.project?.title
+    if (title) slot.title = title
+  }
+  // Default: every tool in the new descriptor is enabled (exposed to the AI). Nothing is runnable
+  // without a checkout to run it in, so a remotely-browsed project exposes none.
+  state.enabledToolIds = state.repoPath && state.descriptor ? state.descriptor.tools.map((t) => t.id) : []
   // Seed Ghidra toggle from the repo's matchConventions when opening a repo (near-miss stays as user left it).
   if (state.descriptor) {
     const d = defaultMatchingPrefs(state.descriptor.project)
@@ -1880,7 +2191,7 @@ function setRepo(path: string | null): RepoState {
   state.reviews = []
   state.baseBranch = null
   enrichedRows.clear() // preserved coddog context belongs to the old repo
-  atlasCache = { repo: state.repoPath }
+  atlasCache = { project: activeProjectId }
   // Auto-push session state is repo-relative: a 20s timer pending across a repo switch would fire
   // runAutoPush against the NEW repoPath using files claimed in the OLD repo (a same-named
   // src/<func>.c in both repos could ship into the wrong repo's PR under an old claim).
@@ -1907,6 +2218,194 @@ function setRepo(path: string | null): RepoState {
   if (state.repoPath) scheduleStrandedSweep()
   pushState()
   return repoState()
+}
+
+// ---- project switching -------------------------------------------------------------------------
+// setRepo above swaps WHICH repo is open. That is enough when the user is choosing a folder on a
+// quiet console, but the project switcher makes switching a one-click action that can land in the
+// middle of a drive, a push, a safe-mode commit or a parked agent poll. The extra machinery here
+// is about what is already RUNNING when the swap happens.
+
+// The live atlas SSE stream. Held so a project switch can tear it down: the connection re-derives
+// its URL only on reconnect, so a healthy stream would keep pushing the old project's events.
+let atlasLiveStop: (() => void) | null = null
+function startAtlasLive(): void {
+  atlasLiveStop?.()
+  atlasLiveStop = connectAtlasLive(
+    () => state.descriptor?.data?.claimsApi,
+    (event, data) => {
+      if (event === 'cosmetics') bustCosmeticsCache()
+      mainWindow?.webContents.send('atlas:live', { event, data })
+    }
+  )
+}
+
+/** A project's published tangos.json, for browsing it without a clone. Cached in settings so a
+ *  switch doesn't have to wait on the network - the splash is 1.75s and a cold fetch can outlast
+ *  it, and stretching the splash to cover a slow fetch leaves an invisible overlay eating clicks. */
+async function remoteDescriptor(entry: ProjectEntry): Promise<TangosDescriptor | null> {
+  const cached = persistedProjects[entry.id]?.descriptorCache
+  const fresh = cached && Date.now() - (cached.at ?? 0) < 24 * 60 * 60 * 1000
+  if (cached?.descriptor && fresh) return cached.descriptor
+  const url = descriptorUrlFor(entry)
+  if (!url) return cached?.descriptor ?? null
+  try {
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), 15000)
+    try {
+      const res = await fetch(url, { signal: ac.signal })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const descriptor = (await res.json()) as TangosDescriptor
+      const slot = (persistedProjects[entry.id] ??= {})
+      slot.descriptorCache = { at: Date.now(), descriptor }
+      if (descriptor?.project?.title) slot.title = descriptor.project.title
+      return descriptor
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    return cached?.descriptor ?? null // offline: a stale copy still beats nothing
+  }
+}
+
+/** Warm the cache for every registry project that isn't cloned, so picking one is instant. */
+async function prefetchRemoteDescriptors(): Promise<void> {
+  for (const e of PROJECTS) {
+    if (resolveProjectPath(e.id, e)) continue
+    await remoteDescriptor(e).catch(() => null)
+  }
+}
+
+/** Why the switch must be refused, or null when it's safe. */
+function switchBlocker(): string | null {
+  if (state.reviews.length) {
+    // Safe mode has already COMMITTED this work to the repo's work branch. setRepo clears
+    // state.baseBranch, and review:merge/discard both need it, so the commits would still be on
+    // tangos/work with no way left in the UI to reach them. Refuse rather than strand real work.
+    const n = state.reviews.length
+    return `${n} unreviewed change${n === 1 ? '' : 's'} committed on ${WORK_BRANCH}. Merge or discard them before switching projects.`
+  }
+  return null
+}
+
+/** Stop everything in flight, while state.repoPath still points at the OLD project so anything
+ *  that finishes during this window finishes against the repo it was started for. */
+async function quiesceProject(): Promise<void> {
+  // 1. Kill API drivers and every scrap of loop bookkeeping that would restart them. A surviving
+  //    driver re-reads state at land time, and ensureLoopQueue's finally would generate a batch for
+  //    the new project on behalf of an agent that was looping in the old one.
+  for (const [name, kill] of driveKills) {
+    driveStopRequested.add(name)
+    try {
+      kill()
+    } catch {
+      /* already dead */
+    }
+  }
+  driveKills.clear()
+  agentLoop.clear()
+  apiDriving.clear()
+  stopping.clear()
+  driveLoopActive.clear()
+  loopReassigning.clear()
+  loopGenCooldownUntil.clear()
+  quickFailStreak.clear()
+  exhausted.clear()
+  autoPushBusy.clear()
+  sessionNearMissNames.clear()
+
+  // 2. Cancel batch generation and let the chain settle, so a scheduler mid-run can't resolve into
+  //    state.batches after setRepo has cleared it.
+  genLive.cancelled = true
+  try {
+    genLive.kill?.()
+  } catch {
+    /* already dead */
+  }
+  await genChain.catch(() => {})
+  genLive.cancelled = false
+
+  // 3. Release parked agent polls. A waiter outliving the switch is served by the NEXT project's
+  //    first batch: notifyBatchWaiters marks it active and resolves it into a transport that is
+  //    already closed, so the batch is consumed, never worked, and its targets stay in `taken`.
+  //    null is the existing "timed out, poll again" answer, so agents handle it correctly.
+  for (const w of [...batchWaiters]) {
+    clearTimeout(w.timer)
+    batchWaiters.delete(w)
+    w.resolve(null)
+  }
+
+  // 4. Drop the MCP listener entirely, not just its sessions. resetSessions leaves the port open,
+  //    so an agent mid-call can still land a tool run that runToolSafely would execute against the
+  //    new repo.
+  if (mcp.running) await mcp.stop().catch(() => {})
+
+  // 5. Pending one-shots that would fire after the swap.
+  if (sweepTimer) {
+    clearTimeout(sweepTimer)
+    sweepTimer = null
+  }
+  if (atlasRegenTimer) {
+    clearTimeout(atlasRegenTimer)
+    atlasRegenTimer = null
+  }
+  for (const t of autoPushTimers.values()) clearTimeout(t)
+  autoPushTimers.clear()
+}
+
+/** Open a folder the user chose by hand. A folder dialog can walk to a different project just as
+ *  the switcher can, so identify it first and take the full switch path when it does; re-opening
+ *  the SAME project stays a plain, cheap setRepo (descriptor:write relies on that). */
+async function openRepoPath(path: string): Promise<RepoState> {
+  const id = identifyProject(path, loadDescriptor(path).descriptor)
+  if (activeProjectId && id !== activeProjectId) {
+    persistedProjects[id] = { ...(persistedProjects[id] ?? {}), path }
+    return switchProject(id, path)
+  }
+  return setRepo(path)
+}
+
+/** Switch the whole console to another project: quiesce, swap, rearm. */
+async function switchProject(id: string, path: string | null): Promise<RepoState> {
+  if (switchingProject) throw new Error('a project switch is already in progress')
+  if (id === activeProjectId) return repoState()
+  const blocker = switchBlocker()
+  if (blocker) throw new Error(blocker)
+
+  switchingProject = true
+  pushState()
+  try {
+    const wasRunning = mcp.running
+    await quiesceProject()
+
+    // Past this point every stale continuation is inert.
+    projectEpoch++
+    snapshotActiveProject()
+    activityBus.clear() // the run feed belongs to the old project
+    bustCosmeticsCache()
+    // Popout windows show the old project's modules, and their "add to batch" relay would inject
+    // its function refs into the new project's cart.
+    for (const w of popouts.values()) if (!w.isDestroyed()) w.close()
+
+    loadProjectScoped(id)
+    // No clone here: fall back to the published descriptor so the Viewer still works off the
+    // project's own atlas URL, and the Controller shows a clone prompt instead of agent boxes.
+    const entry = projectById(id)
+    const rs = setRepo(path, path || !entry ? null : await remoteDescriptor(entry))
+
+    if (wasRunning && state.repoPath && state.descriptor && state.validationErrors.length === 0) {
+      await startMcpServer().catch(() => {
+        /* port taken - the user can start it by hand */
+      })
+    }
+    startAtlasLive()
+  void prefetchRemoteDescriptors() // warm the switcher so picking an uncloned project is instant
+    saveSettings()
+    return rs
+  } finally {
+    switchingProject = false
+    pushState()
+  }
 }
 
 // The mascot icon for the taskbar + window (build/icon.png, packed with the app).
@@ -1966,12 +2465,12 @@ ipcMain.handle('repo:preflight', async () => {
 
 ipcMain.handle('atlas:load', () => {
   if (!state.descriptor || !state.repoPath) return null
-  if (atlasCache.repo === state.repoPath && atlasCache.local !== undefined) {
+  if (atlasCache.project === activeProjectId && atlasCache.local !== undefined) {
     maybeRegenChaosDb(state.repoPath) // fire-and-forget: refresh in the background if the file is stale
     return overlayLiveDone(atlasCache.local)
   }
   const db = readAtlas(state.repoPath, state.descriptor)
-  atlasCache = { ...atlasCache, repo: state.repoPath, local: db }
+  atlasCache = { ...atlasCache, project: activeProjectId, local: db }
   maybeRegenChaosDb(state.repoPath)
   return overlayLiveDone(db)
 })
@@ -1987,7 +2486,10 @@ function maybeRegenChaosDb(repoPath: string): void {
   try {
     const rel = state.descriptor?.data?.dbPath || 'chaos-db.json'
     const dbFile = isAbsolute(rel) ? rel : join(repoPath, rel)
-    if (!existsSync(dbFile) || !existsSync(join(repoPath, 'tools/chaos_db_ci.py'))) return
+    // data.generate is how a repo says how to rebuild its atlas. Probing for a literal
+    // tools/chaos_db_ci.py meant a repo that declared a perfectly good generate command still
+    // never got a background refresh.
+    if (!existsSync(dbFile) || !state.descriptor?.data?.generate) return
     const dbAt = statSync(dbFile).mtimeMs
     const newest = (...paths: string[]): number =>
       Math.max(0, ...paths.map((p) => (existsSync(p) ? statSync(p).mtimeMs : 0)))
@@ -1999,12 +2501,18 @@ function maybeRegenChaosDb(repoPath: string): void {
     return
   }
   chaosRegenRunning = true
-  const py = currentRuntime().python || 'python'
-  const child = spawn(
-    py,
-    ['tools/chaos_db_ci.py', '--out', 'chaos-db.json', '--contrib-out', 'contributions.json'],
-    { cwd: repoPath, env: { ...process.env, PYTHONUTF8: '1' } }
-  )
+  // Render the repo's own generate command rather than assuming a script name.
+  const rt = currentRuntime()
+  const genTool: TangosTool = {
+    id: 'atlas_generate',
+    readOnly: false,
+    command: state.descriptor!.data!.generate!
+  }
+  const { argv } = renderArgv(genTool, { out: state.descriptor?.data?.dbPath || 'chaos-db.json' }, rt, false)
+  const child = spawn(argv[0], argv.slice(1), {
+    cwd: repoPath,
+    env: { ...process.env, PYTHONUTF8: '1' }
+  })
   child.on('error', () => {
     chaosRegenRunning = false
   })
@@ -2060,13 +2568,13 @@ ipcMain.handle('github:signin', async () => {
 
 ipcMain.handle('atlas:current', () => {
   // Whatever's already loaded (live preferred), else local - never fetches. For popouts.
-  if (atlasCache.repo === state.repoPath) {
+  if (atlasCache.project === activeProjectId) {
     if (atlasCache.live) return atlasCache.live
     if (atlasCache.local) return overlayLiveDone(atlasCache.local)
   }
   if (!state.descriptor || !state.repoPath) return null
   const db = readAtlas(state.repoPath, state.descriptor)
-  atlasCache = { ...atlasCache, repo: state.repoPath, local: db }
+  atlasCache = { ...atlasCache, project: activeProjectId, local: db }
   return overlayLiveDone(db)
 })
 
@@ -2119,7 +2627,7 @@ ipcMain.handle('atlas:source', (_e, req: { id: string; srcPath?: string }): Atla
     }
   }
   try {
-    const db = atlasCache.repo === repo ? atlasCache.live ?? atlasCache.local : null
+    const db = atlasCache.project === activeProjectId ? atlasCache.live ?? atlasCache.local : null
     const row = db?.functions.find((f) => f.id === req.id) as unknown as Record<string, unknown> | undefined
     const disasm = row && typeof row.disasm === 'string' ? row.disasm : null
     if (disasm) {
@@ -2192,10 +2700,10 @@ async function regenAtlasDb(source: 'user' | 'ai'): Promise<AtlasDb | null> {
     repoPath: state.repoPath,
     source,
     allowMutations: true,
-    extraEnv: secretsEnv()
+    extraEnv: projectEnv()
   })
   const db = readAtlas(state.repoPath, state.descriptor)
-  atlasCache = { ...atlasCache, repo: state.repoPath, local: db }
+  atlasCache = { ...atlasCache, project: activeProjectId, local: db }
   if (db) aiStats.seedBestDiv(db.functions) // keep the near-miss gate's baseline current after a land
   return db
 }
@@ -2226,26 +2734,29 @@ ipcMain.handle('atlas:generate', async () => {
 //  - Refiner      -> the near-miss refine pile (stage 2: drafts -> matches)
 //  - Random       -> any unmatched function, uniformly at random
 //  - default/none -> plain similarity scheduler (same pool as Drafter)
-function genPlanFor(role: string | undefined, count: number): { schedId: string; values: Record<string, unknown> } {
+function genPlanFor(
+  role: string | undefined,
+  count: number
+): { role: keyof TangosConsoleRoles; values: Record<string, unknown> } {
   switch (role) {
     case 'Hard matcher':
-      // The big/hard functions - min-size floor so coddog only surfaces meaty targets.
-      return { schedId: 'coddog', values: { limit: count, min: '0x200' } }
+      // The big/hard functions - min-size floor so the scheduler only surfaces meaty targets.
+      return { role: 'scheduler', values: { limit: count, min: '0x200' } }
     case 'Drafter':
-      // Stage 1: unmatched functions with a similar matched sibling to adapt into a draft. Plain
-      // coddog (similarity-anchored) - same pool as the default, framed as draft production.
-      return { schedId: 'coddog', values: { limit: count } }
+      // Stage 1: unmatched functions with a similar matched sibling to adapt into a draft. The plain
+      // similarity-anchored scheduler - same pool as the default, framed as draft production.
+      return { role: 'scheduler', values: { limit: count } }
     case 'Refiner':
       // Stage 2: near-misses that already carry a draft. include_attempted so a driven refiner keeps
-      // working the pool instead of drying up to ~1 target once refine_wl's ledger has seen it all.
-      return { schedId: 'refine_wl', values: { limit: count, include_attempted: true } }
+      // working the pool instead of drying up to ~1 target once the ledger has seen it all.
+      return { role: 'refineScheduler', values: { limit: count, include_attempted: true } }
     case 'Random':
-      // Pull ANY unmatched function at random - any size, no similarity/easy bias. worklist --random
+      // Pull ANY unmatched function at random - any size, no similarity/easy bias. --random
       // reshuffles every run, so an infinite loop re-rolls a fresh set each batch (see genDraft's loop
       // re-assign). Streams JSONL to stdout (no `out` arg) - genDraft reads that channel below.
-      return { schedId: 'worklist', values: { random: true, limit: count } }
+      return { role: 'randomScheduler', values: { random: true, limit: count } }
     default:
-      return { schedId: 'coddog', values: { limit: count } }
+      return { role: 'scheduler', values: { limit: count } }
   }
 }
 /** Sensible default batch size per role (Hard matcher is heavy -> fewer targets per batch). */
@@ -2284,7 +2795,7 @@ async function liveDoneSets(): Promise<{ matched: Set<string>; noMatch: Set<stri
 async function fetchRandomTopUp(limit: number): Promise<string[]> {
   if (!state.repoPath || !state.descriptor) return []
   const plan = genPlanFor('Random', limit)
-  const tool = state.descriptor.tools.find((t) => t.id === plan.schedId)
+  const tool = roleTool(plan.role)
   if (!tool) return []
   try {
     const res = await runTool({
@@ -2294,7 +2805,7 @@ async function fetchRandomTopUp(limit: number): Promise<string[]> {
       source: 'user',
       repoPath: state.repoPath,
       allowMutations: true,
-      extraEnv: secretsEnv()
+      extraEnv: projectEnv()
     })
     return (res.output || '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{'))
   } catch {
@@ -2316,14 +2827,14 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   // upstream (see the liveDone filter below), so budget for that drop instead of landing short.
   const liveDropBudget = state.descriptor.data?.committedDbUrl ? count * 2 : 0
   const plan = genPlanFor(role, count + taken.size + Math.max(count, 16) + liveDropBudget)
-  // The planned scheduler, falling back to coddog, then any read-only limit+out tool.
-  const sched =
-    state.descriptor.tools.find((t) => t.id === plan.schedId) ??
-    state.descriptor.tools.find((t) => t.id === 'coddog') ??
-    state.descriptor.tools.find(
-      (t) => t.readOnly && t.args?.some((a) => a.name === 'out') && t.args?.some((a) => a.name === 'limit')
+  // The role this plan wants, falling back to the default scheduler, then any read-only limit+out
+  // tool. A repo names its own tools for these in descriptor.console.
+  const sched = roleTool(plan.role) ?? roleTool('scheduler') ?? duckSchedulerTool()
+  if (!sched) {
+    throw new Error(
+      `${state.descriptor.project.title} has no worklist scheduler. Declare one in tangos.json under console.scheduler.`
     )
-  if (!sched) throw new Error('this repo has no similarity scheduler (coddog) in tangos.json')
+  }
   // Most schedulers (coddog/refine_wl) write their worklist JSONL to a temp `out` file; some
   // (worklist, for the Random role) stream it to stdout and take no `out` arg. Detect which so
   // we read the right channel and never hand a tool an `out` flag it would reject.
@@ -2356,7 +2867,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
       // source, so it must not be gated by the Writes toggle. Some schedulers (refine_wl) are
       // flagged mutating; allow this internal prep run regardless. Actual agent writes stay gated.
       allowMutations: true,
-      extraEnv: secretsEnv(),
+      extraEnv: projectEnv(),
       onSpawn: ({ kill }) => {
         schedKill = kill
         genLive.kill = kill
@@ -2534,10 +3045,16 @@ ipcMain.handle('repo:pick', async () => {
     properties: ['openDirectory']
   })
   if (res.canceled || res.filePaths.length === 0) return repoState()
-  return setRepo(res.filePaths[0])
+  return openRepoPath(res.filePaths[0])
 })
 
-ipcMain.handle('repo:set', (_e, path: string) => setRepo(path))
+ipcMain.handle('repo:set', (_e, path: string) => openRepoPath(path))
+
+ipcMain.handle('projects:list', (): ProjectSummary[] => listProjects())
+
+ipcMain.handle('projects:switch', async (_e, id: string): Promise<RepoState> => {
+  return switchProject(id, resolveProjectPath(id, projectById(id)))
+})
 
 ipcMain.handle('descriptor:generatePreview', (_e, path?: string) => {
   const repo = path || state.repoPath
@@ -2578,6 +3095,11 @@ async function startMcpServer(): Promise<void> {
   if (!state.descriptor || state.validationErrors.length > 0) {
     throw new Error('cannot start: descriptor missing or invalid')
   }
+  // A remotely-browsed project has a valid descriptor but nowhere to run anything: the server
+  // would start happily and then every tool call would throw "no repo selected" at the agent.
+  if (!state.repoPath) {
+    throw new Error('clone the repo to run its tools')
+  }
   // Snapshot src files already dirty before any AI connects; these are never attributed to an
   // agent's per-agent PR (they're pre-existing local work, not this session's matches).
   if (state.repoPath) {
@@ -2605,12 +3127,14 @@ async function startMcpServer(): Promise<void> {
 
 ipcMain.handle('mcp:start', async () => {
   await startMcpServer()
+  mcpDesired = true
   saveSettings() // remember the server is ON, so the next launch (e.g. an update restart) resumes it
   return mcpState()
 })
 
 ipcMain.handle('mcp:stop', async () => {
   await mcp.stop()
+  mcpDesired = false
   saveSettings() // user turned it OFF - don't resurrect it next launch
   pushState()
   return mcpState()
@@ -2771,36 +3295,48 @@ ipcMain.handle('batch:clearQueue', (_e, agentName: string) => {
   return state.batches
 })
 
-/** Fetch one target's full enriched worklist row (disasm/callees/pool) via `worklist --addr`, for
- *  batch targets coddog didn't produce (e.g. functions picked in the Atlas). Returns the JSONL row
- *  string, or null if the repo has no worklist tool / the target can't be located. Quiet: spawns
- *  python directly rather than through runTool, so it never clutters the live viewer. */
+/** Fetch one target's full enriched worklist row (disasm/callees/pool) from the `enrich` role, for
+ *  batch targets the scheduler didn't produce (e.g. functions picked in the Atlas). Returns the
+ *  JSONL row string, or null if the repo fills no enrich role / the target can't be located. Quiet:
+ *  spawns directly rather than through runTool, so it never clutters the live viewer. */
 async function enrichTarget(item: BatchItem): Promise<string | null> {
   const repo = state.repoPath
   if (!repo || item.addr == null || !item.module) return null
-  if (!state.descriptor?.tools?.some((t) => t.id === 'worklist')) return null
-  const py = currentRuntime().python || 'python'
+  const tool = roleTool('enrich')
+  if (!tool) return null
   const addr = '0x' + item.addr.toString(16).padStart(8, '0')
+  // Built from the tool's own declared args, so a repo whose enrich tool takes different flags (or
+  // none of the tuning ones) still gets a correct command. Values for args it doesn't declare are
+  // dropped by renderArgv.
+  //
+  // max disables the scheduler's default 0x200 (512-byte) size filter: when we pin the exact
+  // function by addr we want THAT function whatever its size, else every pick over 512 bytes is
+  // silently dropped ("none of this batch's targets could be enriched").
+  //
+  // examples 0 skips the scan of every already-matched function for similar siblings (the
+  // "similarity roll"). Only hand-picked targets reach here - the scheduler's are pre-enriched and
+  // cached in enrichedRows - and a hand-pick has already chosen its target, so the sibling few-shot
+  // is dead weight. It was ~40% of the runtime (10s -> 6s) and pushed a single pick close to the
+  // timeout under load, the "custom function won't drive" symptom. The row still carries
+  // disasm/callees/signatures/pool/target bytes: everything needed to match.
+  const { argv } = renderArgv(
+    tool,
+    { module: item.module, addr, max: '0xffffff', examples: 0 },
+    currentRuntime(),
+    false
+  )
+  const py = argv[0]
+  const rest = argv.slice(1)
   const out = await new Promise<string>((resolve) => {
     let buf = ''
     try {
-      // --max 0xffffff disables worklist.py's default 0x200 (512-byte) size filter: when we pin the
-      // exact function by --addr we want THAT function whatever its size, else every pick over 512
-      // bytes is silently dropped ("none of this batch's targets could be enriched").
-      //
-      // --examples 0 skips build_example_index, the scan of every already-matched function for
-      // similar siblings (the "similarity roll"). Only hand-picked targets reach here -- coddog's
-      // are pre-enriched and cached in enrichedRows -- and a hand-pick has already chosen its target,
-      // so the sibling few-shot is dead weight. It was ~40% of the runtime (10s -> 6s) and pushed a
-      // single pick close to the timeout under load, the "custom function won't drive" symptom. The
-      // row still carries disasm/callees/signatures/pool/target bytes: everything needed to match.
-      const c = spawn(py, ['tools/worklist.py', '--module', item.module!, '--addr', addr, '--max', '0xffffff', '--examples', '0'], {
+      const c = spawn(py, rest, {
         cwd: repo,
-        env: { ...process.env, ...secretsEnv() }
+        env: { ...process.env, ...projectEnv() }
       })
       // Hard cap: never let one slow/hung target wedge the whole drive. Kill + skip it after 45s.
       // Enrichment is ~6s warm; 45s leaves headroom for a cold cache or a loaded machine without
-      // wedging the drive if worklist genuinely hangs.
+      // wedging the drive if the tool genuinely hangs.
       const timer = setTimeout(() => {
         try { c.kill() } catch { /* already gone */ }
         resolve('')
@@ -2857,7 +3393,13 @@ async function nemotronModelId(): Promise<string> {
 // landed matches + token usage into its stats.
 async function driveBatch(agentName: string): Promise<void> {
   if (!state.repoPath) throw new Error('no repo selected')
-  const env = secretsEnv()
+  // Pin the repo and project for the run. A drive is the longest thing the console does - minutes
+  // of model calls, then a land step that writes C into src/, ingests near-misses and can claim
+  // address ranges. Re-reading state.repoPath at land time would aim all of that at whatever
+  // project happens to be open by then.
+  const repo = state.repoPath
+  const epochAtStart = projectEpoch
+  const env = projectEnv()
   const driverEnv: Record<string, string> = {}
   // Claude models share the Anthropic key but drive different models, each its own box.
   const CLAUDE_MODEL: Record<string, string> = {
@@ -3014,13 +3556,18 @@ async function driveBatch(agentName: string): Promise<void> {
   const wl = join(driveDir, `${slug}.worklist.jsonl`)
   const outPath = join(driveDir, `${slug}.results.output`)
   writeFileSync(wl, rows.join('\n'))
-  const tool: TangosTool = {
-    id: 'glm_refine',
-    label: `Drive ${agentName}`,
-    category: 'matching',
-    readOnly: false,
-    command: '{python} tools/glm_refine.py --wl {wl} --out {out} --jobs {jobs} --attempts {attempts}'
-  }
+  // The repo's declared driver. Falls back to sm64ds's layout for descriptors written before
+  // console roles existed; a repo that declares console.driver gets its own tool run instead.
+  const declaredDriver = roleTool('driver')
+  const tool: TangosTool = declaredDriver
+    ? { ...declaredDriver, label: `Drive ${agentName}` }
+    : {
+        id: 'glm_refine',
+        label: `Drive ${agentName}`,
+        category: 'matching',
+        readOnly: false,
+        command: '{python} tools/glm_refine.py --wl {wl} --out {out} --jobs {jobs} --attempts {attempts}'
+      }
   // Max match attempts per function: the agent box's override, else the console default (4). glm_refine's
   // own default is higher, but a from-scratch batch rarely improves past a few tries, so 4 caps spend.
   const attempts = agentAttempts[agentName] ?? DEFAULT_ATTEMPTS
@@ -3098,7 +3645,7 @@ async function driveBatch(agentName: string): Promise<void> {
       tool,
       values: { wl, out: outPath, jobs, attempts },
       runtime: currentRuntime(),
-      repoPath: state.repoPath,
+      repoPath: repo,
       source: 'ai',
       client: { name: agentName },
       allowMutations: true,
@@ -3219,25 +3766,46 @@ async function driveBatch(agentName: string): Promise<void> {
     // on landed.length alone meant a from-scratch batch that only near-missed skipped landing
     // entirely, so its drafts were never ingested and were lost when the next drive overwrote the
     // output file (the "GLM made drafts but nothing saved them" bug).
+    // Never land a finished run into a project that isn't the one it ran against. The driver above
+    // took minutes; if the operator switched during it, these sources and near-misses belong to the
+    // other decomp and banking them here would write its C into this repo's src/, ingest its drafts
+    // into this near-miss DB, and claim its address ranges on this project's board.
+    if (epochAtStart !== projectEpoch) {
+      report('drive', { agent: agentName, status: 'abandoned', reason: 'project changed mid-drive; run not landed' })
+      return
+    }
     if (state.autoLand && (landed.length || nearMissNames.length)) {
-      const landTool: TangosTool = {
-        id: 'crackloop_land',
-        label: `Land ${agentName} matches`,
-        category: 'matching',
-        readOnly: false,
-        // --no-claims only when we have no key to claim WITH. It was hardcoded on because the
-        // claims key had expired, which quietly turned off the one mechanism that tells other
-        // contributors what this console is working on - two of them ground the same overlay
-        // for a day before anyone noticed. With a key present, let crackloop lock the ranges.
-        command: `{python} tools/crackloop.py land --output {out} --wl {wl}${
-          secretsEnv().CLAIMS_API_KEY || process.env.CLAIMS_API_KEY ? '' : ' --no-claims'
-        }`
-      }
+      // The repo's declared land step, falling back to sm64ds's layout for pre-roles descriptors.
+      //
+      // --no-claims only when we have no key to claim WITH. It was hardcoded on because the
+      // claims key had expired, which quietly turned off the one mechanism that tells other
+      // contributors what this console is working on - two of them ground the same overlay
+      // for a day before anyone noticed. With a key present, let it lock the ranges.
+      //
+      // Read the key through projectEnv, not the whole vault: a claims key belongs to the
+      // project whose board it writes to. Seeing another project's key here would claim THIS
+      // project's address ranges on THAT project's board, which we cannot take back.
+      const declaredLand = roleTool('land')
+      const landTool: TangosTool = declaredLand
+        ? { ...declaredLand, label: `Land ${agentName} matches` }
+        : {
+            id: 'crackloop_land',
+            label: `Land ${agentName} matches`,
+            category: 'matching',
+            readOnly: false,
+            command: '{python} tools/crackloop.py land --output {out} --wl {wl} {flags}',
+            args: [{ name: 'no_claims', type: 'boolean', flag: '--no-claims' }]
+          }
+      // Whether to claim is CONSOLE's call, not the tool's - only we know whether a usable claims
+      // key exists for this project. Passed as a value so a declared land tool gets the same
+      // decision; baking it into the fallback's command string meant a repo that declared its own
+      // land tool silently always attempted to claim.
+      const noClaims = !(projectEnv().CLAIMS_API_KEY || process.env.CLAIMS_API_KEY)
       const landRes = await runTool({
         tool: landTool,
-        values: { out: outPath, wl },
+        values: { out: outPath, wl, no_claims: noClaims },
         runtime: currentRuntime(),
-        repoPath: state.repoPath,
+        repoPath: repo,
         source: 'ai',
         client: { name: agentName },
         allowMutations: true,
@@ -3603,7 +4171,7 @@ ipcMain.handle('repo:pull', async (): Promise<{ ok: boolean; err?: string; behin
     mainWindow?.webContents.send('repo:pullProgress', { label, pct })
   )
   if (res.ok) {
-    atlasCache = { repo: null }
+    atlasCache = { project: null }
     reloadDescriptor('manual')
   }
   const ab = res.ok ? await aheadBehind(repo, db) : null
@@ -3655,7 +4223,7 @@ ipcMain.handle('repo:sync', async (): Promise<{ ok: boolean; branch?: string; he
   }
   const r = await syncToOrigin(repo, (label, pct) => mainWindow?.webContents.send('repo:syncProgress', { label, pct }))
   if (r.ok) {
-    atlasCache = { repo: null }
+    atlasCache = { project: null }
     reloadDescriptor('manual')
     scheduleAtlasRegen()
     pushState()
@@ -3874,35 +4442,8 @@ ipcMain.handle('bug:submit', async (_e, payload: { description: string; screensh
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null) // no native File/Edit/View menu - we use our own chrome
-  const saved = loadSettings()
-  // migrate legacy single-role (string) entries to the multi-role (string[]) format, AND map the
-  // old 7-role names onto the pruned 4-role set so a stored assignment never points at a dead role.
-  const ROLE_MIGRATE: Record<string, string> = {
-    'Main matcher': 'Drafter',
-    'Explorer': 'Drafter',
-    'Long sweep': 'Hard matcher',
-    'Draft checker': 'Refiner',
-    'Finisher': 'Random',
-    'Verifier': '' // dropped - no equivalent, so it clears
-  }
-  agentRoles = Object.fromEntries(
-    Object.entries(saved.agentRoles ?? {}).map(([k, v]) => [
-      k,
-      [
-        ...new Set(
-          (Array.isArray(v) ? v : [v])
-            .map((r) => (r in ROLE_MIGRATE ? ROLE_MIGRATE[r] : r))
-            .filter((r) => r && r !== 'Unassigned')
-        )
-      ]
-    ])
-  )
-  agentEfforts = { ...(saved.agentEfforts ?? {}) }
-  agentAttempts = { ...(saved.agentAttempts ?? {}) }
-  for (const n of saved.agentLoop ?? []) agentLoop.add(n) // restored so startup can resume them
-  aiStats.hydrate(saved.agentStats)
-  aiStats.hydrateBestDiv(saved.agentBestDiv)
-  aiStats.remapKeys(normalizeName) // fold old per-model/per-session stat keys into one family box
+  const saved = migrateSettings(loadSettings())
+  persistedProjects = saved.projects ?? {}
   state.reportsEnabled = saved.reportsEnabled ?? false
   state.tourSeen = saved.tourSeen ?? false
   state.updateNoteSeen = saved.updateNoteSeen ?? ''
@@ -3931,9 +4472,15 @@ app.whenReady().then(() => {
   setReportsEnabled(state.reportsEnabled)
   ensureTips()
   ensureTour()
-  if (saved.lastRepo && looksLikeRepo(saved.lastRepo)) setRepo(saved.lastRepo)
+  // Roles/efforts/loop/stats are per project, so hydrate the active project's slot BEFORE opening
+  // its repo - setRepo's saveSettings would otherwise snapshot empty maps over the stored ones.
+  const bootProject = saved.activeProject ?? PROJECTS[0].id
+  loadProjectScoped(bootProject)
+  const bootPath = persistedProjects[bootProject]?.path
+  if (bootPath && looksLikeRepo(bootPath)) setRepo(bootPath)
   // The MCP server was on when the app last closed (including an update's restart) - bring it
   // back up so connected agents' endpoint comes back without the human re-clicking Start.
+  mcpDesired = !!saved.mcpRunning // the intent survives even if the start below fails (retry next boot)
   if (saved.mcpRunning && state.descriptor && state.validationErrors.length === 0) {
     void startMcpServer().catch(() => {
       /* port taken or repo moved - the user can start it by hand as before */
@@ -3953,15 +4500,10 @@ app.whenReady().then(() => {
   createWindow()
   // Live atlas push from the VPS: contributor colors, stars, and match counts stream in
   // and forward straight to the renderer, so a shop color buy or a new match shows up
-  // within a second without any polling. One connection for the app's life; it
-  // auto-reconnects across redeploys and re-derives its URL from the current descriptor.
-  connectAtlasLive(
-    () => state.descriptor?.data?.claimsApi,
-    (event, data) => {
-      if (event === 'cosmetics') bustCosmeticsCache()
-      mainWindow?.webContents.send('atlas:live', { event, data })
-    }
-  )
+  // within a second without any polling. It auto-reconnects across redeploys and re-derives
+  // its URL from the current descriptor - but only when the socket drops, and a healthy one
+  // never does, so switchProject restarts it explicitly rather than waiting for a drop.
+  startAtlasLive()
   initAutoUpdate() // check the public releases feed for a newer build
   // Debug hotkeys: Ctrl+Shift+D writes a snapshot (screenshot + state + dom) to the debug folder;
   // Ctrl+Shift+I toggles DevTools. Available in every build so bugs can be captured anywhere.

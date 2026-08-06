@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   RepoState, McpState, TangosDescriptor, GenerateReport, ActivityEvent, ActivityRun, RunResult, PreflightItem,
   Batch, BatchDraft, BatchItem, AtlasDb, AtlasSource, Review, GithubCredits, ConnectedClient, SecretsInfo,
-  AiAgent, RepoUpdateStatus, SyncPreview, AppUpdateInfo, ViewerPrefs, BackgroundPrefs
+  AiAgent, RepoUpdateStatus, SyncPreview, AppUpdateInfo, ViewerPrefs, BackgroundPrefs, ProjectSummary
 } from '../shared/types'
 
 type FullState = {
@@ -24,6 +24,10 @@ type FullState = {
   autoLand: boolean
   autoPush: { enabled: boolean; on: boolean; state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'; message?: string; prUrl?: string; at?: number }
   looping: string[]
+  projects: ProjectSummary[]
+  switchingProject: boolean
+  /** Which Console features this project can offer, by console-role coverage. */
+  capabilities: Record<string, boolean>
 }
 
 const api = {
@@ -92,6 +96,8 @@ const api = {
 
   pickRepo: (): Promise<RepoState> => ipcRenderer.invoke('repo:pick'),
   setRepo: (path: string): Promise<RepoState> => ipcRenderer.invoke('repo:set', path),
+  listProjects: (): Promise<ProjectSummary[]> => ipcRenderer.invoke('projects:list'),
+  switchProject: (id: string): Promise<RepoState> => ipcRenderer.invoke('projects:switch', id),
 
   generatePreview: (path?: string): Promise<GenerateReport> =>
     ipcRenderer.invoke('descriptor:generatePreview', path),

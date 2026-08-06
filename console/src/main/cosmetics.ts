@@ -19,14 +19,20 @@ export interface Counts {
   daily: Record<string, number>
 }
 
-// Derive the backend API base from the descriptor's claims API (…/claims -> …), falling
-// back to the public shop when a repo has no claims URL configured.
-function apiBase(claimsApi?: string | null): string {
+// Derive the backend API base from the descriptor's claims API (…/claims -> …).
+//
+// NO FALLBACK ON PURPOSE. A backend serves exactly one project: tangos.dev/api answers
+// /atlas, /counts, /progress and /live for sm64ds and nothing else. Defaulting a repo with
+// no claimsApi to that base painted the wrong project's contributor colors, stars, career
+// counts and live match feed onto its atlas. A project without a backend gets no cosmetics,
+// which is honest; it does not get somebody else's.
+function apiBase(claimsApi?: string | null): string | null {
   if (claimsApi && /\/claims\/?$/.test(claimsApi)) return claimsApi.replace(/\/claims\/?$/, '')
-  return 'https://tangos.dev/api'
+  return null
 }
-export function cosmeticsUrl(claimsApi?: string | null): string {
-  return `${apiBase(claimsApi)}/cosmetics`
+export function cosmeticsUrl(claimsApi?: string | null): string | null {
+  const base = apiBase(claimsApi)
+  return base && `${base}/cosmetics`
 }
 
 let cache: { url: string; at: number; value: Cosmetics } | null = null
@@ -54,6 +60,7 @@ function parse(raw: unknown): Cosmetics {
  *  returns the last-known copy (or empty), never throws - cosmetics are decoration. */
 export async function fetchCosmetics(claimsApi?: string | null): Promise<Cosmetics> {
   const url = cosmeticsUrl(claimsApi)
+  if (!url) return { colors: {}, stars: [] }
   if (cache?.url === url && Date.now() - cache.at < TTL_MS) return cache.value
   try {
     const ac = new AbortController()
@@ -78,11 +85,13 @@ export async function fetchCosmetics(claimsApi?: string | null): Promise<Cosmeti
  *  current to within seconds. Null when the backend has no data yet (cold start), so the
  *  caller can fall back to the published file. */
 export async function fetchAtlas(claimsApi?: string | null): Promise<unknown | null> {
+  const base = apiBase(claimsApi)
+  if (!base) return null
   try {
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), 20000)
     try {
-      const res = await fetch(`${apiBase(claimsApi)}/atlas`, { signal: ac.signal })
+      const res = await fetch(`${base}/atlas`, { signal: ac.signal })
       if (!res.ok) return null
       const j = (await res.json()) as { ready?: boolean; functions?: unknown[] }
       return j?.ready && Array.isArray(j.functions) && j.functions.length ? j : null
@@ -109,11 +118,13 @@ export async function fetchProgress(claimsApi?: string | null): Promise<LiveProg
     stats: { totalFunctions: 0, matchedFunctions: 0, totalBytes: 0, matchedBytes: 0 },
     matched: []
   }
+  const base = apiBase(claimsApi)
+  if (!base) return empty
   try {
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), 15000)
     try {
-      const res = await fetch(`${apiBase(claimsApi)}/progress`, { signal: ac.signal })
+      const res = await fetch(`${base}/progress`, { signal: ac.signal })
       if (res.ok) {
         const j = (await res.json()) as Partial<LiveProgress>
         if (j.ready && j.stats) return { ready: true, stats: j.stats, matched: j.matched ?? [] }
@@ -130,11 +141,13 @@ export async function fetchProgress(claimsApi?: string | null): Promise<LiveProg
 /** Contributor match numbers from the backend: career totals + matches today (the
  *  recent-activity badge). Best-effort; empty on failure. */
 export async function fetchCounts(claimsApi?: string | null): Promise<Counts> {
+  const base = apiBase(claimsApi)
+  if (!base) return { totals: {}, daily: {} }
   try {
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), 8000)
     try {
-      const res = await fetch(`${apiBase(claimsApi)}/counts`, { signal: ac.signal })
+      const res = await fetch(`${base}/counts`, { signal: ac.signal })
       if (res.ok) {
         const j = (await res.json()) as Partial<Counts>
         return { totals: j.totals ?? {}, daily: j.daily ?? {} }
@@ -161,9 +174,17 @@ export function connectAtlasLive(
 
   async function loop(): Promise<void> {
     while (!stopped) {
+      const base = apiBase(getClaimsApi())
+      if (!base) {
+        // This project publishes no backend. Park rather than streaming somebody else's
+        // events, and re-check on the same cadence so a switch to a project that HAS one
+        // picks the stream up without a restart.
+        await new Promise((r) => setTimeout(r, 3000))
+        continue
+      }
       controller = new AbortController()
       try {
-        const res = await fetch(`${apiBase(getClaimsApi())}/live`, {
+        const res = await fetch(`${base}/live`, {
           headers: { Accept: 'text/event-stream' },
           signal: controller.signal
         })

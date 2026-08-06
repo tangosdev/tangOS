@@ -125,6 +125,39 @@
         }
       }
     },
+    "console": {
+      "type": "object",
+      "description": "Which of this repo's tools fill the jobs tangOS Console drives. Every value is a tool id from this descriptor's own tools[]. All optional: a repo that fills none still gets the Viewer, the tool catalog and MCP, it just doesn't offer the parts it has no tool for. Console falls back to the historical sm64ds ids (coddog / refine_wl / worklist / match / log_attempt) for any role left unset, so descriptors written before this block keep working.",
+      "additionalProperties": false,
+      "properties": {
+        "scheduler": {
+          "type": "string",
+          "description": "Ranks unmatched functions and writes a worklist. Without this (or any read-only tool taking `out` and `limit`) Console cannot generate batches."
+        },
+        "refineScheduler": {
+          "type": "string",
+          "description": "Scheduler for the Refiner role: near-misses that already carry a draft."
+        },
+        "randomScheduler": {
+          "type": "string",
+          "description": "Scheduler for the Random role: any unmatched function, no similarity bias. Usually streams JSONL to stdout rather than taking an `out` arg."
+        },
+        "enrich": {
+          "type": "string",
+          "description": "Expands one target into a full worklist row, given `module` and `addr` values. Used for functions hand-picked in the Viewer, which the scheduler never produced."
+        },
+        "driver": {
+          "type": "string",
+          "description": "Runs an agent over a worklist via an API key. Receives `wl`, `out`, `jobs` and `attempts` values."
+        },
+        "land": {
+          "type": "string",
+          "description": "Banks a finished drive: matched sources into src/, near-misses into the draft store. Receives `out` and `wl` values."
+        },
+        "logAttempt": { "type": "string", "description": "Appends to the attempt log." },
+        "verify": { "type": "string", "description": "Verifies one candidate against the ROM. The merge gate." }
+      }
+    },
     "tools": {
       "type": "array",
       "description": "The repo's tool registry. Each entry becomes one MCP tool in Console and one card in Docs.",
