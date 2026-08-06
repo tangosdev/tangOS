@@ -3689,13 +3689,17 @@ async function driveBatch(agentName: string): Promise<void> {
             label: `Land ${agentName} matches`,
             category: 'matching',
             readOnly: false,
-            command: `{python} tools/crackloop.py land --output {out} --wl {wl}${
-              projectEnv().CLAIMS_API_KEY || process.env.CLAIMS_API_KEY ? '' : ' --no-claims'
-            }`
+            command: '{python} tools/crackloop.py land --output {out} --wl {wl} {flags}',
+            args: [{ name: 'no_claims', type: 'boolean', flag: '--no-claims' }]
           }
+      // Whether to claim is CONSOLE's call, not the tool's - only we know whether a usable claims
+      // key exists for this project. Passed as a value so a declared land tool gets the same
+      // decision; baking it into the fallback's command string meant a repo that declared its own
+      // land tool silently always attempted to claim.
+      const noClaims = !(projectEnv().CLAIMS_API_KEY || process.env.CLAIMS_API_KEY)
       const landRes = await runTool({
         tool: landTool,
-        values: { out: outPath, wl },
+        values: { out: outPath, wl, no_claims: noClaims },
         runtime: currentRuntime(),
         repoPath: repo,
         source: 'ai',
