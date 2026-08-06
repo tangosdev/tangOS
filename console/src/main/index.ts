@@ -1707,13 +1707,27 @@ function projectTitleFor(id: string | null): string {
   return persistedProjects[id]?.title || projectById(id)?.title || id
 }
 
+/** Where a project's clone is, if we can find one. The remembered path wins; failing that, look
+ *  for the repo beside the one that's already open. People keep their decomps in one folder, so a
+ *  sibling checkout is worth finding rather than offering to clone a repo the user already has. */
+function resolveProjectPath(id: string, entry?: ProjectEntry): string | null {
+  const remembered = persistedProjects[id]?.path
+  if (remembered && existsSync(join(remembered, DESCRIPTOR_FILENAME))) return remembered
+  const repoName = entry && slugOf(entry.github)?.split('/')[1]
+  const parent = state.repoPath && dirname(state.repoPath)
+  if (!repoName || !parent) return null
+  const guess = join(parent, repoName)
+  if (!existsSync(join(guess, DESCRIPTOR_FILENAME))) return null
+  // Only claim it if it really IS this project - a same-named folder could be anything.
+  return identifyProject(guess, loadDescriptor(guess).descriptor) === id ? guess : null
+}
+
 /** Every project the switcher can offer: the built-in registry, plus any hand-picked folder that
- *  has its own settings slot, with the remembered clone path re-verified. */
+ *  has its own settings slot, with the clone path re-verified. */
 function listProjects(): ProjectSummary[] {
   const rows: ProjectSummary[] = []
   const add = (id: string, entry?: ProjectEntry): void => {
-    const slot = persistedProjects[id]
-    const path = slot?.path && existsSync(join(slot.path, DESCRIPTOR_FILENAME)) ? slot.path : null
+    const path = resolveProjectPath(id, entry)
     rows.push({
       id,
       title: projectTitleFor(id),
@@ -2839,9 +2853,7 @@ ipcMain.handle('repo:set', (_e, path: string) => openRepoPath(path))
 ipcMain.handle('projects:list', (): ProjectSummary[] => listProjects())
 
 ipcMain.handle('projects:switch', async (_e, id: string): Promise<RepoState> => {
-  const slot = persistedProjects[id]
-  const path = slot?.path && looksLikeRepo(slot.path) ? slot.path : null
-  return switchProject(id, path)
+  return switchProject(id, resolveProjectPath(id, projectById(id)))
 })
 
 ipcMain.handle('descriptor:generatePreview', (_e, path?: string) => {
