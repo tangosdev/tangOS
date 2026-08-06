@@ -141,6 +141,38 @@ export interface GithubCredits {
   prAuthors: string[]
 }
 
+/**
+ * Which of this repo's tools fill the jobs Console drives.
+ *
+ * Console needs a handful of specific capabilities to run its Controller: something to pick the
+ * next targets, something to enrich one, something to drive an agent over them, something to land
+ * the result. It used to find them by assuming sm64ds's tool ids and file paths, which meant a
+ * project could declare a complete, correct toolchain and still not work.
+ *
+ * Every field is a tool id from this descriptor's own `tools[]`. Nothing here is required: a repo
+ * that fills none still gets the Viewer, the tool catalog and MCP; it just doesn't offer the parts
+ * it has no tool for. Repos predating this block keep working - Console falls back to the old id
+ * convention (coddog / refine_wl / worklist / match / log_attempt) when a role is unset.
+ */
+export interface TangosConsoleRoles {
+  /** Ranks unmatched functions and writes a worklist. Drives batch generation. */
+  scheduler?: string
+  /** Scheduler for the Refiner role: near-misses that already carry a draft. */
+  refineScheduler?: string
+  /** Scheduler for the Random role: any unmatched function, no similarity bias. */
+  randomScheduler?: string
+  /** Expands one target (by module + address) into a full worklist row. */
+  enrich?: string
+  /** Runs an agent over a worklist via an API key. */
+  driver?: string
+  /** Banks a finished drive: matched sources in, near-misses ingested. */
+  land?: string
+  /** Appends to the attempt log. */
+  logAttempt?: string
+  /** Verifies one candidate against the ROM. The merge gate. */
+  verify?: string
+}
+
 export interface TangosDescriptor {
   tangosVersion: string
   project: TangosProject
@@ -148,6 +180,7 @@ export interface TangosDescriptor {
   requirements?: TangosRequirements
   data?: TangosData
   categories?: TangosCategory[]
+  console?: TangosConsoleRoles
   tools: TangosTool[]
 }
 

@@ -26,6 +26,8 @@ type FullState = {
   looping: string[]
   projects: ProjectSummary[]
   switchingProject: boolean
+  /** Which Console features this project can offer, by console-role coverage. */
+  capabilities: Record<string, boolean>
 }
 
 interface RegisterOutcome {

@@ -82,6 +82,7 @@ export default function App(): JSX.Element {
   })
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [switchingProject, setSwitchingProject] = useState(false)
+  const [capabilities, setCapabilities] = useState<Record<string, boolean>>({})
   const [splashKey, setSplashKey] = useState(0)
   const popRef = useDismiss<HTMLDivElement>(mcpOpen, () => setMcpOpen(false))
   const settingsRef = useDismiss<HTMLDivElement>(settingsOpen, () => setSettingsOpen(false))
@@ -127,6 +128,7 @@ export default function App(): JSX.Element {
       setAutoPush(st.autoPush)
       setLooping(st.looping)
       setProjects(st.projects ?? [])
+      setCapabilities(st.capabilities ?? {})
       setSwitchingProject(!!st.switchingProject)
       setTourSeen(st.tourSeen)
       setUpdateNoteSeen(st.updateNoteSeen)
@@ -149,6 +151,7 @@ export default function App(): JSX.Element {
       setAutoPush(s.autoPush)
       setLooping(s.looping)
       setProjects(s.projects ?? [])
+      setCapabilities(s.capabilities ?? {})
       setSwitchingProject(!!s.switchingProject)
       setTourSeen(s.tourSeen)
       setUpdateNoteSeen(s.updateNoteSeen)
@@ -336,6 +339,7 @@ export default function App(): JSX.Element {
         runs={runs}
         batches={batches}
         looping={looping}
+        capabilities={capabilities}
         cartCount={cart.length}
         onAssignCart={assignCart}
         onClearCart={() => setCart([])}

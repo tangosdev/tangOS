@@ -70,6 +70,7 @@ export default function Controller({
   batches,
   looping,
   cartCount,
+  capabilities,
   onAssignCart,
   onClearCart,
   onOpenViewer,
@@ -87,6 +88,8 @@ export default function Controller({
   batches: Batch[]
   looping: string[]
   cartCount: number
+  /** Which Console jobs this project's tools can actually do (see descriptor.console). */
+  capabilities: Record<string, boolean>
   onAssignCart: (agent: string) => void
   onClearCart: () => void
   onOpenViewer: () => void
@@ -477,12 +480,14 @@ export default function Controller({
                         </button>
                         <button
                           className="mini-btn"
-                          disabled={generating}
+                          disabled={generating || !capabilities.schedule}
                           onClick={() => assign(a.name, a.roles[0])}
                           title={
-                            loopSel
-                              ? 'Start matching: this AI keeps pulling role-fit batches and working them until stopped'
-                              : 'Generate a role-fit batch of this size and add it to the queue - press again to line up more'
+                            !capabilities.schedule
+                              ? "This project has no worklist scheduler yet, so there's nothing to build a batch from. Declare one in tangos.json under console.scheduler."
+                              : loopSel
+                                ? 'Start matching: this AI keeps pulling role-fit batches and working them until stopped'
+                                : 'Generate a role-fit batch of this size and add it to the queue - press again to line up more'
                           }
                         >
                           <Sparkles size={12} />{' '}

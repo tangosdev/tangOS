@@ -17,7 +17,7 @@ import { loadDescriptor, validateDescriptor, DESCRIPTOR_FILENAME } from './descr
 import { PROJECTS, projectBySlug, projectById, slugOf, customIdFor, descriptorUrlFor, type ProjectEntry } from '../shared/projects'
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
 import { registerAll, cliCommand } from './connect'
-import { runTool } from './runTool'
+import { runTool, renderArgv } from './runTool'
 import { preflight } from './preflight'
 import { readAtlas } from './atlas'
 import { deriveClaimsUrl, fetchHeldClaims, overlayClaims } from './claims'
@@ -48,7 +48,7 @@ import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
   Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
-  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs, ProjectSummary
+  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs, ProjectSummary, TangosConsoleRoles
 } from '../shared/types'
 
 const DEFAULT_PORT = 4808
@@ -1343,6 +1343,61 @@ function projectEnv(): Record<string, string> {
   return secretsEnvFor(state.descriptor?.runtime?.envKeys)
 }
 
+// ---- Console roles -----------------------------------------------------------------------------
+// The Controller needs certain jobs done - pick targets, enrich one, drive an agent over them, land
+// the result - and used to find the tools for them by assuming sm64ds's ids and file paths. A repo
+// that named its equivalents anything else got "this repo has no similarity scheduler" despite
+// shipping a complete toolchain. Roles are declared per repo in descriptor.console; these ids are
+// the fallback, so every descriptor written before that block keeps working untouched.
+const LEGACY_ROLE_IDS: Record<keyof TangosConsoleRoles, string> = {
+  scheduler: 'coddog',
+  refineScheduler: 'refine_wl',
+  randomScheduler: 'worklist',
+  enrich: 'worklist',
+  driver: 'glm_refine',
+  land: 'crackloop_land',
+  logAttempt: 'log_attempt',
+  verify: 'match'
+}
+
+/** The tool filling a role: what the repo declared, else the legacy id. */
+function roleTool(role: keyof TangosConsoleRoles): TangosTool | undefined {
+  const tools = state.descriptor?.tools
+  if (!tools?.length) return undefined
+  const declared = state.descriptor?.console?.[role]
+  if (declared) return tools.find((t) => t.id === declared)
+  return tools.find((t) => t.id === LEGACY_ROLE_IDS[role])
+}
+
+/** A scheduler can also be duck-typed: any read-only tool taking `out` and `limit` writes a
+ *  worklist whatever it is called. Kept from genDraft's original fallback chain. */
+function duckSchedulerTool(): TangosTool | undefined {
+  return state.descriptor?.tools?.find(
+    (t) => t.readOnly && t.args?.some((a) => a.name === 'out') && t.args?.some((a) => a.name === 'limit')
+  )
+}
+
+/** What Console can actually offer for this project, so the UI can say a project has no scheduler
+ *  rather than throwing that out of a button press.
+ *
+ *  drive and land also count the legacy synthesized commands: those are real capabilities on a repo
+ *  laid out like sm64ds even though nothing declares them, so reporting them missing there would be
+ *  wrong. Checking the script is actually present keeps the answer honest either way. */
+function consoleCapabilities(): Record<string, boolean> {
+  const hasScript = (rel: string): boolean => !!state.repoPath && existsSync(join(state.repoPath, rel))
+  return {
+    schedule: !!(roleTool('scheduler') ?? duckSchedulerTool()),
+    refine: !!roleTool('refineScheduler'),
+    random: !!roleTool('randomScheduler'),
+    enrich: !!roleTool('enrich'),
+    drive: !!roleTool('driver') || hasScript('tools/glm_refine.py'),
+    land: !!roleTool('land') || hasScript('tools/crackloop.py'),
+    logAttempt: !!roleTool('logAttempt'),
+    verify: !!roleTool('verify'),
+    generate: !!state.descriptor?.data?.generate
+  }
+}
+
 // Each agent's assigned role + reasoning effort, for the ACTIVE project. These stay plain
 // module-level maps so every read site (roleForName, agentsSnapshot, the driver env, the IPC
 // setters) is untouched by project scoping; snapshotActiveProject/loadProjectScoped swap what
@@ -1944,7 +1999,8 @@ function fullState() {
     autoPush: { enabled: state.autoPushEnabled, on: autoPushActive(), ...autoPushStatus },
     looping: [...agentLoop],
     projects: listProjects(),
-    switchingProject
+    switchingProject,
+    capabilities: consoleCapabilities()
   }
 }
 
@@ -2352,7 +2408,10 @@ function maybeRegenChaosDb(repoPath: string): void {
   try {
     const rel = state.descriptor?.data?.dbPath || 'chaos-db.json'
     const dbFile = isAbsolute(rel) ? rel : join(repoPath, rel)
-    if (!existsSync(dbFile) || !existsSync(join(repoPath, 'tools/chaos_db_ci.py'))) return
+    // data.generate is how a repo says how to rebuild its atlas. Probing for a literal
+    // tools/chaos_db_ci.py meant a repo that declared a perfectly good generate command still
+    // never got a background refresh.
+    if (!existsSync(dbFile) || !state.descriptor?.data?.generate) return
     const dbAt = statSync(dbFile).mtimeMs
     const newest = (...paths: string[]): number =>
       Math.max(0, ...paths.map((p) => (existsSync(p) ? statSync(p).mtimeMs : 0)))
@@ -2364,12 +2423,18 @@ function maybeRegenChaosDb(repoPath: string): void {
     return
   }
   chaosRegenRunning = true
-  const py = currentRuntime().python || 'python'
-  const child = spawn(
-    py,
-    ['tools/chaos_db_ci.py', '--out', 'chaos-db.json', '--contrib-out', 'contributions.json'],
-    { cwd: repoPath, env: { ...process.env, PYTHONUTF8: '1' } }
-  )
+  // Render the repo's own generate command rather than assuming a script name.
+  const rt = currentRuntime()
+  const genTool: TangosTool = {
+    id: 'atlas_generate',
+    readOnly: false,
+    command: state.descriptor!.data!.generate!
+  }
+  const { argv } = renderArgv(genTool, { out: state.descriptor?.data?.dbPath || 'chaos-db.json' }, rt, false)
+  const child = spawn(argv[0], argv.slice(1), {
+    cwd: repoPath,
+    env: { ...process.env, PYTHONUTF8: '1' }
+  })
   child.on('error', () => {
     chaosRegenRunning = false
   })
@@ -2591,26 +2656,29 @@ ipcMain.handle('atlas:generate', async () => {
 //  - Refiner      -> the near-miss refine pile (stage 2: drafts -> matches)
 //  - Random       -> any unmatched function, uniformly at random
 //  - default/none -> plain similarity scheduler (same pool as Drafter)
-function genPlanFor(role: string | undefined, count: number): { schedId: string; values: Record<string, unknown> } {
+function genPlanFor(
+  role: string | undefined,
+  count: number
+): { role: keyof TangosConsoleRoles; values: Record<string, unknown> } {
   switch (role) {
     case 'Hard matcher':
-      // The big/hard functions - min-size floor so coddog only surfaces meaty targets.
-      return { schedId: 'coddog', values: { limit: count, min: '0x200' } }
+      // The big/hard functions - min-size floor so the scheduler only surfaces meaty targets.
+      return { role: 'scheduler', values: { limit: count, min: '0x200' } }
     case 'Drafter':
-      // Stage 1: unmatched functions with a similar matched sibling to adapt into a draft. Plain
-      // coddog (similarity-anchored) - same pool as the default, framed as draft production.
-      return { schedId: 'coddog', values: { limit: count } }
+      // Stage 1: unmatched functions with a similar matched sibling to adapt into a draft. The plain
+      // similarity-anchored scheduler - same pool as the default, framed as draft production.
+      return { role: 'scheduler', values: { limit: count } }
     case 'Refiner':
       // Stage 2: near-misses that already carry a draft. include_attempted so a driven refiner keeps
-      // working the pool instead of drying up to ~1 target once refine_wl's ledger has seen it all.
-      return { schedId: 'refine_wl', values: { limit: count, include_attempted: true } }
+      // working the pool instead of drying up to ~1 target once the ledger has seen it all.
+      return { role: 'refineScheduler', values: { limit: count, include_attempted: true } }
     case 'Random':
-      // Pull ANY unmatched function at random - any size, no similarity/easy bias. worklist --random
+      // Pull ANY unmatched function at random - any size, no similarity/easy bias. --random
       // reshuffles every run, so an infinite loop re-rolls a fresh set each batch (see genDraft's loop
       // re-assign). Streams JSONL to stdout (no `out` arg) - genDraft reads that channel below.
-      return { schedId: 'worklist', values: { random: true, limit: count } }
+      return { role: 'randomScheduler', values: { random: true, limit: count } }
     default:
-      return { schedId: 'coddog', values: { limit: count } }
+      return { role: 'scheduler', values: { limit: count } }
   }
 }
 /** Sensible default batch size per role (Hard matcher is heavy -> fewer targets per batch). */
@@ -2649,7 +2717,7 @@ async function liveDoneSets(): Promise<{ matched: Set<string>; noMatch: Set<stri
 async function fetchRandomTopUp(limit: number): Promise<string[]> {
   if (!state.repoPath || !state.descriptor) return []
   const plan = genPlanFor('Random', limit)
-  const tool = state.descriptor.tools.find((t) => t.id === plan.schedId)
+  const tool = roleTool(plan.role)
   if (!tool) return []
   try {
     const res = await runTool({
@@ -2681,14 +2749,14 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   // upstream (see the liveDone filter below), so budget for that drop instead of landing short.
   const liveDropBudget = state.descriptor.data?.committedDbUrl ? count * 2 : 0
   const plan = genPlanFor(role, count + taken.size + Math.max(count, 16) + liveDropBudget)
-  // The planned scheduler, falling back to coddog, then any read-only limit+out tool.
-  const sched =
-    state.descriptor.tools.find((t) => t.id === plan.schedId) ??
-    state.descriptor.tools.find((t) => t.id === 'coddog') ??
-    state.descriptor.tools.find(
-      (t) => t.readOnly && t.args?.some((a) => a.name === 'out') && t.args?.some((a) => a.name === 'limit')
+  // The role this plan wants, falling back to the default scheduler, then any read-only limit+out
+  // tool. A repo names its own tools for these in descriptor.console.
+  const sched = roleTool(plan.role) ?? roleTool('scheduler') ?? duckSchedulerTool()
+  if (!sched) {
+    throw new Error(
+      `${state.descriptor.project.title} has no worklist scheduler. Declare one in tangos.json under console.scheduler.`
     )
-  if (!sched) throw new Error('this repo has no similarity scheduler (coddog) in tangos.json')
+  }
   // Most schedulers (coddog/refine_wl) write their worklist JSONL to a temp `out` file; some
   // (worklist, for the Random role) stream it to stdout and take no `out` arg. Detect which so
   // we read the right channel and never hand a tool an `out` flag it would reject.
@@ -3147,36 +3215,48 @@ ipcMain.handle('batch:clearQueue', (_e, agentName: string) => {
   return state.batches
 })
 
-/** Fetch one target's full enriched worklist row (disasm/callees/pool) via `worklist --addr`, for
- *  batch targets coddog didn't produce (e.g. functions picked in the Atlas). Returns the JSONL row
- *  string, or null if the repo has no worklist tool / the target can't be located. Quiet: spawns
- *  python directly rather than through runTool, so it never clutters the live viewer. */
+/** Fetch one target's full enriched worklist row (disasm/callees/pool) from the `enrich` role, for
+ *  batch targets the scheduler didn't produce (e.g. functions picked in the Atlas). Returns the
+ *  JSONL row string, or null if the repo fills no enrich role / the target can't be located. Quiet:
+ *  spawns directly rather than through runTool, so it never clutters the live viewer. */
 async function enrichTarget(item: BatchItem): Promise<string | null> {
   const repo = state.repoPath
   if (!repo || item.addr == null || !item.module) return null
-  if (!state.descriptor?.tools?.some((t) => t.id === 'worklist')) return null
-  const py = currentRuntime().python || 'python'
+  const tool = roleTool('enrich')
+  if (!tool) return null
   const addr = '0x' + item.addr.toString(16).padStart(8, '0')
+  // Built from the tool's own declared args, so a repo whose enrich tool takes different flags (or
+  // none of the tuning ones) still gets a correct command. Values for args it doesn't declare are
+  // dropped by renderArgv.
+  //
+  // max disables the scheduler's default 0x200 (512-byte) size filter: when we pin the exact
+  // function by addr we want THAT function whatever its size, else every pick over 512 bytes is
+  // silently dropped ("none of this batch's targets could be enriched").
+  //
+  // examples 0 skips the scan of every already-matched function for similar siblings (the
+  // "similarity roll"). Only hand-picked targets reach here - the scheduler's are pre-enriched and
+  // cached in enrichedRows - and a hand-pick has already chosen its target, so the sibling few-shot
+  // is dead weight. It was ~40% of the runtime (10s -> 6s) and pushed a single pick close to the
+  // timeout under load, the "custom function won't drive" symptom. The row still carries
+  // disasm/callees/signatures/pool/target bytes: everything needed to match.
+  const { argv } = renderArgv(
+    tool,
+    { module: item.module, addr, max: '0xffffff', examples: 0 },
+    currentRuntime(),
+    false
+  )
+  const py = argv[0]
+  const rest = argv.slice(1)
   const out = await new Promise<string>((resolve) => {
     let buf = ''
     try {
-      // --max 0xffffff disables worklist.py's default 0x200 (512-byte) size filter: when we pin the
-      // exact function by --addr we want THAT function whatever its size, else every pick over 512
-      // bytes is silently dropped ("none of this batch's targets could be enriched").
-      //
-      // --examples 0 skips build_example_index, the scan of every already-matched function for
-      // similar siblings (the "similarity roll"). Only hand-picked targets reach here -- coddog's
-      // are pre-enriched and cached in enrichedRows -- and a hand-pick has already chosen its target,
-      // so the sibling few-shot is dead weight. It was ~40% of the runtime (10s -> 6s) and pushed a
-      // single pick close to the timeout under load, the "custom function won't drive" symptom. The
-      // row still carries disasm/callees/signatures/pool/target bytes: everything needed to match.
-      const c = spawn(py, ['tools/worklist.py', '--module', item.module!, '--addr', addr, '--max', '0xffffff', '--examples', '0'], {
+      const c = spawn(py, rest, {
         cwd: repo,
         env: { ...process.env, ...projectEnv() }
       })
       // Hard cap: never let one slow/hung target wedge the whole drive. Kill + skip it after 45s.
       // Enrichment is ~6s warm; 45s leaves headroom for a cold cache or a loaded machine without
-      // wedging the drive if worklist genuinely hangs.
+      // wedging the drive if the tool genuinely hangs.
       const timer = setTimeout(() => {
         try { c.kill() } catch { /* already gone */ }
         resolve('')
@@ -3396,13 +3476,18 @@ async function driveBatch(agentName: string): Promise<void> {
   const wl = join(driveDir, `${slug}.worklist.jsonl`)
   const outPath = join(driveDir, `${slug}.results.output`)
   writeFileSync(wl, rows.join('\n'))
-  const tool: TangosTool = {
-    id: 'glm_refine',
-    label: `Drive ${agentName}`,
-    category: 'matching',
-    readOnly: false,
-    command: '{python} tools/glm_refine.py --wl {wl} --out {out} --jobs {jobs} --attempts {attempts}'
-  }
+  // The repo's declared driver. Falls back to sm64ds's layout for descriptors written before
+  // console roles existed; a repo that declares console.driver gets its own tool run instead.
+  const declaredDriver = roleTool('driver')
+  const tool: TangosTool = declaredDriver
+    ? { ...declaredDriver, label: `Drive ${agentName}` }
+    : {
+        id: 'glm_refine',
+        label: `Drive ${agentName}`,
+        category: 'matching',
+        readOnly: false,
+        command: '{python} tools/glm_refine.py --wl {wl} --out {out} --jobs {jobs} --attempts {attempts}'
+      }
   // Max match attempts per function: the agent box's override, else the console default (4). glm_refine's
   // own default is higher, but a from-scratch batch rarely improves past a few tries, so 4 caps spend.
   const attempts = agentAttempts[agentName] ?? DEFAULT_ATTEMPTS
@@ -3586,23 +3671,28 @@ async function driveBatch(agentName: string): Promise<void> {
       return
     }
     if (state.autoLand && (landed.length || nearMissNames.length)) {
-      const landTool: TangosTool = {
-        id: 'crackloop_land',
-        label: `Land ${agentName} matches`,
-        category: 'matching',
-        readOnly: false,
-        // --no-claims only when we have no key to claim WITH. It was hardcoded on because the
-        // claims key had expired, which quietly turned off the one mechanism that tells other
-        // contributors what this console is working on - two of them ground the same overlay
-        // for a day before anyone noticed. With a key present, let crackloop lock the ranges.
-        //
-        // Read the key through projectEnv, not the whole vault: a claims key belongs to the
-        // project whose board it writes to. Seeing another project's key here would claim THIS
-        // project's address ranges on THAT project's board, which we cannot take back.
-        command: `{python} tools/crackloop.py land --output {out} --wl {wl}${
-          projectEnv().CLAIMS_API_KEY || process.env.CLAIMS_API_KEY ? '' : ' --no-claims'
-        }`
-      }
+      // The repo's declared land step, falling back to sm64ds's layout for pre-roles descriptors.
+      //
+      // --no-claims only when we have no key to claim WITH. It was hardcoded on because the
+      // claims key had expired, which quietly turned off the one mechanism that tells other
+      // contributors what this console is working on - two of them ground the same overlay
+      // for a day before anyone noticed. With a key present, let it lock the ranges.
+      //
+      // Read the key through projectEnv, not the whole vault: a claims key belongs to the
+      // project whose board it writes to. Seeing another project's key here would claim THIS
+      // project's address ranges on THAT project's board, which we cannot take back.
+      const declaredLand = roleTool('land')
+      const landTool: TangosTool = declaredLand
+        ? { ...declaredLand, label: `Land ${agentName} matches` }
+        : {
+            id: 'crackloop_land',
+            label: `Land ${agentName} matches`,
+            category: 'matching',
+            readOnly: false,
+            command: `{python} tools/crackloop.py land --output {out} --wl {wl}${
+              projectEnv().CLAIMS_API_KEY || process.env.CLAIMS_API_KEY ? '' : ' --no-claims'
+            }`
+          }
       const landRes = await runTool({
         tool: landTool,
         values: { out: outPath, wl },
