@@ -318,7 +318,7 @@ function agentSlug(name?: string): string {
  *  MCP `match` tool's target). We deliberately do NOT sweep all of `changedSrcFiles`: the working
  *  tree accumulates near-miss .c files (the refine pool) and other ambient untracked sources, and
  *  blindly grabbing them is what pushed 68 non-matching files into a "matched functions" PR. Each
- *  matched function is mapped to whichever of src/<name>.c|.cpp actually changed - nothing else. */
+ *  matched function is mapped to whichever changed src file carries its name - nothing else. */
 async function noteMatchAndPush(
   agentName: string | undefined,
   matchedFuncs: Iterable<string>
@@ -327,11 +327,14 @@ async function noteMatchAndPush(
   const slug = agentSlug(agentName)
   const mine = pendingByAgent.get(slug) ?? new Set<string>()
   try {
-    const changed = new Set(await changedSrcFiles(state.repoPath))
+    const changed = await changedSrcFiles(state.repoPath)
     for (const func of matchedFuncs) {
       if (!func) continue
-      for (const cand of [`src/${func}.c`, `src/${func}.cpp`]) {
-        if (!changed.has(cand) || baselineDirtySrc.has(cand)) continue // absent, or pre-existing dirt
+      // The file lives wherever this repo's layout puts it (sm64ds: src/<name>.c, pictochat:
+      // src/arm9/<name>.c) - match by basename anywhere under src/, not one hardcoded flat path.
+      for (const cand of changed) {
+        if (!cand.endsWith(`/${func}.c`) && !cand.endsWith(`/${func}.cpp`)) continue
+        if (baselineDirtySrc.has(cand)) continue // pre-existing dirt, not this session's match
         const owner = claimedFiles.get(cand)
         if (!owner) {
           claimedFiles.set(cand, slug)
@@ -688,7 +691,7 @@ async function runStrandedSweep(): Promise<void> {
       priorHarvestSurfaced = true
       await surfacePriorHarvests(repo)
     }
-    const dirty = (await changedSrcFiles(repo)).filter((f) => /^src\/[^/]+\.(c|cpp)$/.test(f))
+    const dirty = (await changedSrcFiles(repo)).filter((f) => /^src\/.+\.(c|cpp)$/.test(f))
     if (!dirty.length) return
     const base = await defaultBranch(repo)
     await fetchBase(repo, base)
@@ -724,7 +727,7 @@ async function runStrandedSweep(): Promise<void> {
         report('strandedSweep', { event: 'capped', checked, skipped: candidates.length - checked })
         break
       }
-      const func = f.replace(/^src\//, '').replace(/\.(c|cpp)$/, '')
+      const func = f.replace(/^.*\//, '').replace(/\.(c|cpp)$/, '') // basename: nested layouts (src/arm9/<name>.c) name-key the same
       const m = meta.get(func)
       if (!m?.addr || !m?.size) continue
       // Skip a candidate whose bytes are unchanged since we last compiled it - re-verifying identical
@@ -1539,9 +1542,9 @@ function saveSettings(): void {
         viewerPrefs,
         bgPrefs,
         matchingPrefs,
-        // Whether the MCP server is on RIGHT NOW = whether the user last left it on. The next
-        // launch auto-starts it (update restarts kept killing agents' connection point).
-        mcpRunning: !!mcp.url
+        // The user's on/off INTENT, not the instantaneous server state - a boot-time save must
+        // not clobber the auto-start flag before the server has come up (see mcpDesired).
+        mcpRunning: mcpDesired
       })
     )
   } catch {
@@ -1603,6 +1606,12 @@ function migrateSettings(saved: ReturnType<typeof loadSettings>): ReturnType<typ
     }
   }
 }
+
+// The PERSISTED on/off intent for the MCP server. Saving `!!mcp.url` instead used to let any
+// boot-time save (migration, project hydrate) persist "off" in the window before the auto-start
+// brought the server up, so auto-start survived exactly one restart. Only an explicit Start/Stop
+// (or the loaded setting itself) moves this; a quiesce during a project switch does not.
+let mcpDesired = false
 
 const mcp = new McpManager(() => ({
   descriptor: state.descriptor!,
@@ -3057,12 +3066,14 @@ async function startMcpServer(): Promise<void> {
 
 ipcMain.handle('mcp:start', async () => {
   await startMcpServer()
+  mcpDesired = true
   saveSettings() // remember the server is ON, so the next launch (e.g. an update restart) resumes it
   return mcpState()
 })
 
 ipcMain.handle('mcp:stop', async () => {
   await mcp.stop()
+  mcpDesired = false
   saveSettings() // user turned it OFF - don't resurrect it next launch
   pushState()
   return mcpState()
@@ -4384,6 +4395,7 @@ app.whenReady().then(() => {
   if (bootPath && looksLikeRepo(bootPath)) setRepo(bootPath)
   // The MCP server was on when the app last closed (including an update's restart) - bring it
   // back up so connected agents' endpoint comes back without the human re-clicking Start.
+  mcpDesired = !!saved.mcpRunning // the intent survives even if the start below fails (retry next boot)
   if (saved.mcpRunning && state.descriptor && state.validationErrors.length === 0) {
     void startMcpServer().catch(() => {
       /* port taken or repo moved - the user can start it by hand as before */
