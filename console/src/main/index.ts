@@ -13,8 +13,8 @@ import {
   attemptTreeEnabled,
   conventionsOf
 } from './matchConventions'
-import { loadDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
-import { PROJECTS, projectBySlug, projectById, slugOf, customIdFor, type ProjectEntry } from '../shared/projects'
+import { loadDescriptor, validateDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
+import { PROJECTS, projectBySlug, projectById, slugOf, customIdFor, descriptorUrlFor, type ProjectEntry } from '../shared/projects'
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
 import { registerAll, cliCommand } from './connect'
 import { runTool } from './runTool'
@@ -1375,6 +1375,9 @@ interface PersistedProject {
   agentLoop?: string[]
   agentStats?: Record<string, { totalMatches: number; matchAttempts: number }>
   agentBestDiv?: Record<string, number>
+  // The published tangos.json, so a project with no clone here can still be browsed (and browsed
+  // offline). Refreshed in the background; only ever used when there's no local descriptor.
+  descriptorCache?: { at: number; descriptor: TangosDescriptor }
 }
 let persistedProjects: Record<string, PersistedProject> = {}
 let activeProjectId: string | null = null
@@ -1695,7 +1698,8 @@ function repoState(): RepoState {
     // it can't commit/push and its tooling is likely stale - the renderer warns on this.
     isGit: !!state.repoPath && existsSync(join(state.repoPath, '.git')),
     projectId: activeProjectId,
-    projectTitle: projectTitleFor(activeProjectId)
+    projectTitle: projectTitleFor(activeProjectId),
+    mode: state.repoPath ? 'local' : 'remote'
   }
 }
 
@@ -1997,7 +2001,10 @@ function watchDescriptor(repoPath: string | null): void {
   }
 }
 
-function setRepo(path: string | null): RepoState {
+/** `remote` = the repo's published tangos.json, for a project that isn't cloned here. It gives the
+ *  Viewer everything it needs (the atlas comes off a URL) while the Controller has no repo to run
+ *  tools in, so `path` stays null and everything already guarded on it stays off. */
+function setRepo(path: string | null, remote?: TangosDescriptor | null): RepoState {
   state.repoPath = path
   if (path && looksLikeRepo(path)) {
     const { descriptor, descriptorPath, errors } = loadDescriptor(path)
@@ -2011,6 +2018,10 @@ function setRepo(path: string | null): RepoState {
       state.descriptorPath = null
       state.validationErrors = []
     }
+  } else if (remote) {
+    state.descriptor = remote
+    state.descriptorPath = null
+    state.validationErrors = validateDescriptor(remote)
   } else {
     state.descriptor = null
     state.descriptorPath = null
@@ -2026,13 +2037,16 @@ function setRepo(path: string | null): RepoState {
   }
   if (projectId) {
     const slot = (persistedProjects[projectId] ??= {})
-    slot.path = path
+    // Only record a path we actually opened. Browsing a project remotely must not erase where its
+    // clone lives - a checkout on a drive that happens to be offline today comes back tomorrow.
+    if (path) slot.path = path
     slot.custom = projectId.startsWith('local:')
     const title = state.descriptor?.project?.title
     if (title) slot.title = title
   }
-  // Default: every tool in the new descriptor is enabled (exposed to the AI).
-  state.enabledToolIds = state.descriptor ? state.descriptor.tools.map((t) => t.id) : []
+  // Default: every tool in the new descriptor is enabled (exposed to the AI). Nothing is runnable
+  // without a checkout to run it in, so a remotely-browsed project exposes none.
+  state.enabledToolIds = state.repoPath && state.descriptor ? state.descriptor.tools.map((t) => t.id) : []
   // Seed Ghidra toggle from the repo's matchConventions when opening a repo (near-miss stays as user left it).
   if (state.descriptor) {
     const d = defaultMatchingPrefs(state.descriptor.project)
@@ -2090,6 +2104,42 @@ function startAtlasLive(): void {
       mainWindow?.webContents.send('atlas:live', { event, data })
     }
   )
+}
+
+/** A project's published tangos.json, for browsing it without a clone. Cached in settings so a
+ *  switch doesn't have to wait on the network - the splash is 1.75s and a cold fetch can outlast
+ *  it, and stretching the splash to cover a slow fetch leaves an invisible overlay eating clicks. */
+async function remoteDescriptor(entry: ProjectEntry): Promise<TangosDescriptor | null> {
+  const cached = persistedProjects[entry.id]?.descriptorCache
+  const fresh = cached && Date.now() - (cached.at ?? 0) < 24 * 60 * 60 * 1000
+  if (cached?.descriptor && fresh) return cached.descriptor
+  const url = descriptorUrlFor(entry)
+  if (!url) return cached?.descriptor ?? null
+  try {
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), 15000)
+    try {
+      const res = await fetch(url, { signal: ac.signal })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const descriptor = (await res.json()) as TangosDescriptor
+      const slot = (persistedProjects[entry.id] ??= {})
+      slot.descriptorCache = { at: Date.now(), descriptor }
+      if (descriptor?.project?.title) slot.title = descriptor.project.title
+      return descriptor
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    return cached?.descriptor ?? null // offline: a stale copy still beats nothing
+  }
+}
+
+/** Warm the cache for every registry project that isn't cloned, so picking one is instant. */
+async function prefetchRemoteDescriptors(): Promise<void> {
+  for (const e of PROJECTS) {
+    if (resolveProjectPath(e.id, e)) continue
+    await remoteDescriptor(e).catch(() => null)
+  }
 }
 
 /** Why the switch must be refused, or null when it's safe. */
@@ -2204,7 +2254,10 @@ async function switchProject(id: string, path: string | null): Promise<RepoState
     for (const w of popouts.values()) if (!w.isDestroyed()) w.close()
 
     loadProjectScoped(id)
-    const rs = setRepo(path)
+    // No clone here: fall back to the published descriptor so the Viewer still works off the
+    // project's own atlas URL, and the Controller shows a clone prompt instead of agent boxes.
+    const entry = projectById(id)
+    const rs = setRepo(path, path || !entry ? null : await remoteDescriptor(entry))
 
     if (wasRunning && state.repoPath && state.descriptor && state.validationErrors.length === 0) {
       await startMcpServer().catch(() => {
@@ -2212,6 +2265,7 @@ async function switchProject(id: string, path: string | null): Promise<RepoState
       })
     }
     startAtlasLive()
+  void prefetchRemoteDescriptors() // warm the switcher so picking an uncloned project is instant
     saveSettings()
     return rs
   } finally {
@@ -2894,6 +2948,11 @@ ipcMain.handle('secrets:delete', (_e, name: string) => {
 async function startMcpServer(): Promise<void> {
   if (!state.descriptor || state.validationErrors.length > 0) {
     throw new Error('cannot start: descriptor missing or invalid')
+  }
+  // A remotely-browsed project has a valid descriptor but nowhere to run anything: the server
+  // would start happily and then every tool call would throw "no repo selected" at the agent.
+  if (!state.repoPath) {
+    throw new Error('clone the repo to run its tools')
   }
   // Snapshot src files already dirty before any AI connects; these are never attributed to an
   // agent's per-agent PR (they're pre-existing local work, not this session's matches).

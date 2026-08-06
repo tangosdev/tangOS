@@ -6,6 +6,7 @@ import type {
 } from '../../shared/types'
 import RepoPicker from './components/RepoPicker'
 import ProjectMenu from './components/ProjectMenu'
+import CloneGate from './components/CloneGate'
 import { useDismiss } from './useDismiss'
 import DescriptorGate from './components/DescriptorGate'
 import Encyclopedia from './components/Encyclopedia'
@@ -305,7 +306,13 @@ export default function App(): JSX.Element {
   }
 
   const descriptorOk = !!repo?.descriptor && (repo?.validationErrors?.length ?? 0) === 0
+  // Two different questions. showControls: is there a checkout to run tools in? projectReady: do we
+  // know enough to show the project at all - true for a project browsed remotely, where the Viewer
+  // works off the published atlas but nothing is runnable.
   const showControls = !!repo?.path && descriptorOk
+  const viewerOnly = repo?.mode === 'remote'
+  const projectReady = !!repo?.projectId && descriptorOk
+  const activeProject = projects.find((p) => p.active) ?? null
   const detailAgent = detailName ? agents.find((a) => a.name === detailName) ?? null : null
 
   const mcpPill = (
@@ -361,18 +368,31 @@ export default function App(): JSX.Element {
   // busy/size state and the scheduler's output tail. Without the key, switching while sitting in
   // the Viewer leaves the previous decomp's atlas on screen under the new project's name.
   let body: JSX.Element
-  if (!repo?.path) body = <div className="center-stage"><RepoPicker onChanged={setRepo} /></div>
-  else if (!repo.hasDescriptor || !descriptorOk) body = <div className="center-stage"><DescriptorGate repo={repo} onChanged={setRepo} /></div>
-  else body = view === 'atlas'
-    ? <AtlasView
-        key={repo.projectId ?? repo.path}
+  if (!repo?.path && !repo?.projectId) {
+    body = <div className="center-stage"><RepoPicker onChanged={setRepo} /></div>
+  } else if (!viewerOnly && (!repo?.hasDescriptor || !descriptorOk)) {
+    // A checkout whose own tangos.json is missing or broken - offer to write one.
+    body = <div className="center-stage"><DescriptorGate repo={repo!} onChanged={setRepo} /></div>
+  } else if (view === 'atlas' && descriptorOk) {
+    body = (
+      <AtlasView
+        key={repo!.projectId ?? repo!.path}
         onAdd={addToCart}
         onRemove={removeFromCart}
         onReplace={replaceCart}
         draftRefs={draftRefs}
         liveEnabled={!!repo?.descriptor?.data?.committedDbUrl}
+        localAvailable={!!repo?.path}
       />
-    : <Fragment key={repo.projectId ?? repo.path}>{consoleBody}</Fragment>
+    )
+  } else if (showControls) {
+    body = <Fragment key={repo!.projectId ?? repo!.path}>{consoleBody}</Fragment>
+  } else {
+    // No checkout here. Also where a remote descriptor that failed to fetch or didn't validate
+    // ends up: CloneGate at least names the project and offers to get it, where the bare repo
+    // picker would just say "point it at a decomp repo" with no hint why.
+    body = <CloneGate project={activeProject} onChanged={setRepo} onOpenViewer={() => switchApp('atlas')} />
+  }
 
   return (
     <div className="app">
@@ -387,7 +407,7 @@ export default function App(): JSX.Element {
             <ProjectMenu projects={projects} busy={switchingProject} onPick={pickProject} />
           )}
         </div>
-        <div className="tb-center">{showControls && <AppSwitcher view={view} onSwitch={switchApp} />}</div>
+        <div className="tb-center">{projectReady && <AppSwitcher view={view} onSwitch={switchApp} />}</div>
         <div className="tb-right">
           {repo?.path && !showControls && (
             <button className="repo-chip" title={repo.path} onClick={changeRepo}>
@@ -395,12 +415,12 @@ export default function App(): JSX.Element {
               <span className="path">{repo.path}</span>
             </button>
           )}
-          {showControls && (
+          {projectReady && (
             <button className="tb-btn icononly" onClick={() => setBugOpen(true)} title="Report a bug">
               <Bug size={15} />
             </button>
           )}
-          {showControls && repo?.descriptor?.project?.discord && (
+          {projectReady && repo?.descriptor?.project?.discord && (
             <button
               className="tb-btn icononly discord"
               onClick={() => window.tangos.openExternal(repo.descriptor!.project.discord!)}

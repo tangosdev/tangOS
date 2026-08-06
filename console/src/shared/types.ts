@@ -162,6 +162,9 @@ export interface RepoState {
   isGit: boolean // false = not a git checkout (e.g. a "Download ZIP" snapshot): can't commit, tooling may be stale
   projectId: string | null // which registry project this is; the key its agent stats live under
   projectTitle: string // display name, from the descriptor when loaded else the registry
+  // 'remote' = no clone here, so the descriptor came off the repo's published copy: the Viewer
+  // works from the atlas URL, nothing is runnable, and `path` is null.
+  mode: 'local' | 'remote'
 }
 
 /** One row in the project switcher. */

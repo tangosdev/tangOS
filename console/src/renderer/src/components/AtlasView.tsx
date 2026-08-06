@@ -37,13 +37,16 @@ export default function AtlasView({
   onRemove,
   onReplace,
   draftRefs,
-  liveEnabled
+  liveEnabled,
+  localAvailable
 }: {
   onAdd: (item: BatchItem) => void
   onRemove: (ref: string) => void
   onReplace: (items: BatchItem[]) => void
   draftRefs: Set<string>
   liveEnabled: boolean
+  /** false = no checkout here, so there is no local chaos-db to read or generate. */
+  localAvailable: boolean
 }): JSX.Element {
   // The loaded atlas as fetched/generated. The VPS's live match state is overlaid onto it
   // below; `db` is what the rest of the view renders.
@@ -291,8 +294,11 @@ export default function AtlasView({
         } catch {
           /* offline - fall through */
         }
+        setLoading(false)
       }
-      await load('local')
+      // Without a checkout there is no local file to fall back to; falling through would show
+      // "no Atlas data yet" for what is really a failed live fetch.
+      if (localAvailable) await load('local')
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -360,12 +366,18 @@ export default function AtlasView({
         <div className="landing aero-panel" style={{ width: 'min(560px,100%)' }}>
           <Database size={34} color="var(--aero-primary)" />
           <h1 style={{ fontSize: 22 }}>No Atlas data yet</h1>
-          <p className="tagline">Generate this repo&apos;s data locally, or pull the team&apos;s live published data.</p>
+          <p className="tagline">
+            {localAvailable
+              ? "Generate this repo's data locally, or pull the team's live published data."
+              : "This project isn't cloned here, so there's nothing local to generate. Pull its published data instead."}
+          </p>
           <div className="actions" style={{ justifyContent: 'center' }}>
-            <button className="aero-button" onClick={generate} disabled={generating}>
-              <HardDrive size={15} style={{ verticalAlign: -3, marginRight: 6 }} />
-              {generating ? 'Generating…' : 'Generate local data'}
-            </button>
+            {localAvailable && (
+              <button className="aero-button" onClick={generate} disabled={generating}>
+                <HardDrive size={15} style={{ verticalAlign: -3, marginRight: 6 }} />
+                {generating ? 'Generating…' : 'Generate local data'}
+              </button>
+            )}
             {liveEnabled && (
               <button className="aero-button ghost" onClick={() => load('live')}>
                 <Cloud size={15} style={{ verticalAlign: -3, marginRight: 6 }} /> Pull live data
@@ -383,7 +395,7 @@ export default function AtlasView({
       <div className="atlas-head aero-panel">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0 }}>Atlas</h2>
-          {liveEnabled && (
+          {liveEnabled && localAvailable && (
             <div className="seg" title="Live = the whole team's published progress (recommended). Local = your generated data.">
               <button className={source === 'live' ? 'on' : ''} onClick={() => load('live')} title="Show the team's published progress"><Cloud size={12} /> Live</button>
               <button className={source === 'local' ? 'on' : ''} onClick={() => load('local')} title="Show your locally generated data"><HardDrive size={12} /> Local</button>
@@ -444,7 +456,7 @@ export default function AtlasView({
             )}
           </div>
         )}
-        {liveEnabled && source === 'local' && (
+        {liveEnabled && localAvailable && source === 'local' && (
           <p className="notice" style={{ marginTop: 8 }}>Working with others? Switch to <b>Live</b> for everyone&apos;s latest progress and claims.</p>
         )}
       </div>
