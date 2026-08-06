@@ -85,7 +85,9 @@ export function deleteSecret(name: string): void {
   }
 }
 
-/** Decrypt every stored key into a name->value map for injection into a tool's env. */
+/** Decrypt every stored key into a name->value map. The vault is global (one keychain per
+ *  machine), so this is every key the user has ever added, for any project. Prefer
+ *  secretsEnvFor when handing values to a repo's tools. */
 export function secretsEnv(): Record<string, string> {
   if (!encryptionAvailable()) return {}
   const s = load()
@@ -97,5 +99,21 @@ export function secretsEnv(): Record<string, string> {
       /* skip keys we can't decrypt (e.g. copied from another machine/user) */
     }
   }
+  return out
+}
+
+/** The subset of the vault a repo's tools may see: exactly the keys its descriptor declares in
+ *  runtime.envKeys.
+ *
+ *  The vault is shared across projects but a key is not. CLAIMS_API_KEY writes to one project's
+ *  coordination board; handing it to a different project's tools means that project's address
+ *  ranges get announced on somebody else's claims, which is state we can't take back. A tool
+ *  that isn't declared a key should behave as if the key doesn't exist, because for that project
+ *  it doesn't. Passing no list yields nothing, so a repo with no envKeys gets no secrets. */
+export function secretsEnvFor(allowed?: string[] | null): Record<string, string> {
+  if (!allowed?.length) return {}
+  const all = secretsEnv()
+  const out: Record<string, string> = {}
+  for (const name of allowed) if (name in all) out[name] = all[name]
   return out
 }

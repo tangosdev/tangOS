@@ -160,6 +160,20 @@ export interface RepoState {
   hasDescriptor: boolean
   validationErrors: string[]
   isGit: boolean // false = not a git checkout (e.g. a "Download ZIP" snapshot): can't commit, tooling may be stale
+  projectId: string | null // which registry project this is; the key its agent stats live under
+  projectTitle: string // display name, from the descriptor when loaded else the registry
+}
+
+/** One row in the project switcher. */
+export interface ProjectSummary {
+  id: string
+  title: string
+  glyph: string
+  github: string
+  path: string | null // remembered clone, verified to still exist
+  cloned: boolean
+  active: boolean
+  custom?: boolean // a hand-picked folder rather than a built-in registry entry
 }
 
 /** Whether the local checkout is behind the remote - drives the "your local is out of date"

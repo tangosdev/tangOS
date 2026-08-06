@@ -14,7 +14,7 @@ import {
   conventionsOf
 } from './matchConventions'
 import { loadDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
-import { PROJECTS, projectBySlug, slugOf, customIdFor } from '../shared/projects'
+import { PROJECTS, projectBySlug, projectById, slugOf, customIdFor, type ProjectEntry } from '../shared/projects'
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
 import { registerAll, cliCommand } from './connect'
 import { runTool } from './runTool'
@@ -25,7 +25,7 @@ import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
 import { fetchCosmetics, fetchCounts, fetchProgress, fetchAtlas, connectAtlasLive, bustCosmeticsCache, type Cosmetics, type Counts, type LiveProgress } from './cosmetics'
 import { startDeviceFlow, pollForToken } from './githubAuth'
-import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv } from './secrets'
+import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv, secretsEnvFor } from './secrets'
 import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
 import * as nearMissWatch from './nearMissWatch'
 import { record as report, setReportsEnabled, reportsDir } from './reports'
@@ -48,7 +48,7 @@ import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
   Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
-  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs
+  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs, ProjectSummary
 } from '../shared/types'
 
 const DEFAULT_PORT = 4808
@@ -99,6 +99,18 @@ const agentLoop = new Set<string>()
 // Kill switches for in-flight API drivers, keyed by agent name, so the red Stop button can
 // end a drive early. Whatever the driver already landed is kept (matches are recorded live).
 const driveKills = new Map<string, () => void>()
+
+// Bumped every time the active project changes. Long operations capture it before their first
+// await and compare after, so anything that outlives the switch becomes a no-op instead of
+// finishing against the wrong repo.
+//
+// This is the backstop, not the mechanism: switchProject stops what it can first, while repoPath
+// still points at the old project, so work in flight completes correctly. But some of it cannot be
+// stopped - a `crackloop land` child runs for minutes, a GitHub fetch can hang for its full
+// timeout - and for those the epoch is the difference between a stale continuation doing nothing
+// and it writing into the other decomp.
+let projectEpoch = 0
+let switchingProject = false
 
 // Full enriched worklist rows (disasm/callees/pool/...) coddog produced during genDraft, keyed by
 // function name. driveBatch writes THESE as the driver's worklist so its context tool (abrow.py)
@@ -503,6 +515,10 @@ async function runAutoPush(slug: string): Promise<void> {
     return
   }
   if (!autoPushActive() || !state.repoPath) return
+  // Pin the repo and project for the whole push. This force-pushes a branch and opens a PR; a
+  // switch mid-flight would aim both at the other decomp's origin.
+  const repo = state.repoPath
+  const e = projectEpoch
   const files = [...(pendingByAgent.get(slug) ?? [])]
   if (!files.length) return
   autoPushBusy.add(slug)
@@ -511,15 +527,15 @@ async function runAutoPush(slug: string): Promise<void> {
     pushState()
   }
   try {
-    if (!(await isGitRepo(state.repoPath))) return set({ state: 'skipped', message: 'not a git checkout - clone the repo to enable pushing' })
-    const gh = await remoteSlug(state.repoPath)
+    if (!(await isGitRepo(repo))) return set({ state: 'skipped', message: 'not a git checkout - clone the repo to enable pushing' })
+    const gh = await remoteSlug(repo)
     if (!gh) return set({ state: 'skipped', message: 'no GitHub "origin" remote to push to' })
     const token = secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN
     if (!token) return set({ state: 'skipped', message: 'no GITHUB_TOKEN - sign into GitHub in Settings' })
 
     set({ state: 'pushing', message: `${slug}: ${files.length} file(s)` })
     const branch = `tangos/${slug}-${SESSION_TAG}`
-    const base = await defaultBranch(state.repoPath)
+    const base = await defaultBranch(repo)
 
     // Gate what actually ships. (1) Fetch so origin/<base> is current - a stale base is how PRs
     // re-included files that had already landed upstream. (2) A file already identical upstream
@@ -527,17 +543,17 @@ async function runAutoPush(slug: string): Promise<void> {
     // whose bytes no longer equal its verified-time snapshot is HELD BACK (still pending) until a
     // re-verify refreshes it - refine loops rewrite candidates, and pushing the current bytes on
     // the strength of an old MATCH is how near-misses shipped in "matched" PRs.
-    await fetchBase(state.repoPath, base)
+    await fetchBase(repo, base)
     const pending = pendingByAgent.get(slug) ?? new Set<string>()
     const ship: string[] = []
     let landedUpstream = 0
     let heldStale = 0
     for (const f of files) {
-      const up = await upstreamState(state.repoPath, base, f)
+      const up = await upstreamState(repo, base, f)
       // 'identical' = already landed upstream. 'differs' = upstream has its own version, normally
       // superseded - EXCEPT when upstream is still NONMATCHING and ours is a verified match: that's
       // a real upgrade (nonmatching -> byte-exact), so ship it instead of silently dropping the win.
-      if (up === 'identical' || (up === 'differs' && !(await upstreamIsNonmatching(state.repoPath, base, f)))) {
+      if (up === 'identical' || (up === 'differs' && !(await upstreamIsNonmatching(repo, base, f)))) {
         pending.delete(f) // landed, or superseded by a real upstream match - not ours to PR
         verifiedContent.delete(f)
         landedUpstream++
@@ -545,7 +561,7 @@ async function runAutoPush(slug: string): Promise<void> {
       }
       let current: string | null = null
       try {
-        current = readFileSync(join(state.repoPath, f), 'utf8')
+        current = readFileSync(join(repo, f), 'utf8')
       } catch {
         /* deleted since verify (e.g. a land-gate unbank) - treat as stale */
       }
@@ -582,8 +598,12 @@ async function runAutoPush(slug: string): Promise<void> {
     // candidate in the seconds between the gate check above and the push could otherwise smuggle
     // unverified bytes into a "matched" PR (the TOCTOU the snapshot gate nearly closed).
     const snapshots = new Map(ship.map((f) => [f, verifiedContent.get(f)!]).filter(([, v]) => v != null) as [string, string][])
+    // Last gate before anything leaves the machine. The gathering above spans several network
+    // round-trips; if the project changed during them, these files and this branch belong to a
+    // repo that is no longer open and the pending set that produced them has been cleared.
+    if (e !== projectEpoch) return set({ state: 'skipped', message: `${slug}: project changed, push abandoned` })
     const pushed = await pushSubsetToBranch(
-      state.repoPath,
+      repo,
       branch,
       base,
       ship,
@@ -734,7 +754,7 @@ async function runStrandedSweep(): Promise<void> {
         repoPath: repo,
         source: 'user',
         allowMutations: true, // match is read-only; this just skips the safe-mode wrap
-        extraEnv: secretsEnv()
+        extraEnv: projectEnv()
       })
       if (res.status === 'ok' && outputIsMatch(res.output)) verified.push(f)
     }
@@ -863,7 +883,7 @@ async function runToolSafely(
     source,
     client,
     allowMutations: state.allowMutations,
-    extraEnv: secretsEnv()
+    extraEnv: projectEnv()
   }
   const mutating = !tool.readOnly
   let res: RunResult
@@ -890,21 +910,30 @@ function runSafeMode(base: Parameters<typeof runTool>[0]): Promise<RunResult> {
 /** Mutating run under safe mode: isolate on the work branch, commit what changed, record a review. */
 async function runSafeModeInner(base: Parameters<typeof runTool>[0]): Promise<RunResult> {
   const tool = base.tool
+  // Pin the repo and the project for the whole run. A tool run takes minutes, and the project can
+  // change under it; re-reading state.repoPath after the await would isolate on one repo and then
+  // commit whatever the OTHER repo's working tree happens to be dirty with, onto its work branch,
+  // labelled with this tool's id, and file it as a review the operator would merge.
+  const repo = state.repoPath!
+  const e = projectEpoch
   try {
-    const { base: from } = await ensureWorkBranch(state.repoPath!)
+    const { base: from } = await ensureWorkBranch(repo)
     if (from !== WORK_BRANCH) state.baseBranch = from
   } catch {
     return runTool(base) // couldn't isolate (e.g. dirty conflict) -> run normally
   }
-  const before = await statusMap(state.repoPath!)
+  const before = await statusMap(repo)
   const res = await runTool(base)
-  const after = await statusMap(state.repoPath!)
+  const after = await statusMap(repo)
   const changed = changedSince(before, after)
   if (changed.length) {
     try {
       const files = []
-      for (const f of changed) files.push({ path: f.path, status: f.status, diff: await diffForFile(state.repoPath!, f) })
-      await commitFiles(state.repoPath!, changed, `tangos: ${tool.id}`)
+      for (const f of changed) files.push({ path: f.path, status: f.status, diff: await diffForFile(repo, f) })
+      await commitFiles(repo, changed, `tangos: ${tool.id}`)
+      // The commit belongs to the old repo and is recorded against it, but the review list is the
+      // CURRENT project's. Switching mid-run means this review has no home in the UI.
+      if (e !== projectEpoch) return res
       state.reviews.push({
         id: randomUUID(),
         toolId: tool.id,
@@ -1029,7 +1058,7 @@ function logAttemptFromRun(
     repoPath: repo,
     source: 'user',
     allowMutations: true,
-    extraEnv: secretsEnv()
+    extraEnv: projectEnv()
   }).catch(() => {
     /* best-effort */
   })
@@ -1306,6 +1335,12 @@ async function waitForBatchChecked(agentName: string | undefined, timeoutMs: num
 
 function currentRuntime(): TangosRuntime {
   return state.descriptor?.runtime ?? { cwd: '.', python: 'python', shell: false }
+}
+
+/** The vault keys the ACTIVE project's tools are allowed to see. Everything a child process gets
+ *  goes through here, so a key belonging to one decomp never reaches another one's tools. */
+function projectEnv(): Record<string, string> {
+  return secretsEnvFor(state.descriptor?.runtime?.envKeys)
 }
 
 // Each agent's assigned role + reasoning effort, for the ACTIVE project. These stay plain
@@ -1658,8 +1693,41 @@ function repoState(): RepoState {
     validationErrors: state.validationErrors,
     // A ".git" entry (dir or file) means a real checkout. A "Download ZIP" snapshot has none:
     // it can't commit/push and its tooling is likely stale - the renderer warns on this.
-    isGit: !!state.repoPath && existsSync(join(state.repoPath, '.git'))
+    isGit: !!state.repoPath && existsSync(join(state.repoPath, '.git')),
+    projectId: activeProjectId,
+    projectTitle: projectTitleFor(activeProjectId)
   }
+}
+
+/** Display name for a project: the descriptor's own title when it's loaded, else whatever we last
+ *  saw, else the registry's. Lets the switcher label a project it has never opened. */
+function projectTitleFor(id: string | null): string {
+  if (id && id === activeProjectId && state.descriptor?.project?.title) return state.descriptor.project.title
+  if (!id) return ''
+  return persistedProjects[id]?.title || projectById(id)?.title || id
+}
+
+/** Every project the switcher can offer: the built-in registry, plus any hand-picked folder that
+ *  has its own settings slot, with the remembered clone path re-verified. */
+function listProjects(): ProjectSummary[] {
+  const rows: ProjectSummary[] = []
+  const add = (id: string, entry?: ProjectEntry): void => {
+    const slot = persistedProjects[id]
+    const path = slot?.path && existsSync(join(slot.path, DESCRIPTOR_FILENAME)) ? slot.path : null
+    rows.push({
+      id,
+      title: projectTitleFor(id),
+      glyph: entry?.glyph ?? (projectTitleFor(id).slice(0, 2).toUpperCase() || '??'),
+      github: entry?.github ?? '',
+      path,
+      cloned: !!path,
+      active: id === activeProjectId,
+      custom: !entry
+    })
+  }
+  for (const e of PROJECTS) add(e.id, e)
+  for (const id of Object.keys(persistedProjects)) if (!projectById(id)) add(id)
+  return rows
 }
 
 function mcpState(): McpState {
@@ -1856,7 +1924,9 @@ function fullState() {
     agentFanout: state.agentFanout,
     autoLand: state.autoLand,
     autoPush: { enabled: state.autoPushEnabled, on: autoPushActive(), ...autoPushStatus },
-    looping: [...agentLoop]
+    looping: [...agentLoop],
+    projects: listProjects(),
+    switchingProject
   }
 }
 
@@ -1986,6 +2056,154 @@ function setRepo(path: string | null): RepoState {
   if (state.repoPath) scheduleStrandedSweep()
   pushState()
   return repoState()
+}
+
+// ---- project switching -------------------------------------------------------------------------
+// setRepo above swaps WHICH repo is open. That is enough when the user is choosing a folder on a
+// quiet console, but the project switcher makes switching a one-click action that can land in the
+// middle of a drive, a push, a safe-mode commit or a parked agent poll. The extra machinery here
+// is about what is already RUNNING when the swap happens.
+
+// The live atlas SSE stream. Held so a project switch can tear it down: the connection re-derives
+// its URL only on reconnect, so a healthy stream would keep pushing the old project's events.
+let atlasLiveStop: (() => void) | null = null
+function startAtlasLive(): void {
+  atlasLiveStop?.()
+  atlasLiveStop = connectAtlasLive(
+    () => state.descriptor?.data?.claimsApi,
+    (event, data) => {
+      if (event === 'cosmetics') bustCosmeticsCache()
+      mainWindow?.webContents.send('atlas:live', { event, data })
+    }
+  )
+}
+
+/** Why the switch must be refused, or null when it's safe. */
+function switchBlocker(): string | null {
+  if (state.reviews.length) {
+    // Safe mode has already COMMITTED this work to the repo's work branch. setRepo clears
+    // state.baseBranch, and review:merge/discard both need it, so the commits would still be on
+    // tangos/work with no way left in the UI to reach them. Refuse rather than strand real work.
+    const n = state.reviews.length
+    return `${n} unreviewed change${n === 1 ? '' : 's'} committed on ${WORK_BRANCH}. Merge or discard them before switching projects.`
+  }
+  return null
+}
+
+/** Stop everything in flight, while state.repoPath still points at the OLD project so anything
+ *  that finishes during this window finishes against the repo it was started for. */
+async function quiesceProject(): Promise<void> {
+  // 1. Kill API drivers and every scrap of loop bookkeeping that would restart them. A surviving
+  //    driver re-reads state at land time, and ensureLoopQueue's finally would generate a batch for
+  //    the new project on behalf of an agent that was looping in the old one.
+  for (const [name, kill] of driveKills) {
+    driveStopRequested.add(name)
+    try {
+      kill()
+    } catch {
+      /* already dead */
+    }
+  }
+  driveKills.clear()
+  agentLoop.clear()
+  apiDriving.clear()
+  stopping.clear()
+  driveLoopActive.clear()
+  loopReassigning.clear()
+  loopGenCooldownUntil.clear()
+  quickFailStreak.clear()
+  exhausted.clear()
+  autoPushBusy.clear()
+  sessionNearMissNames.clear()
+
+  // 2. Cancel batch generation and let the chain settle, so a scheduler mid-run can't resolve into
+  //    state.batches after setRepo has cleared it.
+  genLive.cancelled = true
+  try {
+    genLive.kill?.()
+  } catch {
+    /* already dead */
+  }
+  await genChain.catch(() => {})
+  genLive.cancelled = false
+
+  // 3. Release parked agent polls. A waiter outliving the switch is served by the NEXT project's
+  //    first batch: notifyBatchWaiters marks it active and resolves it into a transport that is
+  //    already closed, so the batch is consumed, never worked, and its targets stay in `taken`.
+  //    null is the existing "timed out, poll again" answer, so agents handle it correctly.
+  for (const w of [...batchWaiters]) {
+    clearTimeout(w.timer)
+    batchWaiters.delete(w)
+    w.resolve(null)
+  }
+
+  // 4. Drop the MCP listener entirely, not just its sessions. resetSessions leaves the port open,
+  //    so an agent mid-call can still land a tool run that runToolSafely would execute against the
+  //    new repo.
+  if (mcp.running) await mcp.stop().catch(() => {})
+
+  // 5. Pending one-shots that would fire after the swap.
+  if (sweepTimer) {
+    clearTimeout(sweepTimer)
+    sweepTimer = null
+  }
+  if (atlasRegenTimer) {
+    clearTimeout(atlasRegenTimer)
+    atlasRegenTimer = null
+  }
+  for (const t of autoPushTimers.values()) clearTimeout(t)
+  autoPushTimers.clear()
+}
+
+/** Open a folder the user chose by hand. A folder dialog can walk to a different project just as
+ *  the switcher can, so identify it first and take the full switch path when it does; re-opening
+ *  the SAME project stays a plain, cheap setRepo (descriptor:write relies on that). */
+async function openRepoPath(path: string): Promise<RepoState> {
+  const id = identifyProject(path, loadDescriptor(path).descriptor)
+  if (activeProjectId && id !== activeProjectId) {
+    persistedProjects[id] = { ...(persistedProjects[id] ?? {}), path }
+    return switchProject(id, path)
+  }
+  return setRepo(path)
+}
+
+/** Switch the whole console to another project: quiesce, swap, rearm. */
+async function switchProject(id: string, path: string | null): Promise<RepoState> {
+  if (switchingProject) throw new Error('a project switch is already in progress')
+  if (id === activeProjectId) return repoState()
+  const blocker = switchBlocker()
+  if (blocker) throw new Error(blocker)
+
+  switchingProject = true
+  pushState()
+  try {
+    const wasRunning = mcp.running
+    await quiesceProject()
+
+    // Past this point every stale continuation is inert.
+    projectEpoch++
+    snapshotActiveProject()
+    activityBus.clear() // the run feed belongs to the old project
+    bustCosmeticsCache()
+    // Popout windows show the old project's modules, and their "add to batch" relay would inject
+    // its function refs into the new project's cart.
+    for (const w of popouts.values()) if (!w.isDestroyed()) w.close()
+
+    loadProjectScoped(id)
+    const rs = setRepo(path)
+
+    if (wasRunning && state.repoPath && state.descriptor && state.validationErrors.length === 0) {
+      await startMcpServer().catch(() => {
+        /* port taken - the user can start it by hand */
+      })
+    }
+    startAtlasLive()
+    saveSettings()
+    return rs
+  } finally {
+    switchingProject = false
+    pushState()
+  }
 }
 
 // The mascot icon for the taskbar + window (build/icon.png, packed with the app).
@@ -2271,7 +2489,7 @@ async function regenAtlasDb(source: 'user' | 'ai'): Promise<AtlasDb | null> {
     repoPath: state.repoPath,
     source,
     allowMutations: true,
-    extraEnv: secretsEnv()
+    extraEnv: projectEnv()
   })
   const db = readAtlas(state.repoPath, state.descriptor)
   atlasCache = { ...atlasCache, project: activeProjectId, local: db }
@@ -2373,7 +2591,7 @@ async function fetchRandomTopUp(limit: number): Promise<string[]> {
       source: 'user',
       repoPath: state.repoPath,
       allowMutations: true,
-      extraEnv: secretsEnv()
+      extraEnv: projectEnv()
     })
     return (res.output || '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{'))
   } catch {
@@ -2435,7 +2653,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
       // source, so it must not be gated by the Writes toggle. Some schedulers (refine_wl) are
       // flagged mutating; allow this internal prep run regardless. Actual agent writes stay gated.
       allowMutations: true,
-      extraEnv: secretsEnv(),
+      extraEnv: projectEnv(),
       onSpawn: ({ kill }) => {
         schedKill = kill
         genLive.kill = kill
@@ -2613,10 +2831,18 @@ ipcMain.handle('repo:pick', async () => {
     properties: ['openDirectory']
   })
   if (res.canceled || res.filePaths.length === 0) return repoState()
-  return setRepo(res.filePaths[0])
+  return openRepoPath(res.filePaths[0])
 })
 
-ipcMain.handle('repo:set', (_e, path: string) => setRepo(path))
+ipcMain.handle('repo:set', (_e, path: string) => openRepoPath(path))
+
+ipcMain.handle('projects:list', (): ProjectSummary[] => listProjects())
+
+ipcMain.handle('projects:switch', async (_e, id: string): Promise<RepoState> => {
+  const slot = persistedProjects[id]
+  const path = slot?.path && looksLikeRepo(slot.path) ? slot.path : null
+  return switchProject(id, path)
+})
 
 ipcMain.handle('descriptor:generatePreview', (_e, path?: string) => {
   const repo = path || state.repoPath
@@ -2875,7 +3101,7 @@ async function enrichTarget(item: BatchItem): Promise<string | null> {
       // row still carries disasm/callees/signatures/pool/target bytes: everything needed to match.
       const c = spawn(py, ['tools/worklist.py', '--module', item.module!, '--addr', addr, '--max', '0xffffff', '--examples', '0'], {
         cwd: repo,
-        env: { ...process.env, ...secretsEnv() }
+        env: { ...process.env, ...projectEnv() }
       })
       // Hard cap: never let one slow/hung target wedge the whole drive. Kill + skip it after 45s.
       // Enrichment is ~6s warm; 45s leaves headroom for a cold cache or a loaded machine without
@@ -2936,7 +3162,13 @@ async function nemotronModelId(): Promise<string> {
 // landed matches + token usage into its stats.
 async function driveBatch(agentName: string): Promise<void> {
   if (!state.repoPath) throw new Error('no repo selected')
-  const env = secretsEnv()
+  // Pin the repo and project for the run. A drive is the longest thing the console does - minutes
+  // of model calls, then a land step that writes C into src/, ingests near-misses and can claim
+  // address ranges. Re-reading state.repoPath at land time would aim all of that at whatever
+  // project happens to be open by then.
+  const repo = state.repoPath
+  const epochAtStart = projectEpoch
+  const env = projectEnv()
   const driverEnv: Record<string, string> = {}
   // Claude models share the Anthropic key but drive different models, each its own box.
   const CLAUDE_MODEL: Record<string, string> = {
@@ -3172,7 +3404,7 @@ async function driveBatch(agentName: string): Promise<void> {
       tool,
       values: { wl, out: outPath, jobs, attempts },
       runtime: currentRuntime(),
-      repoPath: state.repoPath,
+      repoPath: repo,
       source: 'ai',
       client: { name: agentName },
       allowMutations: true,
@@ -3274,6 +3506,14 @@ async function driveBatch(agentName: string): Promise<void> {
     // on landed.length alone meant a from-scratch batch that only near-missed skipped landing
     // entirely, so its drafts were never ingested and were lost when the next drive overwrote the
     // output file (the "GLM made drafts but nothing saved them" bug).
+    // Never land a finished run into a project that isn't the one it ran against. The driver above
+    // took minutes; if the operator switched during it, these sources and near-misses belong to the
+    // other decomp and banking them here would write its C into this repo's src/, ingest its drafts
+    // into this near-miss DB, and claim its address ranges on this project's board.
+    if (epochAtStart !== projectEpoch) {
+      report('drive', { agent: agentName, status: 'abandoned', reason: 'project changed mid-drive; run not landed' })
+      return
+    }
     if (state.autoLand && (landed.length || nearMissNames.length)) {
       const landTool: TangosTool = {
         id: 'crackloop_land',
@@ -3284,15 +3524,19 @@ async function driveBatch(agentName: string): Promise<void> {
         // claims key had expired, which quietly turned off the one mechanism that tells other
         // contributors what this console is working on - two of them ground the same overlay
         // for a day before anyone noticed. With a key present, let crackloop lock the ranges.
+        //
+        // Read the key through projectEnv, not the whole vault: a claims key belongs to the
+        // project whose board it writes to. Seeing another project's key here would claim THIS
+        // project's address ranges on THAT project's board, which we cannot take back.
         command: `{python} tools/crackloop.py land --output {out} --wl {wl}${
-          secretsEnv().CLAIMS_API_KEY || process.env.CLAIMS_API_KEY ? '' : ' --no-claims'
+          projectEnv().CLAIMS_API_KEY || process.env.CLAIMS_API_KEY ? '' : ' --no-claims'
         }`
       }
       const landRes = await runTool({
         tool: landTool,
         values: { out: outPath, wl },
         runtime: currentRuntime(),
-        repoPath: state.repoPath,
+        repoPath: repo,
         source: 'ai',
         client: { name: agentName },
         allowMutations: true,
@@ -3986,15 +4230,10 @@ app.whenReady().then(() => {
   createWindow()
   // Live atlas push from the VPS: contributor colors, stars, and match counts stream in
   // and forward straight to the renderer, so a shop color buy or a new match shows up
-  // within a second without any polling. One connection for the app's life; it
-  // auto-reconnects across redeploys and re-derives its URL from the current descriptor.
-  connectAtlasLive(
-    () => state.descriptor?.data?.claimsApi,
-    (event, data) => {
-      if (event === 'cosmetics') bustCosmeticsCache()
-      mainWindow?.webContents.send('atlas:live', { event, data })
-    }
-  )
+  // within a second without any polling. It auto-reconnects across redeploys and re-derives
+  // its URL from the current descriptor - but only when the socket drops, and a healthy one
+  // never does, so switchProject restarts it explicitly rather than waiting for a drop.
+  startAtlasLive()
   initAutoUpdate() // check the public releases feed for a newer build
   // Debug hotkeys: Ctrl+Shift+D writes a snapshot (screenshot + state + dom) to the debug folder;
   // Ctrl+Shift+I toggles DevTools. Available in every build so bugs can be captured anywhere.
