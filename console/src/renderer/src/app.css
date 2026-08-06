@@ -561,6 +561,21 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 .app-menu-item:hover { background: rgba(var(--aero-primary-rgb) / 0.14); }
 .app-menu-item.sel { background: rgba(var(--aero-primary-rgb) / 0.2); }
 
+/* project switcher (uses the .app-switch-btn / .app-menu pair above) */
+.project-pick { max-width: 260px; }
+.project-pick .t, .app-menu-item .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-pick .caret { flex: none; opacity: 0.55; transition: transform 160ms ease; }
+.project-pick .caret.up { transform: rotate(180deg); }
+.project-pick:disabled { opacity: 0.6; cursor: default; }
+.app-switch-btn .glyph, .app-menu-item .glyph {
+  flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px;
+  font-size: 10px; font-weight: 800; letter-spacing: -0.02em;
+  background: rgba(var(--aero-primary-rgb) / 0.22); color: rgb(var(--aero-primary-rgb));
+}
+.app-menu-item { min-width: 0; }
+.app-menu-item .t { flex: 1; }
+.app-menu-item .sub { flex: none; font-size: 11px; font-weight: 600; opacity: 0.55; }
+
 /* ---- splash (app-switch whoosh) ---- */
 .splash {
   position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; overflow: hidden;
@@ -878,7 +893,7 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 /* ============ Chaos Controller redesign ============ */
 
 /* three-zone top bar: brand left, segmented toggle centered, settings/window right */
-.tb-left { flex: 1; display: flex; align-items: center; min-width: 0; }
+.tb-left { flex: 1; display: flex; align-items: center; gap: 12px; min-width: 0; }
 .tb-center { flex: none; display: flex; align-items: center; }
 .tb-right { flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
 
