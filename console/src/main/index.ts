@@ -2538,13 +2538,15 @@ ipcMain.handle('github:credits', async () => {
 // Hermit's Discord shop now, not picked here (the old contributor-colors.json PR flow is
 // retired).
 ipcMain.handle('atlas:cosmetics', async (): Promise<Cosmetics> => {
-  return fetchCosmetics(state.descriptor?.data?.claimsApi)
+  return fetchCosmetics(state.descriptor?.data?.claimsApi, state.descriptor?.data?.liveApi)
 })
 
 // Contributor match numbers from the backend (career totals + matches today), the source
-// for the legend counts and the recent-activity badge.
+// for the legend counts and the recent-activity badge. Read per project: the badge should
+// count what landed in the decomp on screen, and a project the backend does not serve was
+// getting no numbers at all, so it had no badge to show.
 ipcMain.handle('atlas:counts', async (): Promise<Counts> => {
-  return fetchCounts(state.descriptor?.data?.claimsApi)
+  return fetchCounts(state.descriptor?.data?.claimsApi, state.descriptor?.data?.liveApi)
 })
 
 // Live progress computed by the VPS from the repo itself (exact stats + matched ids), so the
