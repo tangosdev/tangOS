@@ -73,7 +73,28 @@ export function matchConventionsGuide(desc: TangosDescriptor, opts: MatchGuideOp
     (t) => t.id === 'nearmiss_list' || t.id === 'nearmiss_stats' || /nearmiss_db/.test(t.command || '')
   )
 
+  // Where a match is allowed to land. This is its own directive because burying it in
+  // `submitting` did not work: pictochat-decomp splits src/ into arm9/ and arm7/, said so
+  // mid-paragraph there, and still took ten PRs and 254 files written to a flat src/ - a
+  // directory its configure.py never scans, so none of them compiled, linked, or counted.
+  // Nor does CI catch it: pr_linkcheck resolves each file from its own `// decomp:` marker,
+  // not from its path, so a file in the wrong directory still byte-verifies and goes green.
+  const srcLayout = c?.srcLayout?.trim()
+  const layout: string[] = srcLayout
+    ? [
+        '',
+        '======================================================================',
+        'WHERE A MATCH GOES',
+        '======================================================================',
+        srcLayout,
+        'Write matched sources ONLY at that path. A file placed anywhere else under src/ is',
+        'not a match landing - the build will not compile it and progress will not count it,',
+        'and the byte gate will still pass it, so nothing downstream will tell you.'
+      ]
+    : []
+
   const policy: string[] = [
+    ...layout,
     '',
     '======================================================================',
     'DRAFT SOURCES (operator toggle — this batch)',
