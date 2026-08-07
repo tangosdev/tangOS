@@ -34,6 +34,12 @@ const api = {
   getState: (): Promise<FullState> => ipcRenderer.invoke('app:getState'),
   activitySnapshot: (): Promise<ActivityRun[]> => ipcRenderer.invoke('activity:snapshot'),
   preflight: (): Promise<PreflightItem[]> => ipcRenderer.invoke('repo:preflight'),
+  preflightFix: (
+    id: import('../shared/types').PreflightFixId,
+    filePath?: string
+  ): Promise<import('../shared/types').PreflightFixResult> => ipcRenderer.invoke('repo:preflightFix', id, filePath),
+  pickFixFile: (title: string, extensions: string[]): Promise<string | null> =>
+    ipcRenderer.invoke('repo:pickFixFile', title, extensions),
   atlasLoad: (): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:load'),
   atlasLoadLive: (force?: boolean): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:loadLive', force),
   atlasCurrent: (): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:current'),

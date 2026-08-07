@@ -41,6 +41,11 @@ export interface TangosApi {
   getState(): Promise<FullState>
   activitySnapshot(): Promise<ActivityRun[]>
   preflight(): Promise<PreflightItem[]>
+  preflightFix(
+    id: import('../../shared/types').PreflightFixId,
+    filePath?: string
+  ): Promise<import('../../shared/types').PreflightFixResult>
+  pickFixFile(title: string, extensions: string[]): Promise<string | null>
   atlasLoad(): Promise<AtlasDb | null>
   atlasLoadLive(force?: boolean): Promise<AtlasDb | null>
   atlasCurrent(): Promise<AtlasDb | null>

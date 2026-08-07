@@ -183,6 +183,15 @@ export default function Controller({
       if (/cancelled/i.test(msg)) {
         setNotice('Batch generation cancelled.')
         window.setTimeout(() => setNotice(null), 4000)
+      } else if (msg.startsWith('SETUP_NEEDED')) {
+        // The repo isn't set up far enough to schedule anything. That's a checklist with buttons
+        // in the requirements panel, not a traceback - so it gets the calm notice and STAYS up
+        // (no auto-dismiss) until it's read, rather than a modal nobody can act on.
+        setNotice(
+          `This repo isn't set up yet, so there's nothing to build a batch from.\n\n` +
+            msg.replace(/^SETUP_NEEDED\n/, '') +
+            `\n\nThe "This repo needs" panel on the right has a button for each one.`
+        )
       } else if (/^No work /i.test(msg)) {
         // Not a failure - just nothing to do for this role. Show a calm, dismissable notice.
         setNotice(msg.split('--- scheduler output ---')[0].trim())

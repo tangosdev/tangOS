@@ -18,7 +18,7 @@ import { PROJECTS, projectBySlug, projectById, slugOf, customIdFor, descriptorUr
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
 import { registerAll, cliCommand } from './connect'
 import { runTool, renderArgv } from './runTool'
-import { preflight } from './preflight'
+import { preflight, runPreflightFix } from './preflight'
 import { readAtlas } from './atlas'
 import { deriveClaimsUrl, fetchHeldClaims, overlayClaims } from './claims'
 import { readFunctionHistory } from './attemptHistory'
@@ -49,7 +49,8 @@ import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
   Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
-  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs, UiPrefs, ProjectSummary, TangosConsoleRoles
+  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs, UiPrefs, ProjectSummary, TangosConsoleRoles,
+  PreflightItem, PreflightFixId, PreflightFixResult
 } from '../shared/types'
 import { roleBatchSize } from '../shared/types'
 
@@ -2474,6 +2475,85 @@ ipcMain.handle('repo:preflight', async () => {
   return preflight(state.repoPath, state.descriptor)
 })
 
+/** Put the Atlas DB on disk without needing the ROM: prefer the published copy (a download, works
+ *  on a machine that has nothing set up yet), fall back to generating it from the checkout. */
+async function fetchOrBuildChaosDb(): Promise<PreflightFixResult> {
+  if (!state.repoPath || !state.descriptor) return { ok: false, message: 'No repo loaded.' }
+  const data = state.descriptor.data ?? {}
+  const rel = data.dbPath || 'chaos-db.json'
+  const dest = join(state.repoPath, rel)
+  if (data.committedDbUrl) {
+    try {
+      const ac = new AbortController()
+      const timer = setTimeout(() => ac.abort(), 30000)
+      try {
+        const r = await fetch(data.committedDbUrl, { signal: ac.signal })
+        if (r.ok) {
+          const text = await r.text()
+          // Parse before writing: a rate-limit page or a 200-with-HTML would otherwise land as a
+          // "present" chaos-db.json that fails far away from here, inside the scheduler.
+          JSON.parse(text)
+          mkdirSync(dirname(dest), { recursive: true })
+          writeFileSync(dest, text)
+          atlasCache = { ...atlasCache, project: activeProjectId, local: undefined }
+          return { ok: true, message: `Downloaded ${rel} (${Math.round(text.length / 1024)} KB).` }
+        }
+      } finally {
+        clearTimeout(timer)
+      }
+    } catch {
+      /* fall through to generating it locally */
+    }
+  }
+  if (!data.generate) {
+    return { ok: false, message: 'Could not download the data, and this repo declares no way to build it.' }
+  }
+  const db = await regenAtlasDb('user')
+  return db
+    ? { ok: true, message: `Built ${rel} from your checkout.` }
+    : { ok: false, message: `Could not build ${rel}. Its tool needs the repo set up first.` }
+}
+
+ipcMain.handle('repo:preflightFix', async (_e, id: PreflightFixId, filePath?: string): Promise<PreflightFixResult> => {
+  if (!state.descriptor || !state.repoPath) return { ok: false, message: 'No repo loaded.' }
+  try {
+    if (id === 'chaosdb') return await fetchOrBuildChaosDb()
+    return await runPreflightFix(id, state.repoPath, state.descriptor, filePath)
+  } catch (e) {
+    return { ok: false, message: String((e as Error).message ?? e) }
+  }
+})
+
+/** File picker for a fix that needs one (the ROM). Returns null when cancelled. */
+ipcMain.handle('repo:pickFixFile', async (_e, title: string, extensions: string[]): Promise<string | null> => {
+  if (!mainWindow) return null
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title,
+    properties: ['openFile'],
+    filters: [{ name: 'ROM', extensions }, { name: 'All files', extensions: ['*'] }]
+  })
+  return res.canceled || !res.filePaths[0] ? null : res.filePaths[0]
+})
+
+/** Everything that must be true before a scheduler run can possibly succeed.
+ *
+ *  Batch generation used to discover setup problems the expensive way: Go spawned the scheduler,
+ *  waited for it to crash, and turned the traceback into a modal. Checking first is nearly free
+ *  (these are filesystem tests) and lets the one derived requirement - the Atlas DB - simply be
+ *  repaired rather than reported. Returns the blockers Console genuinely cannot fix on its own. */
+async function ensureSchedulable(): Promise<PreflightItem[]> {
+  if (!state.repoPath || !state.descriptor) return []
+  let items = await preflight(state.repoPath, state.descriptor)
+  const auto = items.filter((i) => !i.ok && i.autoFixable && i.fixAction)
+  if (auto.length) {
+    for (const i of auto) {
+      if (i.fixAction === 'chaosdb') await fetchOrBuildChaosDb().catch(() => null)
+    }
+    items = await preflight(state.repoPath, state.descriptor) // re-check: did the repair take?
+  }
+  return items.filter((i) => !i.ok && i.blocksScheduling)
+}
+
 ipcMain.handle('atlas:load', () => {
   if (!state.descriptor || !state.repoPath) return null
   if (atlasCache.project === activeProjectId && atlasCache.local !== undefined) {
@@ -3255,6 +3335,18 @@ function assignToAgent(agentName: string, role: string, count: number, loop: boo
   if (loop) agentLoop.add(agentName)
   else agentLoop.delete(agentName)
   return serializeGen(async () => {
+    // Repair what's repairable and refuse early on what isn't, rather than letting the scheduler
+    // run for minutes and then die on a missing file. SETUP_NEEDED tells the renderer to show this
+    // as a calm, actionable panel instead of a traceback in a modal.
+    const blockers = await ensureSchedulable()
+    if (blockers.length) {
+      throw new Error(
+        'SETUP_NEEDED\n' +
+          blockers.map((b) => `${b.label}: ${b.detail}`).join('\n') +
+          '\n' +
+          blockers.map((b) => b.fix).filter(Boolean).join(' ')
+      )
+    }
     const draft = await genDraft(role && role !== 'Unassigned' ? role : undefined, count)
     addBatch(draft, agentName) // inside the lock, so the next queued generation sees these as taken
   })

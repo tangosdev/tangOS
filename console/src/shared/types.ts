@@ -355,6 +355,9 @@ export interface RunResult {
   output: string
 }
 
+/** A failing requirement Console can repair itself, rather than printing a command to copy. */
+export type PreflightFixId = 'python' | 'pypkgs' | 'rom' | 'chaosdb'
+
 export interface PreflightItem {
   id: string
   label: string
@@ -362,6 +365,25 @@ export interface PreflightItem {
   detail: string
   fix?: string // when !ok: one plain sentence saying how to fix it
   fixCmd?: string // when !ok: a ready-to-copy command that does the fix (if one exists)
+  /** When set, the panel shows a button that performs the fix instead of only naming it. */
+  fixAction?: PreflightFixId
+  /** Button text for fixAction, e.g. "Install packages". */
+  fixLabel?: string
+  /** fixAction needs a file chosen first (the ROM picker) - the button opens a dialog. */
+  fixNeedsFile?: { title: string; extensions: string[] }
+  /** fixAction installs software or otherwise changes the machine: confirm before running. */
+  fixConfirm?: string
+  /** Console may run this fix unprompted (no user input, nothing installed, repo-local only).
+   *  Pressing Go applies these silently rather than failing with a dialog. */
+  autoFixable?: boolean
+  /** A missing requirement that makes batch generation impossible. Go refuses rather than
+   *  spending minutes in a scheduler that cannot succeed. */
+  blocksScheduling?: boolean
+}
+
+export interface PreflightFixResult {
+  ok: boolean
+  message: string
 }
 
 // ---- secure API-key vault (for tools that call an HTTP API, not MCP) --------

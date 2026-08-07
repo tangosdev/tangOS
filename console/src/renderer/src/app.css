@@ -773,6 +773,8 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 120;
   max-width: 560px; padding: 12px 18px; border-radius: 12px; cursor: pointer;
   font-size: 12.5px; line-height: 1.5; text-align: center; color: var(--aero-text);
+  /* The setup notice lists one line per unmet requirement, so its newlines have to survive. */
+  white-space: pre-line;
   background: var(--aero-panel);
   backdrop-filter: blur(18px) saturate(1.1);
   -webkit-backdrop-filter: blur(18px) saturate(1.1);
@@ -1387,6 +1389,12 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   background: rgba(0,0,0,0.06); border: 1px solid var(--aero-border); color: inherit;
 }
 .req-fix-cmd:hover { background: rgba(0,0,0,0.1); }
+/* The button that actually performs a fix. Sits above the sentence rather than beside it, so the
+   thing you can press reads first and the explanation is there if you want it. */
+.req-fix-btn { display: inline-flex; align-items: center; gap: 5px; margin: 2px 0 5px; }
+.req-fix-result { display: block; margin-top: 4px; font-weight: 600; }
+.req-fix-result.ok { color: rgb(var(--aero-matched-rgb)); }
+.req-fix-result.bad { color: #b91c1c; }
 /* Encyclopedia: the tools reference overlay (paper button in the Controller footer) */
 .ency-scrim {
   position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;

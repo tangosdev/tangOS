@@ -1,13 +1,46 @@
 import { useEffect, useState } from 'react'
-import { Check, X, RefreshCw, ChevronDown, ChevronUp, Copy } from 'lucide-react'
+import { Check, X, RefreshCw, ChevronDown, ChevronUp, Copy, Wrench } from 'lucide-react'
 import type { RepoState, PreflightItem } from '../../../shared/types'
 
-/** A failing requirement's how-to-fix line: the sentence plus a click-to-copy command when one exists. */
-function FixHint({ item }: { item: PreflightItem }): JSX.Element | null {
+/** A failing requirement's how-to-fix line: a button that performs the fix where Console can, the
+ *  sentence, and the click-to-copy command for anyone who would rather run it themselves. */
+function FixHint({ item, onFixed }: { item: PreflightItem; onFixed: () => void }): JSX.Element | null {
   const [copied, setCopied] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
   if (item.ok || (!item.fix && !item.fixCmd)) return null
+
+  async function runFix(): Promise<void> {
+    if (!item.fixAction) return
+    if (item.fixConfirm && !window.confirm(item.fixConfirm)) return
+    let filePath: string | undefined
+    if (item.fixNeedsFile) {
+      // Cancelling the picker is a decision, not a failure - leave the row untouched and silent.
+      const picked = await window.tangos.pickFixFile(item.fixNeedsFile.title, item.fixNeedsFile.extensions)
+      if (!picked) return
+      filePath = picked
+    }
+    setBusy(true)
+    setResult(null)
+    try {
+      const r = await window.tangos.preflightFix(item.fixAction, filePath)
+      setResult(r)
+      if (r.ok) onFixed()
+    } catch (e) {
+      setResult({ ok: false, message: String((e as Error).message ?? e) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <span className="req-fix">
+      {item.fixAction && (
+        <button className="mini-btn go req-fix-btn" disabled={busy} onClick={runFix}>
+          {busy ? <RefreshCw size={11} className="spin" /> : <Wrench size={11} />}{' '}
+          {busy ? 'Working…' : item.fixLabel ?? 'Fix this'}
+        </button>
+      )}
       {item.fix}
       {item.fixCmd && (
         <button
@@ -22,6 +55,7 @@ function FixHint({ item }: { item: PreflightItem }): JSX.Element | null {
           {item.fixCmd} {copied ? <Check size={11} /> : <Copy size={11} />}
         </button>
       )}
+      {result && <span className={`req-fix-result ${result.ok ? 'ok' : 'bad'}`}>{result.message}</span>}
     </span>
   )
 }
@@ -59,7 +93,11 @@ export default function Requirements({
   }, [items])
 
   const req = repo.descriptor?.requirements
-  const anyRequired = !!req && (req.rom || !!req.compiler || !!req.pythonPackages?.length)
+  // The function-data check comes from descriptor.data rather than requirements, so a repo that
+  // declares no requirements at all can still have something here worth showing.
+  const anyRequired =
+    (!!req && (req.rom || !!req.compiler || !!req.pythonPackages?.length)) ||
+    !!items?.some((i) => i.id === 'chaosdb')
   if (!anyRequired) return null
 
   // All satisfied -> a tiny chip (click to peek at the details).
@@ -100,7 +138,7 @@ export default function Requirements({
               <span className="req-text">
                 <span className="req-label">{it.label}</span>
                 <span className="req-detail">{it.detail}</span>
-                <FixHint item={it} />
+                <FixHint item={it} onFixed={check} />
               </span>
             </li>
           ))}
