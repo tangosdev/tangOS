@@ -21,17 +21,26 @@ export interface Counts {
 
 // Derive the backend API base from the descriptor's claims API (…/claims -> …).
 //
-// NO FALLBACK ON PURPOSE. A backend serves exactly one project: tangos.dev/api answers
+// NO GUESSED FALLBACK. A claims backend serves exactly one project: tangos.dev/api answers
 // /atlas, /counts, /progress and /live for sm64ds and nothing else. Defaulting a repo with
 // no claimsApi to that base painted the wrong project's contributor colors, stars, career
-// counts and live match feed onto its atlas. A project without a backend gets no cosmetics,
-// which is honest; it does not get somebody else's.
+// counts and live match feed onto its atlas.
 function apiBase(claimsApi?: string | null): string | null {
   if (claimsApi && /\/claims\/?$/.test(claimsApi)) return claimsApi.replace(/\/claims\/?$/, '')
   return null
 }
-export function cosmeticsUrl(claimsApi?: string | null): string | null {
-  const base = apiBase(claimsApi)
+
+// Where to read this project's own atlas extras (colours, counts, its live stream): the backend
+// that SERVES it if there is one, else its declared per-project base. Not the same as the guess
+// above - liveApi names THIS project's routes, so the data comes back scoped to it rather than
+// borrowed from sm64ds. Progress and the computed atlas deliberately do NOT use this: those exist
+// only for the project the backend computes, and there is nothing honest to serve another one.
+export function atlasBase(claimsApi?: string | null, liveApi?: string | null): string | null {
+  return apiBase(claimsApi) ?? (liveApi ? liveApi.replace(/\/$/, '') : null)
+}
+
+export function cosmeticsUrl(claimsApi?: string | null, liveApi?: string | null): string | null {
+  const base = atlasBase(claimsApi, liveApi)
   return base && `${base}/cosmetics`
 }
 
@@ -58,8 +67,8 @@ function parse(raw: unknown): Cosmetics {
 
 /** Shop cosmetics, TTL-cached so the Atlas doesn't hammer the backend. A failed fetch
  *  returns the last-known copy (or empty), never throws - cosmetics are decoration. */
-export async function fetchCosmetics(claimsApi?: string | null): Promise<Cosmetics> {
-  const url = cosmeticsUrl(claimsApi)
+export async function fetchCosmetics(claimsApi?: string | null, liveApi?: string | null): Promise<Cosmetics> {
+  const url = cosmeticsUrl(claimsApi, liveApi)
   if (!url) return { colors: {}, stars: [] }
   if (cache?.url === url && Date.now() - cache.at < TTL_MS) return cache.value
   try {
@@ -140,8 +149,8 @@ export async function fetchProgress(claimsApi?: string | null): Promise<LiveProg
 
 /** Contributor match numbers from the backend: career totals + matches today (the
  *  recent-activity badge). Best-effort; empty on failure. */
-export async function fetchCounts(claimsApi?: string | null): Promise<Counts> {
-  const base = apiBase(claimsApi)
+export async function fetchCounts(claimsApi?: string | null, liveApi?: string | null): Promise<Counts> {
+  const base = atlasBase(claimsApi, liveApi)
   if (!base) return { totals: {}, daily: {} }
   try {
     const ac = new AbortController()
@@ -166,12 +175,11 @@ export async function fetchCounts(claimsApi?: string | null): Promise<Counts> {
 // gateway or a redeploy re-establishes the push without the app noticing. Returns a stop
 // function.
 //
-// Two possible streams, and the difference is what a project is entitled to. claimsApi means
-// the backend serves THIS project: cosmetics, counts, claims and computed progress. liveApi is
-// the project's own stream and carries publish events only - "your CI just landed fresh data" -
-// which is all a project the backend does not compute needs to stop waiting on a poll. Falling
-// back from one to the other would be the old bug of painting sm64ds's data onto another
-// project, so they are separate URLs and the claims one wins.
+// Two possible streams, and the difference is what a project is entitled to. claimsApi means the
+// backend serves THIS project, so its stream adds claims and computed progress. liveApi is the
+// project's own stream: publish events plus its own colours and counts, all scoped to it. Neither
+// is a fallback for the other - the URLs name different projects' data, and mixing them up is the
+// old bug of painting sm64ds onto another atlas - so they stay separate and the claims one wins.
 export function connectAtlasLive(
   getClaimsApi: () => string | null | undefined,
   getLiveApi: () => string | null | undefined,
