@@ -51,6 +51,17 @@ export interface TangosMatchConventions {
   /** Near-miss tip store (default nearmiss/db.jsonl). */
   nearMissDb?: string
   /**
+   * Where a matched source file belongs, e.g. "src/arm9/<symbol>.c|.cpp and
+   * src/arm7/<symbol>.c|.cpp, one matched function each".
+   *
+   * Emitted to the agent as its own directive in every batch. A repo that splits
+   * src/ by CPU or segment does not build a file dropped at the top of src/ - it
+   * compiles for nobody and counts toward nothing - and the byte gate does not
+   * catch it, because it resolves each file from that file's own decomp marker
+   * rather than from where the file sits.
+   */
+  srcLayout?: string
+  /**
    * Prefill matchProvenance on attempt-tree nodes (slugs, not display names).
    * Same idea as Chaos Viewer's model / reasoning / harness pickers.
    */

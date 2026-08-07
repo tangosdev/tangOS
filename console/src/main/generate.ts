@@ -35,6 +35,38 @@ function gitRemote(repo: string): string | undefined {
   }
 }
 
+/**
+ * Describe where matched sources belong, when src/ is split into per-target
+ * subdirectories (src/arm9, src/arm7, src/overlay0, ...) rather than flat.
+ *
+ * Worth detecting because the failure is silent: a decomp whose build scans only
+ * the subdirectories ignores anything dropped at the top of src/, and the byte
+ * gate still passes it, since it resolves a file from that file's own decomp
+ * marker rather than from its path. Undefined for a flat src/, where there is no
+ * placement rule to state.
+ */
+function detectSrcLayout(repo: string): string | undefined {
+  const src = join(repo, 'src')
+  if (!existsSync(src)) return undefined
+  const isSource = (f: string): boolean => /\.(c|cpp|cc|cp|s|asm)$/i.test(f)
+  try {
+    const entries = readdirSync(src)
+    if (entries.some((f) => isSource(f) && statSync(join(src, f)).isFile())) return undefined
+    const subs = entries.filter((d) => {
+      const p = join(src, d)
+      try {
+        return statSync(p).isDirectory() && readdirSync(p).some(isSource)
+      } catch {
+        return false
+      }
+    })
+    if (subs.length < 2) return undefined
+    return `${subs.map((s) => `src/${s}/<symbol>.c|.cpp`).join(' and ')}, one matched function each`
+  } catch {
+    return undefined
+  }
+}
+
 function detectLanguage(repo: string): string | undefined {
   // Shallow scan of a src/ dir if present.
   for (const d of ['src', 'source', '.']) {
@@ -184,14 +216,16 @@ export function detectRepo(repoPath: string): GenerateReport {
   const hasAttempts = exists(repoPath, 'config/match_attempts.jsonl') || exists(repoPath, 'tools/log_attempt.py')
   const hasNearMiss = exists(repoPath, 'nearmiss/db.jsonl') || exists(repoPath, 'tools/nearmiss_db.py')
   const hasGhidra = exists(repoPath, 'tools/ghidra') || exists(repoPath, 'tools/ghidra_targets.py')
+  const srcLayout = detectSrcLayout(repoPath)
   const matchConventions =
-    hasAttempts || hasNearMiss || hasGhidra
+    hasAttempts || hasNearMiss || hasGhidra || srcLayout
       ? {
           attemptTree: hasAttempts,
           ...(hasAttempts
             ? { attemptsPath: 'config/match_attempts.jsonl', provenancePath: 'config/match_provenance.jsonl' }
             : {}),
           ...(hasNearMiss ? { nearMissDb: 'nearmiss/db.jsonl' } : {}),
+          ...(srcLayout ? { srcLayout } : {}),
           ghidraDrafts: hasGhidra,
           defaultProvenance: { model: 'grok-4.5', reasoning: 'high', harness: 'grok-build' }
         }
@@ -201,6 +235,7 @@ export function detectRepo(repoPath: string): GenerateReport {
       `match conventions: attemptTree=${!!matchConventions.attemptTree} nearMiss=${!!hasNearMiss} ghidra=${hasGhidra}`
     )
   }
+  if (srcLayout) notes.push(`src layout: ${srcLayout}`)
 
   const descriptor: TangosDescriptor = {
     tangosVersion: '1',
