@@ -4214,7 +4214,7 @@ ipcMain.handle('repo:backup', async (): Promise<{ ok: boolean; path?: string; fi
 // The destructive part: fetch + reset --hard origin/<default> + clean -fd (keeps gitignored setup).
 // Gets the checkout back to a fresh-clone src tree. On success, drop caches so the atlas + matched
 // set re-derive from the now-current tree.
-ipcMain.handle('repo:sync', async (): Promise<{ ok: boolean; branch?: string; head?: string; error?: string }> => {
+ipcMain.handle('repo:sync', async (): Promise<{ ok: boolean; branch?: string; head?: string; backup?: string; error?: string }> => {
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo))) return { ok: false, error: 'not a git checkout' }
   // Crash-safe cleanup: reset --hard + clean -fd would discard any verified match still sitting
@@ -4225,6 +4225,23 @@ ipcMain.handle('repo:sync', async (): Promise<{ ok: boolean; branch?: string; he
     await runStrandedSweep()
   } catch {
     /* sweep failed; proceed with the sync the user asked for */
+  }
+  // ALWAYS back up first. repo:backup used to be a separate button the operator had to remember,
+  // and the sweep above is not a safety net you can rely on: it silently returns early when the
+  // repo declares no `match` tool, when a candidate's name is absent from chaos-db ("no db, no
+  // sweep"), or when another sweep is already running. Any of those and `clean -fd` takes
+  // uncommitted work with it, unrecoverably - which is exactly how three freshly-banked pictochat
+  // matches were destroyed on 2026-08-07, with no backup folder to recover them from.
+  //
+  // A backup is cheap and unconditional, so it belongs on the destructive path itself rather than
+  // in the UI that happens to call it. Failing to back up ABORTS the sync: refusing to destroy is
+  // always the better error than destroying without a net.
+  let backupPath: string | undefined
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)
+    backupPath = (await backupBeforeSync(repo, stamp)).path
+  } catch (e) {
+    return { ok: false, error: `refusing to sync: the pre-sync backup failed (${String(e).slice(0, 160)}). Nothing was changed.` }
   }
   const r = await syncToOrigin(repo, (label, pct) => mainWindow?.webContents.send('repo:syncProgress', { label, pct }))
   if (r.ok) {
