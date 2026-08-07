@@ -3549,8 +3549,13 @@ async function driveBatch(agentName: string): Promise<void> {
   if (fresh) console.log(`[driveBatch] ${agentName}: ${fresh}/${rows.length} fresh target(s) - driver drafts those from scratch`)
 
   // Stable, discoverable location (not a random temp name) so the run's "open folder" link
-  // always resolves to real files. One worklist + output per agent; the next drive overwrites.
-  const driveDir = join(app.getPath('temp'), 'tangos-drives')
+  // always resolves to real files. One worklist + output per agent PER PROJECT; the next drive of
+  // that agent on that project overwrites. The project segment matters: keyed on the agent name
+  // alone, driving the same agent on two decomps wrote both to one "<agent>.worklist.jsonl", so a
+  // second project's drive clobbered the first's worklist while its results file stayed put - the
+  // pair then described two different games, and the post-run tools read whichever half survived.
+  const projectDir = (activeProjectId ?? 'unknown').replace(/[^a-z0-9]+/gi, '_')
+  const driveDir = join(app.getPath('temp'), 'tangos-drives', projectDir)
   mkdirSync(driveDir, { recursive: true })
   const slug = agentName.replace(/[^a-z0-9]/gi, '_')
   const wl = join(driveDir, `${slug}.worklist.jsonl`)
