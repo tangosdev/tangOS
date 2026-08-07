@@ -397,12 +397,33 @@ export async function fetchBase(repo: string, branch: string): Promise<boolean> 
   return (await git(repo, ['fetch', '--quiet', 'origin', branch])).code === 0
 }
 
-/** How a working-tree file relates to origin/<base>: 'absent' (not upstream - normal for a fresh
- *  match), 'identical' (already landed upstream - nothing left to PR), or 'differs' (upstream has
- *  its own version - ours is superseded; never overwrite someone else's landed match). */
-export async function upstreamState(repo: string, base: string, path: string): Promise<'absent' | 'identical' | 'differs'> {
+/** How a local file relates to origin/<base>: 'absent' (not upstream - normal for a fresh match),
+ *  'identical' (already landed upstream - nothing left to PR), or 'differs' (upstream has its own
+ *  version - ours is superseded UNLESS upstream is still NONMATCHING; see upstreamIsNonmatching).
+ *
+ *  `rev` chooses WHICH local version answers the question:
+ *   - omitted -> the working tree. Right for auto-push and the rescue sweep: they ship worktree
+ *     bytes, so worktree-vs-upstream is the question they're actually asking.
+ *   - a rev ('HEAD') -> that commit's blob. Right for anything publishing COMMITS: a worktree that
+ *     drifted back to upstream's content otherwise reads 'identical' and silently drops a committed
+ *     match. Blob-vs-blob also compares post-filter content on both sides, so CRLF/LF normalization
+ *     can't fake a difference. */
+export async function upstreamState(
+  repo: string,
+  base: string,
+  path: string,
+  rev?: string
+): Promise<'absent' | 'identical' | 'differs'> {
   const ref = `origin/${base}`
-  if ((await git(repo, ['cat-file', '-e', `${ref}:${path}`])).code !== 0) return 'absent'
+  const up = await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}:${path}`])
+  if (up.code !== 0) return 'absent'
+  if (rev) {
+    const local = await git(repo, ['rev-parse', '--verify', '--quiet', `${rev}:${path}`])
+    // Not in that commit at all -> nothing of ours to publish. Report it as 'identical' so callers
+    // drop it; 'absent' would mean "upstream lacks it", which is the opposite of what we just saw.
+    if (local.code !== 0) return 'identical'
+    return up.out.trim() === local.out.trim() ? 'identical' : 'differs'
+  }
   // diff --quiet: exit 0 = worktree file byte-equals the committed blob (after filters)
   return (await git(repo, ['diff', '--quiet', ref, '--', path])).code === 0 ? 'identical' : 'differs'
 }
@@ -420,29 +441,65 @@ export async function upstreamIsNonmatching(repo: string, base: string, path: st
   return /(^|\n)\s*(\/\/|\/\*)\s*NONMATCHING\b/i.test(head)
 }
 
+/** What a diverged local branch has in src/ that origin/<base> doesn't, plus WHY each rejected file
+ *  was rejected - callers report the reasons, so "nothing to push" can stop guessing. */
+export type NewSrcScan = {
+  /** Publishable: brand-new matches, plus upgrades over an upstream NONMATCHING. */
+  files: string[]
+  /** Byte-identical to upstream already - merged, nothing left to PR. */
+  landed: number
+  /** Upstream has its own REAL (already-matched) version; ours is superseded, never overwrite it. */
+  superseded: number
+  /** Upgrade blocked: upstream's stale draft sits under the other extension, so shipping ours would
+   *  leave main with both foo.c and foo.cpp defining the function (duplicate symbol at link). Needs
+   *  a rename PR, which this push path can't build - it only adds files, it can't delete one. */
+  siblingConflict: string[]
+}
+
 /** src/*.c|.cpp files a diverged local branch introduces vs origin/<base> that AREN'T already
  *  landed upstream - the genuinely-unpublished matches a diverged clone should PR. Diffs the
- *  merge-base..HEAD range (only this branch's own commits) and keeps files upstream lacks
- *  ('absent'); drops 'identical' (already merged) and 'differs' (upstream has its own version -
- *  superseded, never overwrite a landed match). A .c<->.cpp rename guard drops stale pre-rename
- *  drafts (upstream has the sibling extension). This is what stops a checkout that has drifted
- *  behind main from re-PRing already-merged work or reverting generated files. */
-export async function newSrcVsBase(repo: string, base: string): Promise<string[]> {
+ *  merge-base..HEAD range (only this branch's own commits), then judges each file against the
+ *  COMMITTED blob (this feeds a publish-those-commits path, not a publish-the-worktree one).
+ *
+ *  Keeps a file when upstream lacks it, or when upstream has it but is still NONMATCHING and ours
+ *  isn't - that's an upgrade (nonmatching -> byte-exact), the same exception auto-push makes. The
+ *  old blanket "exists upstream -> drop it" rule had no such exception, so a legitimate upgrade was
+ *  reported back as "already on <base> upstream" for work that had never landed at all.
+ *
+ *  Still drops 'identical' (already merged) and 'differs' against a real upstream match (superseded).
+ *  This is what stops a checkout that has drifted behind main from re-PRing already-merged work or
+ *  reverting generated files. */
+export async function newSrcVsBase(repo: string, base: string): Promise<NewSrcScan> {
+  const scan: NewSrcScan = { files: [], landed: 0, superseded: 0, siblingConflict: [] }
   const ref = `origin/${base}`
-  if ((await git(repo, ['rev-parse', '--verify', '--quiet', ref])).code !== 0) return []
+  if ((await git(repo, ['rev-parse', '--verify', '--quiet', ref])).code !== 0) return scan
   const d = await git(repo, ['diff', '--name-only', '--diff-filter=ACMR', `${ref}...HEAD`, '--', 'src'])
-  if (d.code !== 0) return []
-  const out: string[] = []
+  if (d.code !== 0) return scan
   for (const line of d.out.split('\n')) {
     const p = line.trim()
     const m = /^(src\/.+)\.(c|cpp)$/.exec(p)
     if (!m) continue
-    if ((await upstreamState(repo, base, p)) !== 'absent') continue // already landed or superseded
-    const sibling = `${m[1]}.${m[2] === 'c' ? 'cpp' : 'c'}` // this match may have landed under the other ext
-    if ((await git(repo, ['cat-file', '-e', `${ref}:${sibling}`])).code === 0) continue
-    out.push(p)
+    const up = await upstreamState(repo, base, p, 'HEAD')
+    if (up === 'identical') {
+      scan.landed++
+      continue
+    }
+    if (up === 'differs' && !(await upstreamIsNonmatching(repo, base, p))) {
+      scan.superseded++
+      continue
+    }
+    // This match may have landed under the other extension (a .c -> .cpp promotion). A sibling that
+    // is itself still NONMATCHING hasn't superseded anything, but we can't ship over it either -
+    // see siblingConflict above. Report it rather than dropping it silently.
+    const sibling = `${m[1]}.${m[2] === 'c' ? 'cpp' : 'c'}`
+    if ((await git(repo, ['cat-file', '-e', `${ref}:${sibling}`])).code === 0) {
+      if (await upstreamIsNonmatching(repo, base, sibling)) scan.siblingConflict.push(p)
+      else scan.superseded++
+      continue
+    }
+    scan.files.push(p)
   }
-  return out
+  return scan
 }
 
 /** Working-tree source files that are new or modified (porcelain), for per-agent attribution. */

@@ -4248,9 +4248,27 @@ ipcMain.handle('repo:pushWorkPr', async (): Promise<{ ok: boolean; url?: string;
   // un-match files). Then build the PR from origin/<base> + only the genuinely-new matches, the
   // same way auto-push does (throwaway index in pushSubsetToBranch - the local branch is untouched).
   await fetchBase(repo, base)
-  const files = await newSrcVsBase(repo, base)
+  const scan = await newSrcVsBase(repo, base)
+  const files = scan.files
   if (!files.length) {
-    return { ok: false, error: `nothing to push - your local matches are already on ${base} upstream (Sync to catch up)` }
+    // Say what actually happened. This used to assert "already on <base> upstream" for every empty
+    // result and always suggest Sync - wrong on both counts when the files were dropped for another
+    // reason, or when the branch isn't behind at all and syncing would change nothing.
+    const why = [
+      scan.landed ? `${scan.landed} already landed upstream` : '',
+      scan.superseded ? `${scan.superseded} superseded by an upstream match` : '',
+      scan.siblingConflict.length
+        ? `${scan.siblingConflict.length} blocked by a stale upstream draft under the other extension (${scan.siblingConflict.slice(0, 3).join(', ')}${scan.siblingConflict.length > 3 ? ', ...' : ''}) - needs a rename PR`
+        : ''
+    ].filter(Boolean).join('; ')
+    const ab = await aheadBehind(repo, base)
+    const sync = ab && ab.behind > 0 ? ` - Sync to catch up (${ab.behind} behind ${base})` : ''
+    return {
+      ok: false,
+      error: why
+        ? `nothing to push - ${why}${sync}`
+        : `nothing to push - no new or upgraded matches in src/ vs ${base}${sync}`
+    }
   }
   // Fallback must never be 'work': `tangos/work` IS the safe-mode work branch (WORK_BRANCH), and a
   // contributor with no git user.name once collided with it - update-ref then moved the checked-out
