@@ -190,6 +190,24 @@ export default function AtlasView({
           for (const r of d.changed ?? []) records.set(r.id, r)
           return { stats, matched: next, records }
         })
+      } else if (event === 'published') {
+        // This project's CI has landed a fresh chaos-db, so read it now instead of at the next
+        // poll. For a project the backend does not compute progress for, this is the only thing
+        // that makes a merge show up while the window is open.
+        //
+        // The updater is how we read the CURRENT source from inside this effect, whose closure
+        // was made once on mount - same trick as the local-refresh listener below. Local data is
+        // the operator's own repo state and must not be replaced by what is on main.
+        setSource((s) => {
+          if (s === 'live')
+            void window.tangos
+              .atlasLoadLive(true)
+              .then((fresh) => {
+                if (fresh) setDb(fresh)
+              })
+              .catch(() => {})
+          return s
+        })
       }
     })
     window.tangos

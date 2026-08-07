@@ -108,6 +108,12 @@ export interface TangosData {
   dbPath?: string
   committedDbUrl?: string
   claimsApi?: string
+  // This project's live stream on the tangos backend, e.g.
+  // https://tangos.dev/api/projects/pictochat. Publish events only: it says when this
+  // project's own CI has landed a fresh chaos-db, so the Atlas reloads then instead of
+  // waiting out its poll. Separate from claimsApi on purpose - that one brings claims,
+  // cosmetics and counts, which belong only to the project the backend serves.
+  liveApi?: string
   // Raw URL of the live CLAIMS.md. Optional: if absent the console derives it from
   // committedDbUrl (same owner/repo, main branch, /CLAIMS.md).
   claimsMdUrl?: string
