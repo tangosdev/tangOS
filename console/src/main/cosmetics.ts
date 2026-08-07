@@ -165,8 +165,16 @@ export async function fetchCounts(claimsApi?: string | null): Promise<Counts> {
 // frames and calls onEvent for each. Auto-reconnects with a short backoff so a dropped
 // gateway or a redeploy re-establishes the push without the app noticing. Returns a stop
 // function.
+//
+// Two possible streams, and the difference is what a project is entitled to. claimsApi means
+// the backend serves THIS project: cosmetics, counts, claims and computed progress. liveApi is
+// the project's own stream and carries publish events only - "your CI just landed fresh data" -
+// which is all a project the backend does not compute needs to stop waiting on a poll. Falling
+// back from one to the other would be the old bug of painting sm64ds's data onto another
+// project, so they are separate URLs and the claims one wins.
 export function connectAtlasLive(
   getClaimsApi: () => string | null | undefined,
+  getLiveApi: () => string | null | undefined,
   onEvent: (event: string, data: unknown) => void
 ): () => void {
   let stopped = false
@@ -174,9 +182,11 @@ export function connectAtlasLive(
 
   async function loop(): Promise<void> {
     while (!stopped) {
-      const base = apiBase(getClaimsApi())
+      const served = apiBase(getClaimsApi())
+      const own = getLiveApi()?.replace(/\/$/, '')
+      const base = served ?? own
       if (!base) {
-        // This project publishes no backend. Park rather than streaming somebody else's
+        // This project has no stream at all. Park rather than streaming somebody else's
         // events, and re-check on the same cadence so a switch to a project that HAS one
         // picks the stream up without a restart.
         await new Promise((r) => setTimeout(r, 3000))

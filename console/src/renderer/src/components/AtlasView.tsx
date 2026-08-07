@@ -190,6 +190,24 @@ export default function AtlasView({
           for (const r of d.changed ?? []) records.set(r.id, r)
           return { stats, matched: next, records }
         })
+      } else if (event === 'published') {
+        // This project's CI has landed a fresh chaos-db, so read it now instead of at the next
+        // poll. For a project the backend does not compute progress for, this is the only thing
+        // that makes a merge show up while the window is open.
+        //
+        // The updater is how we read the CURRENT source from inside this effect, whose closure
+        // was made once on mount - same trick as the local-refresh listener below. Local data is
+        // the operator's own repo state and must not be replaced by what is on main.
+        setSource((s) => {
+          if (s === 'live')
+            void window.tangos
+              .atlasLoadLive(true)
+              .then((fresh) => {
+                if (fresh) setDb(fresh)
+              })
+              .catch(() => {})
+          return s
+        })
       }
     })
     window.tangos
@@ -315,6 +333,37 @@ export default function AtlasView({
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Keep the Live view moving on its own. A project WITH a backend gets the SSE feed above,
+  // which pushes matched state seconds after a merge. A project without one - no claimsApi in
+  // its descriptor, so /progress and /live are not its to read - has nothing pushing to it at
+  // all, and its atlas sat at whatever was fetched when this view opened: a match merged while
+  // the window was up simply never appeared. Poll the published data there, and slowly even
+  // with the feed, since a function the generator only just added arrives in the file rather
+  // than in a delta.
+  //
+  // force, because the passive path serves its own 60s cache and then rides raw GitHub's CDN
+  // copy, which can be minutes old - exactly the staleness this poll exists to close. The main
+  // process throttles a forced fetch to one per 20s, so this cadence cannot hammer it.
+  //
+  // Deliberately not load(): that flips `loading`, which would swap the whole map for the
+  // spinner once a minute. A failed poll leaves what is on screen alone.
+  const hasLiveFeed = !!live
+  useEffect(() => {
+    if (source !== 'live') return
+    const t = setInterval(
+      () => {
+        void window.tangos
+          .atlasLoadLive(true)
+          .then((fresh) => {
+            if (fresh) setDb(fresh)
+          })
+          .catch(() => {})
+      },
+      hasLiveFeed ? 5 * 60_000 : 60_000
+    )
+    return () => clearInterval(t)
+  }, [source, hasLiveFeed])
 
   async function generate(): Promise<void> {
     setGenerating(true)

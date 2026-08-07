@@ -2233,8 +2233,13 @@ function startAtlasLive(): void {
   atlasLiveStop?.()
   atlasLiveStop = connectAtlasLive(
     () => state.descriptor?.data?.claimsApi,
+    () => state.descriptor?.data?.liveApi,
     (event, data) => {
       if (event === 'cosmetics') bustCosmeticsCache()
+      // This project's CI has published a fresh chaos-db. Drop the cached live copy first, or
+      // the reload the renderer is about to do gets served the very copy this event says is
+      // stale (a passive read holds it for 60s, a forced one for 20).
+      if (event === 'published') atlasCache = { ...atlasCache, liveAt: 0 }
       mainWindow?.webContents.send('atlas:live', { event, data })
     }
   )
