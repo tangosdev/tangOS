@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Sparkles, Play, Square, ShoppingCart, ShieldCheck, AlertTriangle, GitBranch, GitPullRequest, BarChart2, FileText } from 'lucide-react'
-import type { AiAgent, ActivityRun, Batch } from '../../../shared/types'
-import { ROLE_NAMES, ROLE_PRESETS, ROLE_STRENGTH } from '../../../shared/types'
+import type { AiAgent, ActivityRun, Batch, UiMode } from '../../../shared/types'
+import { ROLE_NAMES, ROLE_PRESETS, ROLE_STRENGTH, roleBatchSize } from '../../../shared/types'
 import { aiColor } from '../aiColor'
-import { recommendRole } from '../roleRec'
+import { recommendRole, autoRole } from '../roleRec'
 import { effortSpec, currentEffort } from '../efforts'
 import GithubSignIn from './GithubSignIn'
 
@@ -81,6 +81,7 @@ export default function Controller({
   onToggleReview,
   onOpenDetail,
   onOpenEncyclopedia,
+  uiMode,
   mcpControl
 }: {
   agents: AiAgent[]
@@ -100,10 +101,16 @@ export default function Controller({
   onToggleReview: () => void
   onOpenDetail: (name: string) => void
   onOpenEncyclopedia: () => void
+  /** simple = one Go/Stop and a count per agent; advanced = every per-agent control. */
+  uiMode: UiMode
   mcpControl: JSX.Element
 }): JSX.Element {
+  const simple = uiMode === 'simple'
   const [busy, setBusy] = useState<Record<string, string>>({}) // name -> loading label
   const [sizes, setSizes] = useState<Record<string, number>>({}) // name -> batch size (-1 = infinite)
+  // Simple mode's count field: name -> how many functions to work before stopping. Absent = ∞
+  // (keep pulling fresh batches until Stop), which is the default the field shows.
+  const [counts, setCounts] = useState<Record<string, number>>({})
   const [notice, setNotice] = useState<string | null>(null) // gentle info toast (e.g. "no work for this role")
   const [statScope, setStatScope] = useState<'all' | 'run'>('run') // which tally the boxes show
   const [genTail, setGenTail] = useState('') // the in-flight scheduler's streamed output (one gen at a time)
@@ -156,12 +163,20 @@ export default function Controller({
     })
   }, [agents, latestByName, batches])
 
-  async function assign(name: string, role: string | undefined): Promise<void> {
+  /** Queue a batch. `plan` overrides the Advanced size/loop controls (Simple mode passes its own).
+   *  Returns whether a batch actually landed, so Go only drives when there's something to drive. */
+  async function assign(
+    name: string,
+    role: string | undefined,
+    plan?: { count: number; loop: boolean }
+  ): Promise<boolean> {
     const size = sizes[name] ?? 16
-    const loop = size === -1
+    const loop = plan ? plan.loop : size === -1
+    const count = plan ? plan.count : loop ? 16 : size
     setBusy((b) => ({ ...b, [name]: 'Generating batch' }))
     try {
-      await window.tangos.assignAi({ agent: name, role, count: loop ? 16 : size, loop })
+      await window.tangos.assignAi({ agent: name, role, count, loop })
+      return true
     } catch (e) {
       // Strip Electron's "Error invoking remote method 'ai:assign': Error:" IPC wrapper.
       const msg = String((e as Error).message ?? e).replace(/^Error invoking remote method '[^']+':\s*Error:\s*/i, '')
@@ -175,10 +190,28 @@ export default function Controller({
       } else {
         alert(msg) // real errors keep the full dialog (with setup hints)
       }
+      return false
     } finally {
       setBusy((b) => ({ ...b, [name]: '' }))
     }
   }
+
+  /** Simple mode's Go: queue AND start, in one press. The count field says how much work - a number
+   *  is one batch of that many functions, empty is ∞ (keep pulling batches until Stop). The role is
+   *  picked from the agent rather than asked for (see autoRole).
+   *
+   *  API agents also need driving: on a loop the main process starts the drive loop itself, but a
+   *  one-shot batch would otherwise just sit in the queue waiting for a second press. That second
+   *  press is exactly what Simple mode exists to remove, so Go drives it here. MCP agents need
+   *  nothing further - their external client polls next_batch and picks the work up on its own. */
+  async function go(a: AiAgent): Promise<void> {
+    const role = autoRole(a).role
+    const n = counts[a.name]
+    const loop = n == null
+    if (!(await assign(a.name, role, { count: loop ? roleBatchSize(role) : n, loop }))) return
+    if (a.kind === 'api' && !loop) await drive(a.name)
+  }
+
   async function drive(name: string): Promise<void> {
     setBusy((b) => ({ ...b, [name]: 'Driving' }))
     try {
@@ -226,7 +259,7 @@ export default function Controller({
           each one gets a box here you can assign work to and watch live.
         </div>
       ) : (
-        <div className="ctl-grid aero-scroll">
+        <div className={`ctl-grid aero-scroll${simple ? ' simple' : ''}`}>
           {views.map(({ agent, batch, analyzed, total, task, live, batchDone, liveLine, queueRemaining, queuedBatches }) => {
             const a = agent
             const st = statScope === 'run' ? a.run ?? a.stats : a.stats // all-time vs this-run tally
@@ -255,6 +288,10 @@ export default function Controller({
             // it loops. Scoped to MCP - API agents drive/stop through their own row.
             const loopSel = rawSize === -1 || (a.kind === 'mcp' && isLooping)
             const rec = recommendRole(a)
+            // The role Simple mode will run it under. Never assigned to the agent (no chips, no
+            // dropdown) - it's decided at Go time and only surfaces in the idle line and tooltip.
+            const auto = autoRole(a)
+            const count = counts[a.name] // undefined = ∞
             return (
               <div
                 className={`ai-box ${state}${generating ? ' busy' : ''}`}
@@ -267,16 +304,18 @@ export default function Controller({
                       Generating batch… <Elapsed />
                     </span>
                     <span className="aib-loadsub">ranking targets by similarity - up to a minute on a cold start</span>
-                    {genLogOpen && (
+                    {!simple && genLogOpen && (
                       <pre className="aib-loadlog aero-scroll" ref={(el) => el && (el.scrollTop = el.scrollHeight)}>
                         {genTail.split('\n').slice(-14).join('\n') || '(waiting for scheduler output…)'}
                       </pre>
                     )}
                     <span className="aib-loadbar" />
                     <span className="aib-load-actions">
-                      <button className="mini-btn" onClick={() => setGenLogOpen((o) => !o)}>
-                        {genLogOpen ? 'Hide details' : 'Details'}
-                      </button>
+                      {!simple && (
+                        <button className="mini-btn" onClick={() => setGenLogOpen((o) => !o)}>
+                          {genLogOpen ? 'Hide details' : 'Details'}
+                        </button>
+                      )}
                       <button className="mini-btn stop" onClick={() => window.tangos.cancelGen()} title="Stop the scheduler - nothing is queued">
                         <Square size={12} /> Cancel
                       </button>
@@ -299,18 +338,19 @@ export default function Controller({
                   </span>
                   {a.kind === 'api' && <span className="aib-kind">API</span>}
                   {isLooping && <span className="aib-kind loop" title="Matching continuously">∞</span>}
-                  {a.roles.map((r) => (
-                    <span className="role-chip" key={r} title={ROLE_PRESETS[r]}>
-                      {r}
-                      <button
-                        className="role-x"
-                        onClick={() => window.tangos.setClientRoles(a.name, a.roles.filter((x) => x !== r))}
-                        title={`Remove ${r}`}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
+                  {!simple &&
+                    a.roles.map((r) => (
+                      <span className="role-chip" key={r} title={ROLE_PRESETS[r]}>
+                        {r}
+                        <button
+                          className="role-x"
+                          onClick={() => window.tangos.setClientRoles(a.name, a.roles.filter((x) => x !== r))}
+                          title={`Remove ${r}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
                   <span className="aib-matches">
                     {st.totalMatches}
                     <small> matched</small>
@@ -346,8 +386,16 @@ export default function Controller({
                     <span className="aib-exhausted" title={`Auto-stopped: ${a.exhausted}. Assign or drive it again to retry once the key has usage.`}>
                       ⚠ out of usage - auto-stopped
                     </span>
+                  ) : !available ? (
+                    <span className="aib-idle">offline</span>
+                  ) : simple ? (
+                    // Simple mode hides the role controls, so name the role it WILL use here -
+                    // otherwise pressing Go is a black box. The tooltip says where it came from.
+                    <span className="aib-idle" title={`${auto.role}: ${auto.why}`}>
+                      idle - will run as {auto.role}
+                    </span>
                   ) : (
-                    <span className="aib-idle">{available ? 'idle - ready to assign' : 'offline'}</span>
+                    <span className="aib-idle">idle - ready to assign</span>
                   )}
                 </div>
 
@@ -364,8 +412,8 @@ export default function Controller({
                   </div>
                 )}
 
-                <div className="aib-actions" onClick={(e) => e.stopPropagation()}>
-                  {running ? (
+                <div className={`aib-actions${simple ? ' simple' : ''}`} onClick={(e) => e.stopPropagation()}>
+                  {(simple ? running || queueRemaining > 0 : running) ? (
                     // Working (driving or looping): collapse to a single Stop - the role/effort/size/
                     // loop/start controls only add clutter and jump the box height while it runs.
                     <button
@@ -377,11 +425,62 @@ export default function Controller({
                           ? 'Stopping - banking matches, running the clone/paramclone post-pass, and pushing the near-miss PR. Finishes on its own.'
                           : driving
                             ? 'Stop - finishes nothing further; matches found so far are kept'
-                            : "Stop looping - no new batch is queued once the current one finishes; the agent isn't signalled or interrupted"
+                            : isLooping
+                              ? "Stop looping - no new batch is queued once the current one finishes; the agent isn't signalled or interrupted"
+                              : 'Stop - drops the work still waiting in the queue. Matches found so far are kept.'
                       }
                     >
                       <Square size={12} /> {a.stopping ? 'Stopping…' : 'Stop'}
                     </button>
+                  ) : simple ? (
+                    <>
+                      <div className="aib-btns aib-simple">
+                        <input
+                          className="aib-size"
+                          type="number"
+                          min={1}
+                          max={200}
+                          value={count ?? ''}
+                          placeholder="∞"
+                          title={
+                            count == null
+                              ? 'How many functions to work through. Empty (∞) keeps pulling fresh batches until you press Stop - type a number to run just that many and stop.'
+                              : `Work ${count} function${count === 1 ? '' : 's'}, then stop. Clear the box for ∞ (keep going until you press Stop).`
+                          }
+                          onChange={(e) => {
+                            const v = e.target.value.trim()
+                            setCounts((c) => {
+                              const next = { ...c }
+                              if (v === '') delete next[a.name]
+                              else next[a.name] = Math.max(1, Math.min(200, Math.floor(Number(v)) || 1))
+                              return next
+                            })
+                          }}
+                        />
+                        <button
+                          className="mini-btn go aib-go"
+                          disabled={generating || !capabilities.schedule}
+                          onClick={() => go(a)}
+                          title={
+                            !capabilities.schedule
+                              ? "This project has no worklist scheduler yet, so there's nothing to build a batch from. Declare one in tangos.json under console.scheduler."
+                              : count == null
+                                ? `Start matching as ${auto.role} (${auto.why}) and keep going until you press Stop`
+                                : `Match ${count} function${count === 1 ? '' : 's'} as ${auto.role} (${auto.why}), then stop`
+                          }
+                        >
+                          <Play size={12} /> Go
+                        </button>
+                      </div>
+                      {/* Only ever visible once you've deliberately picked functions in the Atlas, so
+                          it's not clutter in the default state - and without it a cart full of picks
+                          would have nowhere to go in Simple mode. */}
+                      {cartCount > 0 && (
+                        <button className="mini-btn custom" onClick={() => onAssignCart(a.name)} title="Add the functions you picked in the Chaos Viewer to this AI's queue">
+                          <ShoppingCart size={12} /> Add chosen functions ({cartCount})
+                        </button>
+                      )}
+                    </>
                   ) : (
                     <>
                       <div className="aib-roles">

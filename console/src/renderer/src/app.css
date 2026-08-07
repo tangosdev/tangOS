@@ -945,15 +945,31 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   /* exactly 3 per row: two AIs fill 2/3 of the row, as designed */
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;
   align-content: start; align-items: stretch;
+  /* Every card is exactly this tall, always. Card height used to follow content, so a stats row
+     appearing, a progress bar showing up, or a queue button swapping in resized the card and shoved
+     the whole row (and every row under it) around while you were reading it. Fixed rows mean the
+     content moves inside a card that never does. The slack all lands in .aib-task, which clips.
+     One number per mode - tune these, not the individual blocks. */
+  grid-auto-rows: var(--ai-box-h);
+  --ai-box-h: 272px;
 }
+/* Simple mode has far less in a card (no role/effort/attempts row, no queue or drive buttons), so
+   it gets its own, shorter lock rather than sitting in a half-empty advanced-sized box. Both values
+   are sized for the FULLEST the card ever gets - for simple that's stats plus the cart button, for
+   advanced it's stats plus cart plus the drive row - so nothing is ever cut off at the bottom. */
+.ctl-grid.simple { --ai-box-h: 210px; }
+/* Slightly tighter task floor in simple mode: with the taller Go there's less to go around, and
+   this is what keeps the cart button inside the card when it appears. */
+.ctl-grid.simple .aib-task { min-height: 36px; }
 
-/* one AI box (click to pop out detail) - equal column width; height follows content. The grid's
-   align-items:stretch equalises every box in a row, so no floor is needed for alignment.
+/* one AI box (click to pop out detail) - equal column width, and height pinned to the grid's fixed
+   row so a card never grows or shrinks under you.
    Do NOT put min-height:0 back here: on a stretched grid item that is itself a column flex it
    removes the automatic content minimum, which let the row size BELOW the content and spilled the
-   cart/drive buttons out past the card's bottom edge onto the row underneath. */
+   cart/drive buttons out past the card's bottom edge onto the row underneath. The fixed row height
+   plus .aib-task's clip is what keeps the buttons in now - not a content minimum. */
 .ai-box {
-  position: relative;
+  position: relative; height: 100%; overflow: hidden;
   border: 1.5px solid rgba(var(--aero-gloss-rgb) / 0.22); border-radius: 14px; padding: 11px 12px 10px; cursor: pointer;
   /* near-solid (~90%) theme-tinted fill so each agent card reads as a solid panel rather than
      glass; no bright inset rim + muted border keep the edges glare-free */
@@ -998,8 +1014,12 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   border: 1px solid rgba(var(--aero-gloss-rgb) / 0.7); transition: all 0.12s ease;
 }
 .aib-detail-btn:hover { color: var(--aero-text); background: rgba(var(--aero-gloss-rgb) / 0.85); }
+/* The one elastic block in the card. Everything else holds its natural height and the task panel
+   takes whatever is left over, clipping rather than pushing when a run adds a progress bar, a note
+   and a live output line at once - that growth is what used to resize the card. */
 .aib-task {
-  flex: 1 1 auto; border-radius: 10px; padding: 8px 10px; min-height: 40px; background: rgba(var(--aero-gloss-rgb) / 0.4);
+  flex: 1 1 auto; border-radius: 10px; padding: 8px 10px; min-height: 40px; overflow: hidden;
+  background: rgba(var(--aero-gloss-rgb) / 0.4);
   border: 1px solid var(--aero-border); display: flex; flex-direction: column; gap: 6px; justify-content: center;
 }
 .aib-task-label { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1010,6 +1030,9 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 .aib-bar > span { display: block; height: 100%; border-radius: 999px; transition: width 300ms ease; }
 .aib-stats { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; font-weight: 700; color: var(--aero-text); }
 .aib-stats .muted { color: var(--aero-muted); font-weight: 500; }
+/* Hold their natural size against the fixed card height - only .aib-task gives. Without this the
+   controls would compress when a run fills the task panel. */
+.aib-top, .aib-stats, .aib-actions { flex: none; }
 .aib-actions { display: flex; flex-direction: column; gap: 7px; }
 .aib-actions .agent-role { width: 100%; }
 /* While running, the whole cluster collapses to one full-width Stop. */
@@ -1051,6 +1074,18 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   border: 1px solid var(--aero-border); background: rgba(var(--aero-gloss-rgb) / 0.55); color: var(--aero-muted);
 }
 .aib-loop.on { color: #fff; background: rgb(var(--aero-primary-rgb)); border-color: rgb(var(--aero-primary-rgb)); }
+/* Simple mode: the whole box collapses to a count field and one Go. It's the only thing to press,
+   so it gets one extra text row of height - enough to read as the primary control without turning
+   into a slab. The count field and the Stop that Go swaps into share the exact same height, so the
+   row can't shift when you press it. */
+.aib-actions.simple .aib-size,
+.aib-actions.simple .aib-go,
+.aib-actions.simple .aib-stop { height: 44px; }
+.aib-actions.simple .aib-size { width: 58px; font-size: 15px; padding: 0 6px; }
+.aib-actions.simple .aib-go,
+.aib-actions.simple .aib-stop { font-size: 13.5px; font-weight: 800; gap: 6px; }
+.aib-actions.simple .aib-go svg,
+.aib-actions.simple .aib-stop svg { width: 14px; height: 14px; }
 /* Running-version badge, pinned bottom-right so you can always tell which build is open. */
 .app-version {
   position: fixed; right: 8px; bottom: 6px; z-index: 40; pointer-events: none;
@@ -1278,6 +1313,14 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   padding: 3px 10px; color: var(--aero-muted); white-space: nowrap;
 }
 .stat-scope button.on { background: rgba(14,165,233,0.9); color: #fff; }
+/* Settings segmented control (Simple / Advanced), same shape as the stat-scope toggle but
+   full-width so it reads as a setting rather than a filter chip. */
+.settings-seg { display: flex; border: 1px solid var(--aero-border); border-radius: 999px; overflow: hidden; }
+.settings-seg button {
+  flex: 1 1 0; border: none; background: transparent; cursor: pointer; font-size: 12px; font-weight: 700;
+  padding: 5px 10px; color: var(--aero-muted); white-space: nowrap;
+}
+.settings-seg button.on { background: rgba(14,165,233,0.9); color: #fff; }
 /* stat-scope toggle inside the AiDetail popup, above the stat tiles */
 .aid-scope { display: flex; justify-content: flex-end; margin: 2px 0 8px; }
 .aid-scope .stat-scope { margin-right: 0; }

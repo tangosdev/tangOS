@@ -49,8 +49,9 @@ import { release as osRelease } from 'node:os'
 import type {
   TangosDescriptor, TangosRuntime, TangosTool, RepoState, McpState, Batch, BatchDraft, BatchItem,
   Review, RunResult, AtlasDb, AtlasSource, SecretsInfo, AiAgent, ConnectedClient, RepoUpdateStatus,
-  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs, ProjectSummary, TangosConsoleRoles
+  SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs, UiPrefs, ProjectSummary, TangosConsoleRoles
 } from '../shared/types'
+import { roleBatchSize } from '../shared/types'
 
 const DEFAULT_PORT = 4808
 
@@ -1483,6 +1484,9 @@ const DEFAULT_ATTEMPTS = 4
 let viewerPrefs: ViewerPrefs = { theme: 'classic', contributorColors: false }
 // Animated gradient-background pref (on by default); the palette follows the active theme.
 let bgPrefs: BackgroundPrefs = { enabled: true }
+// How much of the controller to show. Simple (default) = one Go/Stop per agent and a count field;
+// Advanced = every per-agent control. See UiPrefs.
+let uiPrefs: UiPrefs = { mode: 'simple' }
 // Draft-source toggles for agents (near-miss tips / Ghidra scaffolds). Policy only — never paste C.
 let matchingPrefs: MatchingPrefs = { allowNearMiss: true, allowGhidra: false }
 function settingsFile(): string {
@@ -1603,6 +1607,7 @@ function saveSettings(): void {
         viewerPrefs,
         bgPrefs,
         matchingPrefs,
+        uiPrefs,
         // The user's on/off INTENT, not the instantaneous server state - a boot-time save must
         // not clobber the auto-start flag before the server has come up (see mcpDesired).
         mcpRunning: mcpDesired
@@ -1632,6 +1637,7 @@ function loadSettings(): {
   viewerPrefs?: Partial<ViewerPrefs>
   bgPrefs?: Partial<BackgroundPrefs>
   matchingPrefs?: Partial<MatchingPrefs>
+  uiPrefs?: Partial<UiPrefs>
   mcpRunning?: boolean
 } {
   try {
@@ -2668,6 +2674,13 @@ ipcMain.handle('matching:setPrefs', (_e, p: Partial<MatchingPrefs>): MatchingPre
   return matchingPrefs
 })
 
+ipcMain.handle('ui:getPrefs', (): UiPrefs => uiPrefs)
+ipcMain.handle('ui:setPrefs', (_e, p: Partial<UiPrefs>): UiPrefs => {
+  if (p?.mode === 'simple' || p?.mode === 'advanced') uiPrefs = { mode: p.mode }
+  saveSettings()
+  return uiPrefs
+})
+
 ipcMain.handle('bg:getPrefs', (): BackgroundPrefs => bgPrefs)
 
 ipcMain.handle('bg:setPrefs', (_e, p: Partial<BackgroundPrefs>): BackgroundPrefs => {
@@ -2766,8 +2779,6 @@ function genPlanFor(
       return { role: 'scheduler', values: { limit: count } }
   }
 }
-/** Sensible default batch size per role (Hard matcher is heavy -> fewer targets per batch). */
-export const roleBatchSize = (role?: string): number => (role === 'Hard matcher' ? 8 : 16)
 
 // Generate a batch scheduled for this AI's role (similarity, large-function sweep, spread
 // survey, or near-miss refine). Each target carries scaffolding metadata for the agent.
@@ -4506,6 +4517,7 @@ app.whenReady().then(() => {
         : viewerPrefs.contributorColors
   }
   bgPrefs = { enabled: typeof saved.bgPrefs?.enabled === 'boolean' ? saved.bgPrefs.enabled : bgPrefs.enabled }
+  uiPrefs = { mode: saved.uiPrefs?.mode === 'advanced' ? 'advanced' : 'simple' }
   matchingPrefs = {
     allowNearMiss:
       typeof saved.matchingPrefs?.allowNearMiss === 'boolean'

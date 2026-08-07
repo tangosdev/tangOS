@@ -315,17 +315,33 @@ export const ROLE_PRESETS: Record<string, string> = {
   'Random':
     'You are the RANDOM MATCHER. Your batch is unmatched functions drawn uniformly at random from across the whole ROM - any size, any module, no similarity hint. For each, study the disasm, callees, pool slots, and signatures, write C, and verify with match/fdiff. Give each about 5 attempts with DIFFERENT levers; if it has not matched by then, move on rather than grinding. Bank confirmed byte matches. Log every try when MATCH LOGGING is on (matched only after verify; near_miss only when tip improves; else no_progress; no wall-clock times). This role samples the whole unmatched pool for breadth - on an infinite loop you get a fresh random draw each batch.'
 }
-/** Rough model-strength each role wants, shown in the assign-role dropdown so the operator parks the
- *  right model: your strongest on the hardest role, a cheap/local model where there's the most
- *  scaffolding. Each tier names a reference model so "low/high" reads as reasoning/skill, not a guess.
- *  Display-only - never injected into the agent's instructions; edit the reference models freely. */
-export const ROLE_STRENGTH: Record<string, string> = {
-  'Hard matcher': 'very high, Fable 5+',
-  'Random': 'high, Sonnet 5 / Grok',
-  'Drafter': 'medium, DeepSeek',
-  'Refiner': 'low, GLM / Nemotron'
+/** Which models each role wants. `strength` is the operator-facing label in the assign-role dropdown:
+ *  your strongest on the hardest role, a cheap/local model where there's the most scaffolding. Each
+ *  tier names a reference model so "low/high" reads as reasoning/skill, not a guess. `names` and
+ *  `families` are the machine-readable half of that same claim - Simple mode picks a role from the
+ *  connected model with them, so the label an operator reads and the role the app picks can't drift
+ *  apart. `names` is tried first against the agent name (a Claude box can be Fable or Haiku; the
+ *  family alone can't tell them apart); `families` is the coarse fallback, keyed by efforts.ts
+ *  `familyOf`. Never injected into an agent's instructions - edit the reference models freely. */
+export const ROLE_FIT: Record<string, { strength: string; names?: RegExp; families?: string[] }> = {
+  'Hard matcher': { strength: 'very high, Fable 5+', names: /fable|opus|gpt-?5|\bo[34]\b/ },
+  'Random': { strength: 'high, Sonnet 5 / Grok', names: /sonnet|grok/, families: ['Claude', 'Grok', 'GPT'] },
+  'Drafter': { strength: 'medium, DeepSeek', names: /deepseek|kimi|moonshot/, families: ['DeepSeek', 'Kimi'] },
+  'Refiner': {
+    strength: 'low, GLM / Nemotron',
+    names: /glm|zhipu|nemotron|nemo|gemma|mistral/,
+    families: ['GLM', 'Nemotron', 'Requesty']
+  }
 }
+/** Display-only view of ROLE_FIT, for the assign-role dropdown. */
+export const ROLE_STRENGTH: Record<string, string> = Object.fromEntries(
+  Object.entries(ROLE_FIT).map(([role, fit]) => [role, fit.strength])
+)
 export const ROLE_NAMES = ['Unassigned', ...Object.keys(ROLE_PRESETS)]
+
+/** Sensible default batch size per role (Hard matcher is heavy -> fewer targets per batch). Shared
+ *  so the count the controller shows and the count the scheduler uses are the same number. */
+export const roleBatchSize = (role?: string): number => (role === 'Hard matcher' ? 8 : 16)
 
 export type ActivityEvent =
   | { kind: 'run-started'; run: ActivityRun }
@@ -555,6 +571,17 @@ export interface MatchingPrefs {
  *  follows the active theme (see paletteForTheme). */
 export interface BackgroundPrefs {
   enabled: boolean
+}
+
+/** How much of the controller to show, persisted in tangos-settings.json.
+ *  simple   - each agent box is a status line and one Go/Stop button, with a count field. The role
+ *             is picked for the agent from its measured strengths, then the model behind it (see
+ *             ROLE_FIT), and never shown.
+ *  advanced - every control: assign/remove roles by hand, effort, attempts, batch size, the loop
+ *             toggle, queue up without starting, clear the queue, drive the queue separately. */
+export type UiMode = 'simple' | 'advanced'
+export interface UiPrefs {
+  mode: UiMode
 }
 
 // ---- safe writes (dedicated work branch + diff review) ---------------------

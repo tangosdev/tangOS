@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Settings2, FolderOpen, RefreshCw, MessageCircle, Bug, KeyRound } from 'lucide-react'
 import type {
   RepoState, McpState, ActivityRun, ActivityEvent, Batch, BatchItem, Review, AiAgent, BackgroundPrefs,
-  MatchingPrefs, ProjectSummary
+  MatchingPrefs, UiPrefs, ProjectSummary
 } from '../../shared/types'
 import RepoPicker from './components/RepoPicker'
 import ProjectMenu from './components/ProjectMenu'
@@ -80,6 +80,7 @@ export default function App(): JSX.Element {
     allowNearMiss: true,
     allowGhidra: false
   })
+  const [uiPrefs, setUiPrefs] = useState<UiPrefs>({ mode: 'simple' })
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [switchingProject, setSwitchingProject] = useState(false)
   const [capabilities, setCapabilities] = useState<Record<string, boolean>>({})
@@ -174,6 +175,7 @@ export default function App(): JSX.Element {
     window.tangos.appVersion().then(setVersion).catch(() => {})
     window.tangos.bgPrefsGet().then(setBgPrefs).catch(() => {})
     window.tangos.matchingPrefsGet().then(setMatchingPrefs).catch(() => {})
+    window.tangos.uiPrefsGet().then(setUiPrefs).catch(() => {})
   }, [])
 
   async function updateBgPrefs(p: Partial<BackgroundPrefs>): Promise<void> {
@@ -182,6 +184,10 @@ export default function App(): JSX.Element {
 
   async function updateMatchingPrefs(p: Partial<MatchingPrefs>): Promise<void> {
     setMatchingPrefs(await window.tangos.matchingPrefsSet(p))
+  }
+
+  async function updateUiPrefs(p: Partial<UiPrefs>): Promise<void> {
+    setUiPrefs(await window.tangos.uiPrefsSet(p))
   }
 
   function applyActivity(ev: ActivityEvent): void {
@@ -351,6 +357,7 @@ export default function App(): JSX.Element {
         onToggleReview={toggleSafeMode}
         onOpenDetail={setDetailName}
         onOpenEncyclopedia={() => setEncyOpen(true)}
+        uiMode={uiPrefs.mode}
         mcpControl={mcpPill}
       />
       <div className="right-rail aero-scroll">
@@ -467,6 +474,8 @@ export default function App(): JSX.Element {
                     onBgPrefs={updateBgPrefs}
                     matchingPrefs={matchingPrefs}
                     onMatchingPrefs={updateMatchingPrefs}
+                    uiPrefs={uiPrefs}
+                    onUiPrefs={updateUiPrefs}
                   />
                 )}
               </div>

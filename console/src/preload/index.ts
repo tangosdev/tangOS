@@ -57,6 +57,9 @@ const api = {
   matchingPrefsSet: (
     p: Partial<import('../shared/types').MatchingPrefs>
   ): Promise<import('../shared/types').MatchingPrefs> => ipcRenderer.invoke('matching:setPrefs', p),
+  uiPrefsGet: (): Promise<import('../shared/types').UiPrefs> => ipcRenderer.invoke('ui:getPrefs'),
+  uiPrefsSet: (p: Partial<import('../shared/types').UiPrefs>): Promise<import('../shared/types').UiPrefs> =>
+    ipcRenderer.invoke('ui:setPrefs', p),
   openModulePopout: (module: string): Promise<void> => ipcRenderer.invoke('atlas:popout', module),
   addDraftItem: (item: BatchItem): Promise<void> => ipcRenderer.invoke('draft:addItem', item),
   onDraftAdd: (cb: (item: BatchItem) => void): (() => void) => {

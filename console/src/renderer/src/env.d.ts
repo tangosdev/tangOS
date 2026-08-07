@@ -61,6 +61,8 @@ export interface TangosApi {
   matchingPrefsSet(
     p: Partial<import('../../shared/types').MatchingPrefs>
   ): Promise<import('../../shared/types').MatchingPrefs>
+  uiPrefsGet(): Promise<import('../../shared/types').UiPrefs>
+  uiPrefsSet(p: Partial<import('../../shared/types').UiPrefs>): Promise<import('../../shared/types').UiPrefs>
   openModulePopout(module: string): Promise<void>
   addDraftItem(item: BatchItem): Promise<void>
   onDraftAdd(cb: (item: BatchItem) => void): () => void

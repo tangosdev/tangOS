@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { FolderOpen, Bug, ChevronRight, Trash2 } from 'lucide-react'
-import type { RepoState, BackgroundPrefs, MatchingPrefs } from '../../../shared/types'
+import type { RepoState, BackgroundPrefs, MatchingPrefs, UiPrefs } from '../../../shared/types'
 import SyncRepo from './SyncRepo'
 
 /** Clear-all-stats with an inline two-click confirm (no native dialog): the first click arms it,
@@ -57,7 +57,9 @@ export default function Settings({
   bgPrefs,
   onBgPrefs,
   matchingPrefs,
-  onMatchingPrefs
+  onMatchingPrefs,
+  uiPrefs,
+  onUiPrefs
 }: {
   repo: RepoState | null
   theme: string
@@ -72,6 +74,8 @@ export default function Settings({
   onBgPrefs: (p: Partial<BackgroundPrefs>) => void
   matchingPrefs: MatchingPrefs
   onMatchingPrefs: (p: Partial<MatchingPrefs>) => void
+  uiPrefs: UiPrefs
+  onUiPrefs: (p: Partial<UiPrefs>) => void
 }): JSX.Element {
   const fanout = agentFanout ?? 8
   return (
@@ -89,6 +93,33 @@ export default function Settings({
         throwing away local edits, custom/untracked files, and unpushed commits. Use it when your clone
         has drifted behind main and batches keep coming up short. Your extracted ROM, dependencies, and{' '}
         <code>.env</code> are kept, and the <b>Back up first</b> button saves everything it would delete.
+      </Info>
+
+      <div className="section-title" style={{ marginTop: 14 }}>Interface</div>
+      <div className="settings-seg">
+        <button
+          className={uiPrefs.mode === 'simple' ? 'on' : ''}
+          onClick={() => onUiPrefs({ mode: 'simple' })}
+        >
+          Simple
+        </button>
+        <button
+          className={uiPrefs.mode === 'advanced' ? 'on' : ''}
+          onClick={() => onUiPrefs({ mode: 'advanced' })}
+        >
+          Advanced
+        </button>
+      </div>
+      <Info>
+        <b>Simple</b> gives each AI in the Chaos Controller one status line and one <b>Go</b> button that
+        becomes <b>Stop</b>, plus a count: leave it empty for ∞ (keep matching until you stop it) or type
+        a number to work that many functions and stop. Its role is picked for it - from what it has
+        actually been good at here, then from the model behind the box, and failing both it draws from
+        the whole unmatched pool.
+        <br />
+        <b>Advanced</b> adds the per-AI controls back: assign and remove roles by hand, reasoning effort,
+        attempts per function, batch size, queueing work up without starting it, clearing the queue, and
+        driving the queue as a separate step.
       </Info>
 
       <div className="section-title" style={{ marginTop: 14 }}>Matching drafts</div>
