@@ -20,7 +20,7 @@ import { registerAll, cliCommand } from './connect'
 import { runTool, renderArgv } from './runTool'
 import { preflight, runPreflightFix } from './preflight'
 import { readAtlas } from './atlas'
-import { deriveClaimsUrl, fetchHeldClaims, overlayClaims } from './claims'
+import { fetchLiveHolds, overlayClaims } from './claims'
 import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
 import { fetchCosmetics, fetchCounts, fetchProgress, fetchAtlas, connectAtlasLive, bustCosmeticsCache, type Cosmetics, type Counts, type LiveProgress } from './cosmetics'
@@ -1745,13 +1745,12 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
   // Prefer the backend's live atlas: it is computed from the repo continuously and is
   // current to within seconds, where the committed file waits on a CI republish. Falls back
   // to the published file whenever the backend has nothing yet (cold start, offline).
-  const fromVps = (await fetchAtlas(state.descriptor?.data?.claimsApi)) as AtlasDb | null
+  const fromVps = (await fetchAtlas(state.descriptor?.data?.claimsApi, state.descriptor?.data?.liveApi)) as AtlasDb | null
   if (fromVps) {
-    const claimsUrlLive = deriveClaimsUrl(state.descriptor?.data?.committedDbUrl ?? '', state.descriptor?.data?.claimsMdUrl)
-    if (claimsUrlLive) {
-      const held = await fetchHeldClaims(claimsUrlLive)
-      if (held) overlayClaims(fromVps, held)
-    }
+    // Claims service board (agent locks) merged with CLAIMS.md rows - the file alone
+    // missed every API lock, so the cart could hand out a function an agent held.
+    const held = await fetchLiveHolds(state.descriptor?.data, state.descriptor?.data?.committedDbUrl)
+    if (held) overlayClaims(fromVps, held)
     atlasCache = { ...atlasCache, project: activeProjectId, live: fromVps, liveAt: Date.now() }
     aiStats.seedBestDiv(fromVps.functions)
     return fromVps
@@ -1780,13 +1779,11 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
       )
     }
     const db = (await r.json()) as AtlasDb
-    // Overlay live CLAIMS.md holds so the Viewer can dim taken work and the cart can refuse it.
-    // Advisory + best-effort: a failed/slow fetch just leaves functions untagged, never blocks Live.
-    const claimsUrl = deriveClaimsUrl(url, state.descriptor?.data?.claimsMdUrl)
-    if (claimsUrl) {
-      const held = await fetchHeldClaims(claimsUrl)
-      if (held) overlayClaims(db, held)
-    }
+    // Overlay live holds (claims service board + CLAIMS.md rows) so the Viewer can dim taken
+    // work and the cart can refuse it. Advisory + best-effort: a failed/slow fetch just
+    // leaves functions untagged, never blocks Live.
+    const held = await fetchLiveHolds(state.descriptor?.data, url)
+    if (held) overlayClaims(db, held)
     atlasCache = { ...atlasCache, project: activeProjectId, live: db, liveAt: Date.now() }
     aiStats.seedBestDiv(db.functions) // ground-truth near-miss baseline for the improvement gate
     return db
@@ -2638,7 +2635,7 @@ ipcMain.handle('atlas:counts', async (): Promise<Counts> => {
 // Live progress computed by the VPS from the repo itself (exact stats + matched ids), so the
 // atlas can move as soon as work lands rather than waiting on the published data refresh.
 ipcMain.handle('atlas:progress', async (): Promise<LiveProgress> => {
-  return fetchProgress(state.descriptor?.data?.claimsApi)
+  return fetchProgress(state.descriptor?.data?.claimsApi, state.descriptor?.data?.liveApi)
 })
 
 // GitHub device-flow sign-in: return the user code + verification URL to show, open the

@@ -21,22 +21,27 @@ export interface Counts {
 
 // Derive the backend API base from the descriptor's claims API (…/claims -> …).
 //
-// NO GUESSED FALLBACK. A claims backend serves exactly one project: tangos.dev/api answers
-// /atlas, /counts, /progress and /live for sm64ds and nothing else. Defaulting a repo with
-// no claimsApi to that base painted the wrong project's contributor colors, stars, career
-// counts and live match feed onto its atlas.
+// NO GUESSED FALLBACK. The routes under this base (/atlas, /counts, /progress, /live,
+// /cosmetics) are the backend's PRIMARY project's - sm64ds's - and nothing else's.
+// Defaulting a repo with no claimsApi to that base painted the wrong project's
+// contributor colors, stars, career counts and live match feed onto its atlas.
+//
+// Since claims went per-project (one board per decomp behind ?project=), a claimsApi no
+// longer implies the backend serves THIS project's atlas - pictochat declares one for its
+// claims board while its atlas data stays its own. That is why every consumer below
+// prefers liveApi (this project's own routes) and only falls back here without one.
 function apiBase(claimsApi?: string | null): string | null {
   if (claimsApi && /\/claims\/?$/.test(claimsApi)) return claimsApi.replace(/\/claims\/?$/, '')
   return null
 }
 
-// Where to read this project's own atlas extras (colours, counts, its live stream): the backend
-// that SERVES it if there is one, else its declared per-project base. Not the same as the guess
-// above - liveApi names THIS project's routes, so the data comes back scoped to it rather than
-// borrowed from sm64ds. Progress and the computed atlas deliberately do NOT use this: those exist
-// only for the project the backend computes, and there is nothing honest to serve another one.
+// Where to read this project's own atlas extras (colours, counts, its live stream): its
+// declared per-project base when it has one, else the backend that serves the primary.
+// liveApi first - it names THIS project's routes, so the data comes back scoped to it
+// rather than borrowed from sm64ds; a project declaring both fields means "my claims
+// board lives there" and not "serve me sm64ds's colours".
 export function atlasBase(claimsApi?: string | null, liveApi?: string | null): string | null {
-  return apiBase(claimsApi) ?? (liveApi ? liveApi.replace(/\/$/, '') : null)
+  return (liveApi ? liveApi.replace(/\/$/, '') : null) ?? apiBase(claimsApi)
 }
 
 export function cosmeticsUrl(claimsApi?: string | null, liveApi?: string | null): string | null {
@@ -92,8 +97,13 @@ export async function fetchCosmetics(claimsApi?: string | null, liveApi?: string
 
 /** The whole atlas straight from the VPS - same shape the published chaos-db has, but
  *  current to within seconds. Null when the backend has no data yet (cold start), so the
- *  caller can fall back to the published file. */
-export async function fetchAtlas(claimsApi?: string | null): Promise<unknown | null> {
+ *  caller can fall back to the published file.
+ *
+ *  /atlas exists only for the backend's computed (primary) project. A project with its
+ *  own liveApi is by definition not that one, so asking would return sm64ds's atlas
+ *  under this project's name - decline instead and let the published file serve. */
+export async function fetchAtlas(claimsApi?: string | null, liveApi?: string | null): Promise<unknown | null> {
+  if (liveApi) return null
   const base = apiBase(claimsApi)
   if (!base) return null
   try {
@@ -120,13 +130,15 @@ export interface LiveProgress {
 
 /** Live decomp progress computed by the VPS from the repo itself: exact stats plus the
  *  matched function ids. Lets the atlas move seconds after a merge instead of waiting for
- *  the published data to refresh. Best-effort; `ready:false` means fall back to the file. */
-export async function fetchProgress(claimsApi?: string | null): Promise<LiveProgress> {
+ *  the published data to refresh. Best-effort; `ready:false` means fall back to the file.
+ *  Primary-project-only, same as fetchAtlas: a project with its own liveApi declines. */
+export async function fetchProgress(claimsApi?: string | null, liveApi?: string | null): Promise<LiveProgress> {
   const empty: LiveProgress = {
     ready: false,
     stats: { totalFunctions: 0, matchedFunctions: 0, totalBytes: 0, matchedBytes: 0 },
     matched: []
   }
+  if (liveApi) return empty
   const base = apiBase(claimsApi)
   if (!base) return empty
   try {
@@ -175,11 +187,12 @@ export async function fetchCounts(claimsApi?: string | null, liveApi?: string | 
 // gateway or a redeploy re-establishes the push without the app noticing. Returns a stop
 // function.
 //
-// Two possible streams, and the difference is what a project is entitled to. claimsApi means the
-// backend serves THIS project, so its stream adds claims and computed progress. liveApi is the
-// project's own stream: publish events plus its own colours and counts, all scoped to it. Neither
-// is a fallback for the other - the URLs name different projects' data, and mixing them up is the
-// old bug of painting sm64ds onto another atlas - so they stay separate and the claims one wins.
+// Two possible streams. liveApi is the project's OWN stream (publish events, colours, counts
+// and claims, all scoped to it) and always wins when declared - since claims went per-project,
+// a claimsApi only says where the claims board lives, not that the backend serves this
+// project, so treating it as the stream signal would put sm64ds's events under another
+// project's atlas. The claimsApi-derived legacy stream (/api/live, which adds the computed
+// progress frames) remains for the primary project, which declares no liveApi.
 export function connectAtlasLive(
   getClaimsApi: () => string | null | undefined,
   getLiveApi: () => string | null | undefined,
@@ -192,7 +205,7 @@ export function connectAtlasLive(
     while (!stopped) {
       const served = apiBase(getClaimsApi())
       const own = getLiveApi()?.replace(/\/$/, '')
-      const base = served ?? own
+      const base = own ?? served
       if (!base) {
         // This project has no stream at all. Park rather than streaming somebody else's
         // events, and re-check on the same cadence so a switch to a project that HAS one
