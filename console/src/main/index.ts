@@ -1745,7 +1745,7 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
   // Prefer the backend's live atlas: it is computed from the repo continuously and is
   // current to within seconds, where the committed file waits on a CI republish. Falls back
   // to the published file whenever the backend has nothing yet (cold start, offline).
-  const fromVps = (await fetchAtlas(state.descriptor?.data?.claimsApi)) as AtlasDb | null
+  const fromVps = (await fetchAtlas(state.descriptor?.data?.claimsApi, state.descriptor?.data?.liveApi)) as AtlasDb | null
   if (fromVps) {
     // Claims service board (agent locks) merged with CLAIMS.md rows - the file alone
     // missed every API lock, so the cart could hand out a function an agent held.
@@ -2635,7 +2635,7 @@ ipcMain.handle('atlas:counts', async (): Promise<Counts> => {
 // Live progress computed by the VPS from the repo itself (exact stats + matched ids), so the
 // atlas can move as soon as work lands rather than waiting on the published data refresh.
 ipcMain.handle('atlas:progress', async (): Promise<LiveProgress> => {
-  return fetchProgress(state.descriptor?.data?.claimsApi)
+  return fetchProgress(state.descriptor?.data?.claimsApi, state.descriptor?.data?.liveApi)
 })
 
 // GitHub device-flow sign-in: return the user code + verification URL to show, open the
