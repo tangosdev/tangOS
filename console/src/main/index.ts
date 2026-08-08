@@ -1,5 +1,5 @@
 import './appName' // MUST be first: renames the data folder + migrates it before anything reads userData
-import { app, BrowserWindow, Menu, ipcMain, dialog, shell, clipboard, globalShortcut } from 'electron'
+import { app, BrowserWindow, Menu, Tray, ipcMain, dialog, shell, clipboard, globalShortcut } from 'electron'
 import { dumpDebug, debugDir } from './debug'
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -4420,7 +4420,10 @@ ipcMain.handle('app:version', () => app.getVersion())
 // Manual "is a newer build out?" check, driven by the top-bar refresh button. Also fires the
 // updater events that keep the top banner live while the app is open.
 ipcMain.handle('app:checkUpdate', () => checkForAppUpdate())
-ipcMain.handle('app:quitAndInstall', () => quitAndInstallUpdate())
+ipcMain.handle('app:quitAndInstall', () => {
+  updaterQuitting = true // an update install must never sit behind the close-linger
+  quitAndInstallUpdate()
+})
 // Wipe all AI stats (all-time + current run + best-div history). onChange persists + pushes state.
 ipcMain.handle('stats:clearAll', () => {
   aiStats.clearAll()
@@ -4931,9 +4934,77 @@ app.whenReady().then(() => {
   })
 })
 
-app.on('window-all-closed', async () => {
+// ---- close-linger: finish the batch, then exit -------------------------------
+// Closing the window with a console-driven batch mid-flight used to kill the driver with the
+// app, abandoning the batch's completed-but-unbanked matches. Instead the app now lingers
+// windowless (a tray icon explains and offers a way out) until the in-flight batch is driven,
+// landed and pushed, then exits for real. The loops are told to wind down BETWEEN batches
+// (driveStopRequested), while agentLoop itself is left alone - a close is not a Stop - so the
+// next launch resumes the fleet where it left off. The MCP server stays up for the linger, so
+// an external agent mid-batch gets the same grace the API drives do.
+let lingerTray: Tray | null = null
+let quitFinishing = false
+let updaterQuitting = false
+async function finishThenQuit(): Promise<void> {
+  if (quitFinishing) return
+  if (updaterQuitting || (driveInFlight.size === 0 && apiDriving.size === 0)) {
+    await mcp.stop()
+    app.quit()
+    return
+  }
+  quitFinishing = true
+  for (const name of new Set([...driveInFlight.keys(), ...driveLoopActive])) driveStopRequested.add(name)
+  const icon = appIcon()
+  if (icon) {
+    lingerTray = new Tray(icon)
+    lingerTray.setToolTip('tangOS Console - finishing the current batch, then exiting')
+    lingerTray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: 'Finishing the current batch, then exiting', enabled: false },
+        { type: 'separator' },
+        { label: 'Reopen window (keep working)', click: () => reopenFromLinger() },
+        {
+          label: 'Quit now (abandon the batch)',
+          click: () => {
+            for (const [, kill] of driveKills) {
+              try {
+                kill()
+              } catch {
+                /* already dead */
+              }
+            }
+            app.exit(0)
+          }
+        }
+      ])
+    )
+  }
+  while (driveInFlight.size) {
+    await Promise.allSettled([...driveInFlight.values()])
+  }
+  if (!quitFinishing) return // reopened from the tray mid-wait - not quitting anymore
+  saveSettings()
   await mcp.stop()
-  if (process.platform !== 'darwin') app.quit()
+  lingerTray?.destroy()
+  lingerTray = null
+  app.quit()
+}
+function reopenFromLinger(): void {
+  quitFinishing = false
+  // The stop requests were "wind down for exit", not a user Stop - clear them for agents still
+  // looping so their loops carry straight on into the reopened session.
+  for (const name of agentLoop) driveStopRequested.delete(name)
+  lingerTray?.destroy()
+  lingerTray = null
+  if (!mainWindow) createWindow()
+}
+
+app.on('window-all-closed', async () => {
+  if (process.platform === 'darwin') {
+    await mcp.stop()
+    return
+  }
+  void finishThenQuit()
 })
 
 export { DESCRIPTOR_FILENAME }
