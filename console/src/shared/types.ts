@@ -443,6 +443,9 @@ export interface Batch {
   note?: string // operator-facing warning shown on the box (e.g. landed short - clone behind)
   activatedAt?: number // when it went active (guards the stuck-batch retire against churn)
   pulledBy?: string // which agent pulled it active (guards retire against cross-agent clobber)
+  /** Set when a project swap parked this batch mid-drive. On resume the driver works only the
+   *  targets that aren't yet worked/done, instead of re-spending attempts on the whole list. */
+  parked?: boolean
 }
 
 /** A batch draft composed in the UI before it is enqueued. */

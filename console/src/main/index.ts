@@ -1591,6 +1591,9 @@ interface PersistedProject {
   agentLoop?: string[]
   agentStats?: Record<string, { totalMatches: number; matchAttempts: number }>
   agentBestDiv?: Record<string, number>
+  /** Open (queued/active/parked) batches, so a swap-away or an app close doesn't lose the work
+   *  in flight - swap back or reopen and the same batches, with their worked flags, resume. */
+  batches?: Batch[]
   // The published tangos.json, so a project with no clone here can still be browsed (and browsed
   // offline). Refreshed in the background; only ever used when there's no local descriptor.
   descriptorCache?: { at: number; descriptor: TangosDescriptor }
@@ -1610,6 +1613,7 @@ function snapshotActiveProject(): void {
   slot.agentLoop = [...agentLoop]
   slot.agentStats = aiStats.serialize()
   slot.agentBestDiv = aiStats.serializeBestDiv()
+  slot.batches = state.batches.filter((b) => b.status !== 'done')
   if (state.repoPath) slot.path = state.repoPath
   const title = state.descriptor?.project?.title
   if (title) slot.title = title
@@ -2293,6 +2297,7 @@ function setRepo(path: string | null, remote?: TangosDescriptor | null): RepoSta
   // us to a different project without going through the switcher; when it does, swap the scoped
   // agent state too, or that project's matches would be tallied under the previous one.
   const projectId = path ? identifyProject(path, state.descriptor) : activeProjectId
+  const wasSameProject = projectId === activeProjectId
   if (projectId && projectId !== activeProjectId) {
     snapshotActiveProject()
     loadProjectScoped(projectId)
@@ -2314,8 +2319,24 @@ function setRepo(path: string | null, remote?: TangosDescriptor | null): RepoSta
     const d = defaultMatchingPrefs(state.descriptor.project)
     matchingPrefs = { ...matchingPrefs, allowGhidra: d.allowGhidra }
   }
-  // Batches + pending reviews are repo-specific; reset for the new repo.
-  state.batches = []
+  // Batches are repo-specific, but they PERSIST per project now: restore this project's open
+  // ones (boot, and a swap-back both land here) so agents pick up the exact batches they left.
+  // Actives were held by an agent that is gone across a swap/restart - flip them queued, with
+  // the holder cleared, so next_batch/drive re-offers the remainder rather than skipping a
+  // batch nobody holds. The one case that must NOT restore is a same-project setRepo while a
+  // drive is live (descriptor reload mid-drive): replacing the array would orphan the driver's
+  // batch bookkeeping, so the live list stays.
+  if (wasSameProject && (apiDriving.size > 0 || state.batches.some((b) => b.status === 'active'))) {
+    /* keep the live batches */
+  } else {
+    state.batches = (projectId ? (persistedProjects[projectId]?.batches ?? []) : []).map((b) => ({
+      ...b,
+      status: b.status === 'active' ? ('queued' as const) : b.status,
+      pulledBy: undefined,
+      activatedAt: undefined,
+      items: b.items.map((i) => ({ ...i }))
+    }))
+  }
   state.reviews = []
   state.baseBranch = null
   enrichedRows.clear() // preserved coddog context belongs to the old repo
@@ -2533,11 +2554,17 @@ async function switchProject(id: string, path: string | null): Promise<RepoState
   pushState()
   try {
     const wasRunning = mcp.running
+    // Quiesce clears agentLoop, but a swap is not a Stop: the loops these agents were running
+    // belong to the project being left, and swapping back must resume them. Capture the set now
+    // and write it into the old slot after the snapshot below (which sees the cleared one).
+    const resumeLoop = [...agentLoop]
+    const leavingId = activeProjectId
     await quiesceProject()
 
     // Past this point every stale continuation is inert.
     projectEpoch++
     snapshotActiveProject()
+    if (leavingId && resumeLoop.length) (persistedProjects[leavingId] ??= {}).agentLoop = resumeLoop
     activityBus.clear() // the run feed belongs to the old project
     bustCosmeticsCache()
     // Popout windows show the old project's modules, and their "add to batch" relay would inject
@@ -2558,6 +2585,21 @@ async function switchProject(id: string, path: string | null): Promise<RepoState
     startAtlasLive()
   void prefetchRemoteDescriptors() // warm the switcher so picking an uncloned project is instant
     saveSettings()
+    // Resume the loops THIS project's agents were running when we last swapped away (same
+    // contract as the boot resume): console-drivable agents restart their drive loop - which
+    // drives the restored parked batch first - and MCP loopers get their queue topped so a
+    // batch is waiting when they next poll. Delayed so the swap's own settling (MCP start,
+    // preflight) finishes first; epoch-guarded in case of another quick swap.
+    if (agentLoop.size && state.repoPath && state.descriptor) {
+      const epoch = projectEpoch
+      setTimeout(() => {
+        if (epoch !== projectEpoch) return
+        for (const name of [...agentLoop]) {
+          if (isConsoleDrivable(name)) void startDriveLoop(name).catch(() => { /* missing key etc. */ })
+          else ensureLoopQueue(name)
+        }
+      }, 3000)
+    }
     return rs
   } finally {
     switchingProject = false
@@ -4789,13 +4831,16 @@ app.whenReady().then(() => {
     })
   }
   // Resume continuous-mode agents that were driving when the app last closed (crash or an update's
-  // restart) so a relaunch doesn't silently stop the fleet. Only console-drivable (keyed API) agents
-  // whose loop set persisted; a Stop persisted as removal, so a deliberately-stopped agent never
-  // auto-resumes. Delayed so the repo's own startup (sweep, descriptor) settles and the window exists.
+  // restart) so a relaunch doesn't silently stop the fleet. A Stop persisted as removal, so a
+  // deliberately-stopped agent never auto-resumes. Console-drivable (keyed API) agents restart
+  // their drive loop - the restored batch, if one persisted, is driven first. MCP loopers just
+  // get their queue topped (when the MCP server is meant to be up) so work is already waiting
+  // when the external agent reconnects and polls. Delayed so the repo's own startup settles.
   if (agentLoop.size && state.repoPath && state.descriptor) {
     setTimeout(() => {
       for (const name of [...agentLoop]) {
         if (isConsoleDrivable(name)) void startDriveLoop(name).catch(() => { /* missing key etc. just no-ops */ })
+        else if (mcpDesired) ensureLoopQueue(name)
       }
     }, 8000)
   }
