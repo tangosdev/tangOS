@@ -2466,12 +2466,21 @@ function switchBlocker(): string | null {
   return null
 }
 
+// How long a swap will wait for a killed drive's land/push pipeline to bank before moving on.
+const DRIVE_SETTLE_CAP_MS = 3 * 60_000
+
 /** Stop everything in flight, while state.repoPath still points at the OLD project so anything
  *  that finishes during this window finishes against the repo it was started for. */
 async function quiesceProject(): Promise<void> {
-  // 1. Kill API drivers and every scrap of loop bookkeeping that would restart them. A surviving
-  //    driver re-reads state at land time, and ensureLoopQueue's finally would generate a batch for
-  //    the new project on behalf of an agent that was looping in the old one.
+  // 1. Kill API drivers, then PARK, don't abandon: the kill ends the driver mid-function, but
+  //    driveBatch's continuation still reads its checkpointed results and runs the land/push
+  //    pipeline against the OLD repo (repoPath + epoch were pinned at drive start). Waiting for
+  //    that here - before switchProject bumps projectEpoch - is what lets a swap BANK the
+  //    completed work instead of tripping the epoch guard and throwing the run away, and the
+  //    parking flag turns the batch's retirement into a re-queue of the remainder for
+  //    swap-back. Capped: a hung push must not wedge the switcher; past the cap the epoch
+  //    guard makes any laggard inert, exactly as before.
+  for (const name of driveInFlight.keys()) parking.add(name)
   for (const [name, kill] of driveKills) {
     driveStopRequested.add(name)
     try {
@@ -2480,6 +2489,16 @@ async function quiesceProject(): Promise<void> {
       /* already dead */
     }
   }
+  // A drive still in its enrichment phase has no child yet - the pre-spawn check in driveBatch
+  // reads this and declines to launch a driver for a console that is moving on.
+  for (const name of driveInFlight.keys()) driveStopRequested.add(name)
+  if (driveInFlight.size) {
+    await Promise.race([
+      Promise.allSettled([...driveInFlight.values()]),
+      new Promise((r) => setTimeout(r, DRIVE_SETTLE_CAP_MS))
+    ])
+  }
+  parking.clear()
   driveKills.clear()
   agentLoop.clear()
   apiDriving.clear()
@@ -3689,10 +3708,28 @@ async function nemotronModelId(): Promise<string> {
   return chat
 }
 
+// The whole life of each agent's current driveBatch call, entry to banked. quiesceProject
+// awaits these (before bumping projectEpoch) so a swap's kill still lands the checkpointed
+// results against the old repo, and the close-linger waits on them before exiting.
+const driveInFlight = new Map<string, Promise<void>>()
+// Agents whose in-flight drive is being PARKED by a project swap (vs stopped by the user):
+// driveBatch's retirement re-queues the un-worked remainder instead of marking the batch done.
+const parking = new Set<string>()
+
 // Console-drive a keyed API provider on its assigned batch: write a worklist and run the
 // model driver (glm_refine, Anthropic-dialect) tagged as that AI, then fold the reported
 // landed matches + token usage into its stats.
 async function driveBatch(agentName: string): Promise<void> {
+  const run = driveBatchInner(agentName)
+  driveInFlight.set(agentName, run.then(() => undefined, () => undefined))
+  try {
+    await run
+  } finally {
+    driveInFlight.delete(agentName)
+  }
+}
+
+async function driveBatchInner(agentName: string): Promise<void> {
   if (!state.repoPath) throw new Error('no repo selected')
   // Pin the repo and project for the run. A drive is the longest thing the console does - minutes
   // of model calls, then a land step that writes C into src/, ingests near-misses and can claim
@@ -3781,16 +3818,27 @@ async function driveBatch(agentName: string): Promise<void> {
     report('drive', { agent: agentName, status: 'skipped', reason: 'batch already finished on main' })
     return
   }
+  // A parked batch (swapped away mid-drive) resumes with its REMAINING targets only - the worked
+  // ones already spent their attempts in the run that got parked. The flag clears here so a
+  // normal finish retires the batch; a second swap mid-resume just re-parks it below.
+  const driveItems = batch.parked ? batch.items.filter((i) => !i.worked && !i.done) : batch.items
+  batch.parked = undefined
+  if (!driveItems.length) {
+    batch.status = 'done'
+    report('drive', { agent: agentName, status: 'skipped', reason: 'parked batch had no remaining targets' })
+    pushState()
+    return
+  }
   // Build the driver worklist with FULL context. Prefer coddog's preserved enriched row (from
   // genDraft); for a target without one (a batch hand-picked in the Atlas), enrich on demand via
   // `worklist --addr`. Enrich in parallel (capped) with a live "Preparing N/M" status - 50 picks
   // done sequentially + silently was minutes of a dead-looking "Stop" (the custom-batch "nothing
   // happened" symptom). A target we can neither preserve nor enrich (no addr/module, or timed out)
   // is skipped, not fatal.
-  const toEnrich = batch.items.filter((i) => !enrichedRows.has(i.ref))
-  let prepared = batch.items.length - toEnrich.length
+  const toEnrich = driveItems.filter((i) => !enrichedRows.has(i.ref))
+  let prepared = driveItems.length - toEnrich.length
   const showPrep = (): void => {
-    aiStats.setCurrent(agentName, { task: `Preparing targets (${prepared}/${batch.items.length})…`, batchId: batch.id })
+    aiStats.setCurrent(agentName, { task: `Preparing targets (${prepared}/${driveItems.length})…`, batchId: batch.id })
     pushState()
   }
   if (toEnrich.length) {
@@ -3808,12 +3856,12 @@ async function driveBatch(agentName: string): Promise<void> {
       }
     })
     await Promise.all(workers)
-    if (couldNotEnrich) console.log(`[driveBatch] ${agentName}: ${couldNotEnrich}/${batch.items.length} target(s) had no enrichable context and were skipped`)
+    if (couldNotEnrich) console.log(`[driveBatch] ${agentName}: ${couldNotEnrich}/${driveItems.length} target(s) had no enrichable context and were skipped`)
   }
-  const enriched = batch.items.map((i) => enrichedRows.get(i.ref)).filter((r): r is string => !!r)
+  const enriched = driveItems.map((i) => enrichedRows.get(i.ref)).filter((r): r is string => !!r)
   if (!enriched.length)
     throw new Error(
-      `none of this batch's ${batch.items.length} target(s) could be enriched with context - pick targets with an addr + module the worklist tool knows, or generate the batch with the Recommended button (coddog)`
+      `none of this batch's ${driveItems.length} target(s) could be enriched with context - pick targets with an addr + module the worklist tool knows, or generate the batch with the Recommended button (coddog)`
     )
   // Attach the banked near-miss draft to any target that arrived draftless but already HAS one in
   // nearmiss/db.jsonl. Only the Refiner schedule (refine_wl) carries drafts; coddog/worklist/random
@@ -3947,6 +3995,10 @@ async function driveBatch(agentName: string): Promise<void> {
   }
   const runStartedAt = Date.now()
   try {
+    // A stop/park requested during the (possibly minutes-long) enrichment above has no child to
+    // kill yet - without this check the driver would SPAWN now and run the whole batch for a
+    // console that has already moved on, only to hit the epoch guard and throw the run away.
+    if (driveStopRequested.has(agentName)) return
     const res = await runTool({
       tool,
       values: { wl, out: outPath, jobs, attempts },
@@ -4141,7 +4193,18 @@ async function driveBatch(agentName: string): Promise<void> {
     driveKills.delete(agentName)
     stopping.delete(agentName) // post-run pipeline (incl. the awaited near-miss push) is done now
     aiStats.clearCurrent(agentName)
-    batch.status = 'done'
+    // A project swap PARKS rather than retires: the un-worked remainder goes back to queued
+    // (flagged so the resume drives only what is left) and survives in the project slot for
+    // swap-back. Everything else - normal completion, a user Stop, a fully-worked batch -
+    // retires as before.
+    if (parking.has(agentName) && batch.items.some((i) => !i.worked && !i.done)) {
+      batch.status = 'queued'
+      batch.parked = true
+      batch.pulledBy = undefined
+      batch.activatedAt = undefined
+    } else {
+      batch.status = 'done'
+    }
     // Leave wl + outPath on disk so the run's "open folder" link stays useful after it ends;
     // the next drive for this agent overwrites them.
     pushState()
