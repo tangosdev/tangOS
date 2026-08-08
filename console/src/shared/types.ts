@@ -119,6 +119,10 @@ export interface TangosData {
   dbPath?: string
   committedDbUrl?: string
   claimsApi?: string
+  // This project's id on the claims service (e.g. "pictochat"). The service hosts one
+  // board per decomp; this scopes claim reads to OUR board. Absent means the service's
+  // primary project, which is what pre-project descriptors have always got.
+  projectId?: string
   // This project's live stream on the tangos backend, e.g.
   // https://tangos.dev/api/projects/pictochat. Publish events only: it says when this
   // project's own CI has landed a fresh chaos-db, so the Atlas reloads then instead of
