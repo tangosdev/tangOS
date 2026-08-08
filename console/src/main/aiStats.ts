@@ -10,6 +10,7 @@
 // counting calls reported 21 "matches" for a batch that landed 8 files. matchedFuncs /
 // attemptedFuncs remember which functions were already counted, so a re-verify is free.
 import type { AiStats } from '../shared/types'
+import { RECENT_WINDOW } from './adaptiveRole'
 
 // A near miss must be genuinely CLOSE, not just an improvement: it counts only when fewer than this
 // fraction of the function's words (size/4 bytes) differ. So div 75 on an 88-word function (~85%)
@@ -42,6 +43,10 @@ interface Persisted {
   attemptedFuncs?: string[]
   /** Functions already counted in nearMisses, so re-banking the same tip can't inflate it. */
   nearMissFuncs?: string[]
+  /** The last RECENT_WINDOW first-attempt outcomes (1 = matched), newest last. Lifetime
+   *  hitRate can't see the pool going hard under an agent mid-project; this ring can, and is
+   *  what the adaptive hidden role demotes on (adaptiveRole.ts). */
+  recentOutcomes?: number[]
 }
 interface Current {
   task?: string
@@ -93,6 +98,7 @@ class AiStatsStore {
 
   recordMatch(name: string | undefined, ok: boolean, size?: number, func?: string): void {
     if (!name) return
+    const allTime = this.rawIn(this.store, name)
     for (const s of this.scopes(name)) {
       // Count each function once. Without a function name there is nothing to dedupe on, so
       // fall back to per-call counting rather than silently dropping the run.
@@ -114,6 +120,14 @@ class AiStatsStore {
         const t = (s.bySize[b] ??= { attempts: 0, matches: 0 })
         if (firstAttempt) t.attempts++
         if (firstMatch) t.matches++
+      }
+      // Recent-form ring, all-time scope only (the session copy would double-record). A late
+      // first MATCH on an already-attempted function still lands as its own win outcome - the
+      // 0 its miss pushed can't be found and flipped after the fact.
+      if (s === allTime && (firstAttempt || firstMatch)) {
+        const ring = (s.recentOutcomes ??= [])
+        ring.push(firstMatch ? 1 : 0)
+        if (ring.length > RECENT_WINDOW) ring.splice(0, ring.length - RECENT_WINDOW)
       }
     }
     if (ok && func) this.bestDiv.set(func, 0) // a byte match is divergence 0 - the best possible
@@ -212,6 +226,22 @@ class AiStatsStore {
     return this.statsFrom(this.session.get(name), this.current.get(name))
   }
 
+  /** Form over the last RECENT_WINDOW outcomes. What the adaptive hidden role judges by. */
+  recentForm(name: string): { attempts: number; matches: number } {
+    const ring = this.store.get(name)?.recentOutcomes ?? []
+    return { attempts: ring.length, matches: ring.reduce((a, b) => a + b, 0) }
+  }
+
+  /** Fresh start after a hidden-role demotion: the misses that earned it were the OLD rung's
+   *  difficulty, so they must not chain straight into a second demotion on the new rung. */
+  resetRecent(name: string): void {
+    const s = this.store.get(name)
+    if (s?.recentOutcomes?.length) {
+      s.recentOutcomes = []
+      this.onChange?.()
+    }
+  }
+
   /** Every name we have lifetime stats for (persisted boxes survive disconnect). */
   names(): string[] {
     return [...this.store.keys()]
@@ -262,6 +292,10 @@ class AiStatsStore {
           tv.matches += v.matches
         }
       }
+      // Recency order across folded keys is unknowable; concatenating and keeping the tail is
+      // as good as it gets, and only affects one demotion decision's worth of evidence.
+      const ring = [...(t.recentOutcomes ?? []), ...(s.recentOutcomes ?? [])]
+      if (ring.length) t.recentOutcomes = ring.slice(-RECENT_WINDOW)
     }
     this.store = merged
   }

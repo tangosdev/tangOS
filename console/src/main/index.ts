@@ -20,6 +20,7 @@ import { registerAll, cliCommand } from './connect'
 import { runTool, renderArgv } from './runTool'
 import { preflight, runPreflightFix } from './preflight'
 import { readAtlas } from './atlas'
+import { poolDifficulty, demotionFor, effectiveRole, type PoolState } from './adaptiveRole'
 import { fetchLiveHolds, overlayClaims } from './claims'
 import { readFunctionHistory } from './attemptHistory'
 import { githubCredits } from './github'
@@ -52,7 +53,7 @@ import type {
   SyncPreview, ViewerPrefs, BackgroundPrefs, MatchingPrefs, UiPrefs, ProjectSummary, TangosConsoleRoles,
   PreflightItem, PreflightFixId, PreflightFixResult
 } from '../shared/types'
-import { roleBatchSize } from '../shared/types'
+import { roleBatchSize, ROLE_LADDER } from '../shared/types'
 
 const DEFAULT_PORT = 4808
 
@@ -1148,6 +1149,76 @@ const loopReassigning = new Set<string>()
 const loopGenCooldownUntil = new Map<string, number>()
 const LOOP_GEN_COOLDOWN_MS = 2 * 60_000
 
+// ---- adaptive hidden role (Simple mode) -------------------------------------
+// The pool is not stationary: easy functions get matched first, so the repo's average
+// difficulty rises as it drains, and an agent whose track record was earned on the easy era
+// keeps being handed work it can no longer land. At every batch boundary a hidden-role agent
+// re-decides its rung: recent form under the pool-scaled floor walks it DOWN the ladder
+// (adaptiveRole.ts), one way. Operator-assigned roles never pass through any of this.
+// Pool state is cached briefly - several agents hit batch boundaries together, and the
+// judgment doesn't move on the scale of one batch.
+let poolStateCache: { at: number; project: string | null; value: PoolState } | null = null
+const POOL_STATE_TTL_MS = 2 * 60_000
+async function currentPoolState(): Promise<PoolState> {
+  if (
+    poolStateCache &&
+    poolStateCache.project === activeProjectId &&
+    Date.now() - poolStateCache.at < POOL_STATE_TTL_MS
+  ) {
+    return poolStateCache.value
+  }
+  let fns: AtlasDb['functions'] = []
+  if (atlasCache.project === activeProjectId && atlasCache.local) {
+    fns = atlasCache.local.functions
+  } else if (state.repoPath && state.descriptor) {
+    const db = readAtlas(state.repoPath, state.descriptor)
+    if (db) {
+      atlasCache = { ...atlasCache, project: activeProjectId, local: db }
+      fns = db.functions
+    }
+  }
+  // Live overlay: a clone that's behind main undercounts matched, which reads as "plenty of
+  // easy work left" and stalls demotion.
+  const live = await liveDoneSets()
+  const value = poolDifficulty(fns, live?.matched ?? null)
+  poolStateCache = { at: Date.now(), project: activeProjectId, value }
+  return value
+}
+
+/** The role this agent's NEXT batch generates under. Operator roles win untouched. A hidden-
+ *  role agent starts from the EASIER of its persisted rung and the Go-time seed (demote-only:
+ *  the lifetime stats feeding autoRole would otherwise bounce it back up on every Go press),
+ *  demotes one rung when recent form falls under the pool-scaled floor, and works its rung's
+ *  effective pool (a dry Refiner takes Drafter batches until tips get banked again). */
+async function decideAgentRole(agentName: string, seed?: string): Promise<string> {
+  const assigned = agentRoles[agentName]?.[0]
+  if (assigned && assigned !== 'Unassigned') return assigned
+  const ladder = ROLE_LADDER as readonly string[]
+  const easierOf = (a?: string, b?: string): string | undefined => {
+    const ia = a ? ladder.indexOf(a) : -1
+    const ib = b ? ladder.indexOf(b) : -1
+    if (ia < 0) return ib >= 0 ? b : (a ?? b)
+    if (ib < 0) return a
+    return ia >= ib ? a : b
+  }
+  let rung = easierOf(hiddenRoles[agentName], seed)
+  if (!rung) return 'Unassigned' // never Simple-Go'd and no seed - today's default scheduler
+  const pool = await currentPoolState()
+  const down = demotionFor(rung, aiStats.recentForm(agentName), pool)
+  if (down) {
+    rung = down
+    aiStats.resetRecent(agentName) // the misses that earned this belong to the old rung
+    report('batch', { event: 'hidden-role-demoted', agent: agentName, to: down, poolScore: pool.score })
+  }
+  if (hiddenRoles[agentName] !== rung) {
+    hiddenRoles[agentName] = rung
+    saveSettings()
+  }
+  const eff = effectiveRole(rung, pool)
+  hiddenEffective[agentName] = eff
+  return eff
+}
+
 function openLoopBatches(agentName: string): number {
   return state.batches.filter((b) => b.targetAgent === agentName && b.status !== 'done').length
 }
@@ -1162,9 +1233,13 @@ function ensureLoopQueue(agentName: string): void {
   if ((loopGenCooldownUntil.get(agentName) ?? 0) > Date.now()) return // recent failure - back off
   if (openLoopBatches(agentName) >= LOOP_QUEUE_DEPTH) return
   loopReassigning.add(agentName)
-  const role = agentRoles[agentName]?.[0]
   let failed = false
-  void assignToAgent(agentName, role ?? 'Unassigned', roleBatchSize(role), true)
+  // Role re-decided on EVERY re-queue: operator chips win, else the adaptive hidden role.
+  // (This also closes an old gap where a Simple-mode loop's pick only ever shaped batch 1 -
+  // this path used to read agentRoles, which Simple mode never writes, so batch 2 onward
+  // silently fell back to the default scheduler.)
+  void decideAgentRole(agentName)
+    .then((role) => assignToAgent(agentName, role, roleBatchSize(role), true))
     .then(() => loopGenCooldownUntil.delete(agentName))
     .catch((e) => {
       failed = true
@@ -1477,6 +1552,14 @@ function consoleCapabilities(): Record<string, boolean> {
 // setters) is untouched by project scoping; snapshotActiveProject/loadProjectScoped swap what
 // they hold when the project changes.
 let agentRoles: Record<string, string[]> = {}
+// Simple mode's adaptive rung per agent (the demote-only ladder walk; see adaptiveRole.ts).
+// Kept APART from agentRoles on purpose: these must never surface as chips, leak into a
+// client's visible roles, or make autoRole read "you assigned this role".
+let hiddenRoles: Record<string, string> = {}
+// What the last hidden-role batch actually generated as - differs from the rung only while
+// the rung's own pool is dry (a Refiner with no near-misses working Drafter batches). Feeds
+// the next_batch role preset so the instructions match the batch; not persisted.
+const hiddenEffective: Record<string, string> = {}
 let agentEfforts: Record<string, string> = {}
 // Per-agent max match attempts per function (console-driven agents; glm_refine --attempts).
 let agentAttempts: Record<string, number> = {}
@@ -1502,6 +1585,7 @@ interface PersistedProject {
   title?: string // last seen descriptor title, so the switcher can label it while offline
   custom?: boolean // hand-picked folder, not in the built-in registry
   agentRoles?: Record<string, string[]>
+  hiddenRoles?: Record<string, string> // adaptive Simple-mode rungs (demote-only), per project
   agentEfforts?: Record<string, string>
   agentAttempts?: Record<string, number>
   agentLoop?: string[]
@@ -1520,6 +1604,7 @@ function snapshotActiveProject(): void {
   if (!activeProjectId) return
   const slot = (persistedProjects[activeProjectId] ??= {})
   slot.agentRoles = agentRoles
+  slot.hiddenRoles = hiddenRoles
   slot.agentEfforts = agentEfforts
   slot.agentAttempts = agentAttempts
   slot.agentLoop = [...agentLoop]
@@ -1535,6 +1620,8 @@ function snapshotActiveProject(): void {
 function loadProjectScoped(id: string): void {
   const slot = persistedProjects[id] ?? {}
   agentRoles = hydrateRoles(slot.agentRoles)
+  hiddenRoles = { ...(slot.hiddenRoles ?? {}) }
+  for (const n of Object.keys(hiddenEffective)) delete hiddenEffective[n] // per-batch state, per-project too
   agentEfforts = { ...(slot.agentEfforts ?? {}) }
   agentAttempts = { ...(slot.agentAttempts ?? {}) }
   agentLoop.clear()
@@ -1703,6 +1790,9 @@ mcp.onTraffic = () => {
   }, 2000)
 }
 mcp.roleForName = (name) => agentRoles[name]
+// Preset text for the adaptive hidden role: prefer what the last batch actually generated as
+// (a dry Refiner working Drafter batches must get Drafter instructions), else the rung.
+mcp.hiddenRoleForName = (name) => hiddenEffective[name] ?? hiddenRoles[name]
 mcp.onRolesAssigned = (name, roles) => {
   if (roles.length) agentRoles[name] = roles
   else delete agentRoles[name]
@@ -1983,6 +2073,7 @@ function agentsSnapshot(): AiAgent[] {
       name,
       kind: 'mcp',
       roles: list.find((c) => c.roles.length)?.roles ?? agentRoles[name] ?? [],
+      hiddenRole: hiddenRoles[name],
       effort: agentEfforts[name],
       attempts: agentAttempts[name],
       stopping: stopping.has(name),
@@ -2009,6 +2100,7 @@ function agentsSnapshot(): AiAgent[] {
       kind: 'api',
       provider,
       roles: agentRoles[provider] ?? [],
+      hiddenRole: hiddenRoles[provider],
       effort: agentEfforts[provider],
       attempts: agentAttempts[provider],
       stopping: stopping.has(provider),
@@ -2029,6 +2121,7 @@ function agentsSnapshot(): AiAgent[] {
       name,
       kind: 'mcp',
       roles: agentRoles[name] ?? [],
+      hiddenRole: hiddenRoles[name],
       effort: agentEfforts[name],
       attempts: agentAttempts[name],
       stopping: stopping.has(name),
@@ -2047,6 +2140,7 @@ function agentsSnapshot(): AiAgent[] {
       name,
       kind: 'mcp',
       roles: agentRoles[name] ?? [],
+      hiddenRole: hiddenRoles[name],
       effort: agentEfforts[name],
       attempts: agentAttempts[name],
       stopping: stopping.has(name),
@@ -3373,8 +3467,12 @@ function assignToAgent(agentName: string, role: string, count: number, loop: boo
   })
 }
 
-ipcMain.handle('ai:assign', async (_e, p: { agent: string; role?: string; count: number; loop?: boolean }) => {
-  await assignToAgent(p.agent, p.role ?? 'Unassigned', p.count, !!p.loop)
+ipcMain.handle('ai:assign', async (_e, p: { agent: string; role?: string; count: number; loop?: boolean; auto?: boolean }) => {
+  // Simple mode marks its Go as `auto`: the renderer's pick is a SEED for the adaptive hidden
+  // role, not an operator assignment - the persisted (demote-only) rung can sit below it and
+  // wins when it does. A plain assign (Advanced mode) uses the role verbatim, as ever.
+  const role = p.auto ? await decideAgentRole(p.agent, p.role) : (p.role ?? 'Unassigned')
+  await assignToAgent(p.agent, role, p.count, !!p.loop)
   // Infinite mode replaces the manual Drive button with Stop, so a console-driven agent (GLM/Claude)
   // would otherwise sit on its freshly-queued batch forever - the "GLM on infinite never starts"
   // bug. Kick the drive loop off here. Fire-and-forget: it runs until Stop, so awaiting it would
@@ -4020,8 +4118,10 @@ async function startDriveLoop(agentName: string): Promise<void> {
       const pending = state.batches.some((b) => b.targetAgent === agentName && b.status !== 'done')
       if (!pending) {
         if (!agentLoop.has(agentName) || driveStopRequested.has(agentName)) break
-        const primary = agentRoles[agentName]?.[0]
-        await assignToAgent(agentName, primary ?? 'Unassigned', roleBatchSize(primary), true)
+        // Operator chips win, else the adaptive hidden role - re-decided per batch so a
+        // console-driven loop demotes mid-run just like a self-serving MCP one.
+        const primary = await decideAgentRole(agentName)
+        await assignToAgent(agentName, primary, roleBatchSize(primary), true)
       }
       // Re-check AFTER the (minutes-long) generation: a Stop pressed while the scheduler ran used to
       // slip through here and drive the entire fresh batch end-to-end (paid API calls) anyway.

@@ -343,6 +343,13 @@ export const ROLE_STRENGTH: Record<string, string> = Object.fromEntries(
 )
 export const ROLE_NAMES = ['Unassigned', ...Object.keys(ROLE_PRESETS)]
 
+/** The same four roles ordered hardest to easiest by how much scaffolding the work carries:
+ *  big functions bare, any function bare, unmatched with a matched sibling to adapt, then
+ *  near-misses that already hold a compiling draft. The adaptive hidden role walks DOWN this
+ *  list as an agent's recent form fades (main/adaptiveRole.ts); the renderer reads it so a
+ *  Go-time pick can't bounce an agent back above the rung it was demoted to. */
+export const ROLE_LADDER = ['Hard matcher', 'Random', 'Drafter', 'Refiner'] as const
+
 /** Sensible default batch size per role (Hard matcher is heavy -> fewer targets per batch). Shared
  *  so the count the controller shows and the count the scheduler uses are the same number. */
 export const roleBatchSize = (role?: string): number => (role === 'Hard matcher' ? 8 : 16)
@@ -488,6 +495,10 @@ export interface AiAgent {
   // across disconnect so the dot can show yellow for up to an hour, then red. undefined = never seen.
   stats: AiStats // all-time tallies
   run?: AiStats // current-run-only tallies (zeroed each app launch)
+  /** Simple mode's adaptive rung for this agent (demote-only; see main/adaptiveRole.ts). NOT an
+   *  operator assignment and never rendered as one - autoRole reads it as a cap so its Go-time
+   *  pick can't run harder work than the pool still supports for this agent. */
+  hiddenRole?: string
 }
 
 // ---- Atlas (Chaos Viewer) data ---------------------------------------------

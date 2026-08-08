@@ -232,7 +232,11 @@ function emptyQueueReason(all: Batch[], me?: string): string {
   return ` [why empty] ${queued.length} batch(es) are queued but none are addressed to${you} - they target other agents [${breakdown}]. This is not a bug: you only receive batches that are unassigned or match your exact connect name. Tell the operator to reassign one to "${me ?? 'your name'}" or clear its target; do NOT self-assign.`
 }
 
-function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClient | undefined): McpServer {
+function buildMcpServer(
+  getCtx: () => McpContext,
+  getClient: () => ConnectedClient | undefined,
+  getHiddenRole?: (name: string) => string | undefined
+): McpServer {
   const ctx = getCtx()
   // Surface the repo's contribution rules to every connecting AI on `initialize` (MCP
   // startup). `submitting` is the PR/how-to-post directive (points at AGENTS.md); `rules`
@@ -296,6 +300,13 @@ function buildMcpServer(getCtx: () => McpContext, getClient: () => ConnectedClie
         const c = getClient()
         const desc = getCtx().descriptor
         const roles = (c?.roles ?? []).filter((r) => r && r !== 'Unassigned' && ROLE_PRESETS[r])
+        // No visible roles? A Simple-mode agent may still be working under the adaptive hidden
+        // role - inject that preset so the agent knows HOW to work the pool its batch came
+        // from. Instructions only; it never appears as an assignment anywhere.
+        if (!roles.length && c) {
+          const hidden = getHiddenRole?.(c.name)
+          if (hidden && ROLE_PRESETS[hidden]) roles.push(hidden)
+        }
         const prefix = roles.length
           ? `[You are the ${roles.map((r) => `"${r}"`).join(' + ')} agent.] ${roles.map((r) => ROLE_PRESETS[r]).join(' ')}\n\n`
           : ''
@@ -397,6 +408,10 @@ export class McpManager {
   // and report assignments so main can save them across sessions.
   roleForName?: (name: string) => string[] | undefined
   onRolesAssigned?: (name: string, roles: string[]) => void
+  // The adaptive hidden role (Simple mode) this agent's batches are being generated under.
+  // Deliberately NOT folded into the client's roles: it must never read as an assignment in
+  // the UI - it only picks the preset text next_batch prefixes when no visible role exists.
+  hiddenRoleForName?: (name: string) => string | undefined
 
   constructor(getCtx: () => McpContext) {
     this.getCtx = getCtx
@@ -529,7 +544,11 @@ export class McpManager {
             this.onClientsChange?.()
           }
         }
-        const server = buildMcpServer(this.getCtx, () => (sid ? this.clients.get(sid) : undefined))
+        const server = buildMcpServer(
+          this.getCtx,
+          () => (sid ? this.clients.get(sid) : undefined),
+          (name) => this.hiddenRoleForName?.(name)
+        )
         server.server.oninitialized = () => {
           const info = server.server.getClientVersion()
           if (sid) {

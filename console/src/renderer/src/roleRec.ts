@@ -1,5 +1,5 @@
 import type { AiAgent } from '../../shared/types'
-import { ROLE_FIT } from '../../shared/types'
+import { ROLE_FIT, ROLE_LADDER } from '../../shared/types'
 import { familyOf } from './efforts'
 
 export interface RoleRec {
@@ -50,16 +50,28 @@ export interface AutoRole {
 export function autoRole(a: AiAgent): AutoRole {
   if (a.roles.length > 0) return { role: a.roles[0], why: 'you assigned this role', source: 'assigned' }
 
+  /** Demote-only cap: never pick a rung HARDER than the adaptive hidden role main has walked
+   *  this agent down to. Lifetime stats and model priors were earned on the easy era of the
+   *  pool; the rung reflects what it can land NOW. Easier picks pass through untouched, and
+   *  main re-applies the same cap at Go anyway - this keeps the idle line/tooltip honest. */
+  const cap = (pick: AutoRole): AutoRole => {
+    const ladder = ROLE_LADDER as readonly string[]
+    const rung = a.hiddenRole ? ladder.indexOf(a.hiddenRole) : -1
+    const cur = ladder.indexOf(pick.role)
+    if (rung < 0 || cur < 0 || cur >= rung) return pick
+    return { role: a.hiddenRole!, why: 'the pool outgrew its old role - running easier work now', source: pick.source }
+  }
+
   const measured = recommendRole(a)
-  if (measured.role) return { role: measured.role, why: measured.why, source: 'measured' }
+  if (measured.role) return cap({ role: measured.role, why: measured.why, source: 'measured' })
 
   const name = (a.name || '').toLowerCase()
   for (const [role, fit] of Object.entries(ROLE_FIT)) {
-    if (fit.names?.test(name)) return { role, why: `${a.name} is a ${fit.strength.split(',')[0]} model`, source: 'model' }
+    if (fit.names?.test(name)) return cap({ role, why: `${a.name} is a ${fit.strength.split(',')[0]} model`, source: 'model' })
   }
   const family = familyOf(a)
   for (const [role, fit] of Object.entries(ROLE_FIT)) {
-    if (fit.families?.includes(family)) return { role, why: `${family} models fit this role`, source: 'model' }
+    if (fit.families?.includes(family)) return cap({ role, why: `${family} models fit this role`, source: 'model' })
   }
-  return { role: 'Random', why: 'unrecognised model - drawing from the whole unmatched pool', source: 'fallback' }
+  return cap({ role: 'Random', why: 'unrecognised model - drawing from the whole unmatched pool', source: 'fallback' })
 }

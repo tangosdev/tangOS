@@ -180,7 +180,7 @@ const api = {
   assignBatch: (draft: BatchDraft, agentName: string): Promise<Batch[]> =>
     ipcRenderer.invoke('batch:assign', { draft, agentName }),
   driveAi: (agentName: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('ai:drive', agentName),
-  assignAi: (p: { agent: string; role?: string; count: number; loop?: boolean }): Promise<{ ok: boolean }> =>
+  assignAi: (p: { agent: string; role?: string; count: number; loop?: boolean; auto?: boolean }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('ai:assign', p),
   stopAi: (agent: string): Promise<boolean> => ipcRenderer.invoke('ai:stop', agent),
   setUseAgents: (on: boolean): Promise<boolean> => ipcRenderer.invoke('policy:setUseAgents', on),

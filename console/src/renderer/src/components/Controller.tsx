@@ -168,14 +168,14 @@ export default function Controller({
   async function assign(
     name: string,
     role: string | undefined,
-    plan?: { count: number; loop: boolean }
+    plan?: { count: number; loop: boolean; auto?: boolean }
   ): Promise<boolean> {
     const size = sizes[name] ?? 16
     const loop = plan ? plan.loop : size === -1
     const count = plan ? plan.count : loop ? 16 : size
     setBusy((b) => ({ ...b, [name]: 'Generating batch' }))
     try {
-      await window.tangos.assignAi({ agent: name, role, count, loop })
+      await window.tangos.assignAi({ agent: name, role, count, loop, auto: plan?.auto })
       return true
     } catch (e) {
       // Strip Electron's "Error invoking remote method 'ai:assign': Error:" IPC wrapper.
@@ -214,10 +214,14 @@ export default function Controller({
    *  press is exactly what Simple mode exists to remove, so Go drives it here. MCP agents need
    *  nothing further - their external client polls next_batch and picks the work up on its own. */
   async function go(a: AiAgent): Promise<void> {
-    const role = autoRole(a).role
+    const auto = autoRole(a)
+    const role = auto.role
     const n = counts[a.name]
     const loop = n == null
-    if (!(await assign(a.name, role, { count: loop ? roleBatchSize(role) : n, loop }))) return
+    // Anything short of a hand-assigned role is a SEED for main's adaptive hidden role, not an
+    // order - the persisted (demote-only) rung can sit below this pick and wins when it does.
+    const seeded = auto.source !== 'assigned'
+    if (!(await assign(a.name, role, { count: loop ? roleBatchSize(role) : n, loop, auto: seeded }))) return
     if (a.kind === 'api' && !loop) await drive(a.name)
   }
 

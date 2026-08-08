@@ -130,7 +130,7 @@ export interface TangosApi {
   enqueueBatch(draft: BatchDraft): Promise<Batch[]>
   assignBatch(draft: BatchDraft, agentName: string): Promise<Batch[]>
   driveAi(agentName: string): Promise<{ ok: boolean }>
-  assignAi(p: { agent: string; role?: string; count: number; loop?: boolean }): Promise<{ ok: boolean }>
+  assignAi(p: { agent: string; role?: string; count: number; loop?: boolean; auto?: boolean }): Promise<{ ok: boolean }>
   stopAi(agent: string): Promise<boolean>
   setUseAgents(on: boolean): Promise<boolean>
   setAgentFanout(n: number): Promise<number>
