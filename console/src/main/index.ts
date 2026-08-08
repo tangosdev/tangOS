@@ -1173,7 +1173,7 @@ async function currentPoolState(): Promise<PoolState> {
   } else if (state.repoPath && state.descriptor) {
     const db = readAtlas(state.repoPath, state.descriptor)
     if (db) {
-      atlasCache = { ...atlasCache, project: activeProjectId, local: db }
+      cacheLocal(db)
       fns = db.functions
     }
   }
@@ -1825,6 +1825,20 @@ let mainWindow: BrowserWindow | null = null
 // otherwise both key on null and serve each other's atlas.
 let atlasCache: { project: string | null; local?: AtlasDb | null; live?: AtlasDb | null; liveAt?: number } = { project: null }
 
+/** Store a locally read atlas without resurrecting another project's live copy. The spread form
+ *  (`{ ...atlasCache, project: activeProjectId, local }`) re-stamped whatever `live` happened to
+ *  be cached under the CURRENT project id - which is how a stale cross-project fetch's leftovers
+ *  got re-legitimized. Keep the live half only when it is genuinely this project's. */
+function cacheLocal(db: AtlasDb | null): void {
+  const keep = atlasCache.project === activeProjectId
+  atlasCache = {
+    project: activeProjectId,
+    local: db,
+    live: keep ? atlasCache.live : undefined,
+    liveAt: keep ? atlasCache.liveAt : undefined
+  }
+}
+
 // One shared fetch of the live chaos-db so the Live view AND the batcher's matched-check don't
 // hammer raw GitHub into a 429. Passive callers reuse anything within TTL and hit the CDN (no
 // cache-bust); a user Live refresh (force) re-fetches fresh but no more than once per throttle
@@ -1832,6 +1846,15 @@ let atlasCache: { project: string | null; local?: AtlasDb | null; live?: AtlasDb
 const LIVE_TTL_MS = 60_000
 const LIVE_FORCE_THROTTLE_MS = 20_000
 async function loadLiveDb(force: boolean): Promise<AtlasDb> {
+  // Pin the project this fetch is FOR. These take up to 20s and overlayLiveDone fires them in
+  // the background constantly, so one routinely resolves after a project switch - and used to
+  // store its atlas into the cache stamped with the NEW project's id and a fresh liveAt. The
+  // Live view then served the old decomp under the new one's name for a full TTL, and
+  // overlayLiveDone painted its matched set onto the new project's local atlas (FUN_<addr>
+  // names collide across DS games) - the "viewer stuck on the other decomp" bug. A stale
+  // resolve now returns to its (long-unmounted) caller without touching the cache or stats.
+  const epoch = projectEpoch
+  const fresh = (): boolean => epoch === projectEpoch
   // Prefer the backend's live atlas: it is computed from the repo continuously and is
   // current to within seconds, where the committed file waits on a CI republish. Falls back
   // to the published file whenever the backend has nothing yet (cold start, offline).
@@ -1841,8 +1864,10 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
     // missed every API lock, so the cart could hand out a function an agent held.
     const held = await fetchLiveHolds(state.descriptor?.data, state.descriptor?.data?.committedDbUrl)
     if (held) overlayClaims(fromVps, held)
-    atlasCache = { ...atlasCache, project: activeProjectId, live: fromVps, liveAt: Date.now() }
-    aiStats.seedBestDiv(fromVps.functions)
+    if (fresh()) {
+      atlasCache = { ...atlasCache, project: activeProjectId, live: fromVps, liveAt: Date.now() }
+      aiStats.seedBestDiv(fromVps.functions)
+    }
     return fromVps
   }
 
@@ -1874,8 +1899,10 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
     // leaves functions untagged, never blocks Live.
     const held = await fetchLiveHolds(state.descriptor?.data, url)
     if (held) overlayClaims(db, held)
-    atlasCache = { ...atlasCache, project: activeProjectId, live: db, liveAt: Date.now() }
-    aiStats.seedBestDiv(db.functions) // ground-truth near-miss baseline for the improvement gate
+    if (fresh()) {
+      atlasCache = { ...atlasCache, project: activeProjectId, live: db, liveAt: Date.now() }
+      aiStats.seedBestDiv(db.functions) // ground-truth near-miss baseline for the improvement gate
+    }
     return db
   } catch (e) {
     if (cached) return cached
@@ -1894,8 +1921,11 @@ async function loadLiveDb(force: boolean): Promise<AtlasDb> {
 function overlayLiveDone(db: AtlasDb | null): AtlasDb | null {
   const liveAge = atlasCache.project === activeProjectId && atlasCache.liveAt ? Date.now() - atlasCache.liveAt : Infinity
   if (liveAge > LIVE_TTL_MS && (state.descriptor?.data?.committedDbUrl || state.descriptor?.data?.claimsApi)) {
+    const epoch = projectEpoch // don't tell the NEW project's view to reload over an OLD fetch
     void loadLiveDb(false)
-      .then(() => mainWindow?.webContents.send('atlas:refreshed'))
+      .then(() => {
+        if (epoch === projectEpoch) mainWindow?.webContents.send('atlas:refreshed')
+      })
       .catch(() => {})
   }
   const live = atlasCache.project === activeProjectId ? atlasCache.live : undefined
@@ -2676,7 +2706,7 @@ ipcMain.handle('atlas:load', () => {
     return overlayLiveDone(atlasCache.local)
   }
   const db = readAtlas(state.repoPath, state.descriptor)
-  atlasCache = { ...atlasCache, project: activeProjectId, local: db }
+  cacheLocal(db)
   maybeRegenChaosDb(state.repoPath)
   return overlayLiveDone(db)
 })
@@ -2782,7 +2812,7 @@ ipcMain.handle('atlas:current', () => {
   }
   if (!state.descriptor || !state.repoPath) return null
   const db = readAtlas(state.repoPath, state.descriptor)
-  atlasCache = { ...atlasCache, project: activeProjectId, local: db }
+  cacheLocal(db)
   return overlayLiveDone(db)
 })
 
@@ -2918,7 +2948,7 @@ async function regenAtlasDb(source: 'user' | 'ai'): Promise<AtlasDb | null> {
     extraEnv: projectEnv()
   })
   const db = readAtlas(state.repoPath, state.descriptor)
-  atlasCache = { ...atlasCache, project: activeProjectId, local: db }
+  cacheLocal(db)
   if (db) aiStats.seedBestDiv(db.functions) // keep the near-miss gate's baseline current after a land
   return db
 }
