@@ -14,7 +14,7 @@ import {
   conventionsOf
 } from './matchConventions'
 import { loadDescriptor, validateDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
-import { PROJECTS, projectBySlug, projectById, slugOf, customIdFor, descriptorUrlFor, type ProjectEntry } from '../shared/projects'
+import { PROJECTS, projectBySlug, projectById, slugOf, customIdFor, descriptorUrlFor, registerProjects, REGISTRY_URL, type ProjectEntry } from '../shared/projects'
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
 import { registerAll, cliCommand } from './connect'
 import { runTool, renderArgv } from './runTool'
@@ -2282,6 +2282,30 @@ async function prefetchRemoteDescriptors(): Promise<void> {
   for (const e of PROJECTS) {
     if (resolveProjectPath(e.id, e)) continue
     await remoteDescriptor(e).catch(() => null)
+  }
+}
+
+/** Pull the backend's project registry (each repo's own tangos.json, re-served) and merge
+ *  it into PROJECTS, so a decomp added to the backend shows up in the switcher without a
+ *  Console release. Best-effort: offline, the baked list stands. The renderer pulls rows
+ *  on demand (projects:list / boot state), so a merge needs no push of its own. */
+async function refreshProjectRegistry(): Promise<void> {
+  try {
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), 10000)
+    try {
+      const res = await fetch(REGISTRY_URL, { signal: ac.signal })
+      if (!res.ok) return
+      const j = (await res.json()) as {
+        projects?: { id?: string; title?: string; github?: string; tagline?: string }[]
+      }
+      if (Array.isArray(j.projects))
+        registerProjects(j.projects.filter((p): p is { id: string } & typeof p => !!p.id))
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    /* offline - the baked list stands */
   }
 }
 
@@ -4652,6 +4676,9 @@ app.whenReady().then(() => {
   // its URL from the current descriptor - but only when the socket drops, and a healthy one
   // never does, so switchProject restarts it explicitly rather than waiting for a drop.
   startAtlasLive()
+  // The backend's registry extends the switcher (then the descriptor prefetch warms the
+  // new entries too); pull-based renderers pick the merged list up on their next ask.
+  void refreshProjectRegistry().then(() => prefetchRemoteDescriptors())
   initAutoUpdate() // check the public releases feed for a newer build
   // Debug hotkeys: Ctrl+Shift+D writes a snapshot (screenshot + state + dom) to the debug folder;
   // Ctrl+Shift+I toggles DevTools. Available in every build so bugs can be captured anywhere.

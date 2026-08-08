@@ -99,12 +99,13 @@ export async function fetchCosmetics(claimsApi?: string | null, liveApi?: string
  *  current to within seconds. Null when the backend has no data yet (cold start), so the
  *  caller can fall back to the published file.
  *
- *  /atlas exists only for the backend's computed (primary) project. A project with its
- *  own liveApi is by definition not that one, so asking would return sm64ds's atlas
- *  under this project's name - decline instead and let the published file serve. */
+ *  The backend computes exactly one project's atlas. With a liveApi declared, ask that
+ *  project's own route ({liveApi}/atlas) - it answers for the computed project and 404s
+ *  for everyone else, which falls through to the published file here. Without one, the
+ *  legacy claimsApi-derived /api/atlas still serves the primary. Either way a project
+ *  can never be handed another project's atlas under its own name. */
 export async function fetchAtlas(claimsApi?: string | null, liveApi?: string | null): Promise<unknown | null> {
-  if (liveApi) return null
-  const base = apiBase(claimsApi)
+  const base = liveApi ? liveApi.replace(/\/$/, '') : apiBase(claimsApi)
   if (!base) return null
   try {
     const ac = new AbortController()
@@ -131,15 +132,15 @@ export interface LiveProgress {
 /** Live decomp progress computed by the VPS from the repo itself: exact stats plus the
  *  matched function ids. Lets the atlas move seconds after a merge instead of waiting for
  *  the published data to refresh. Best-effort; `ready:false` means fall back to the file.
- *  Primary-project-only, same as fetchAtlas: a project with its own liveApi declines. */
+ *  Same route choice as fetchAtlas: the project's own {liveApi}/progress when declared
+ *  (404s harmlessly for a project the backend does not compute), legacy base otherwise. */
 export async function fetchProgress(claimsApi?: string | null, liveApi?: string | null): Promise<LiveProgress> {
   const empty: LiveProgress = {
     ready: false,
     stats: { totalFunctions: 0, matchedFunctions: 0, totalBytes: 0, matchedBytes: 0 },
     matched: []
   }
-  if (liveApi) return empty
-  const base = apiBase(claimsApi)
+  const base = liveApi ? liveApi.replace(/\/$/, '') : apiBase(claimsApi)
   if (!base) return empty
   try {
     const ac = new AbortController()
