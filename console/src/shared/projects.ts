@@ -4,8 +4,11 @@
 // from its own tangos.json. This file only answers "what can I offer in the switcher before
 // anything is on disk": a display name, a clone URL, and a stable settings key.
 //
-// Adding a decomp is one entry. `id` is a settings key, so once shipped it never changes;
-// rename `title` freely.
+// The authoritative list lives on the backend (REGISTRY_URL re-serves each repo's own
+// descriptor), and the main process merges it in at boot via registerProjects - so adding
+// a decomp is one commit in that decomp, not an entry here. The baked entries below are
+// the first paint and the offline fallback. `id` is a settings key, so once shipped it
+// never changes; rename `title` freely.
 
 export interface ProjectEntry {
   id: string
@@ -14,6 +17,9 @@ export interface ProjectEntry {
   github: string // full clone URL - our projects are spread across more than one org
   blurb: string
 }
+
+/** The one bootstrap URL Console needs: everything else comes from descriptors. */
+export const REGISTRY_URL = 'https://tangos.dev/api/projects'
 
 export const PROJECTS: ProjectEntry[] = [
   {
@@ -36,6 +42,34 @@ export const PROJECTS: ProjectEntry[] = [
 
 export function projectById(id: string): ProjectEntry | undefined {
   return PROJECTS.find((p) => p.id === id)
+}
+
+/** Merge registry rows into PROJECTS in place, so every existing consumer
+ *  (projectById, projectBySlug, the switcher rows) sees them without re-plumbing.
+ *  A known id gets its title/github refreshed (the descriptor's words win); an
+ *  unknown id is appended with a derived glyph. Never removes a baked entry -
+ *  the registry being briefly wrong must not strand a cloned project's settings. */
+export function registerProjects(
+  rows: { id: string; title?: string | null; github?: string | null; tagline?: string | null }[]
+): void {
+  for (const r of rows) {
+    if (!r.id) continue
+    const existing = projectById(r.id)
+    if (existing) {
+      if (r.title) existing.title = r.title
+      if (r.github) existing.github = r.github
+      if (r.tagline) existing.blurb = r.tagline
+    } else {
+      const title = r.title || r.id
+      PROJECTS.push({
+        id: r.id,
+        title,
+        glyph: title.slice(0, 2).toUpperCase(),
+        github: r.github ?? '',
+        blurb: r.tagline ?? ''
+      })
+    }
+  }
 }
 
 /** "owner/repo", lowercased, from any github URL shape (with or without .git, ssh or https). */
