@@ -62,6 +62,7 @@ export default function App(): JSX.Element {
   const [autoPush, setAutoPush] = useState<{
     enabled: boolean
     on: boolean
+    locked?: string
     state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'
     message?: string
     prUrl?: string

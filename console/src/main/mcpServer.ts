@@ -16,7 +16,14 @@ import type {
   MatchingPrefs
 } from '../shared/types'
 import { ROLE_PRESETS } from '../shared/types'
-import { attemptTreeEnabled, defaultMatchingPrefs, matchConventionsGuide } from './matchConventions'
+import {
+  attemptTreeEnabled,
+  autoPrAllowed,
+  defaultMatchingPrefs,
+  matchConventionsGuide,
+  prefersCpp
+} from './matchConventions'
+import { classifySrcFile, type SrcFileIndex } from './srcFiles'
 
 // Re-export so consumers can observe the exact bus instance runTool publishes to.
 export { activityBus } from './activityBus'
@@ -37,6 +44,10 @@ export interface McpContext {
   enabledToolIds?: string[]
   /** Operator draft-source toggles (near-miss / Ghidra). Affects next_batch policy + tool filter. */
   matchingPrefs?: MatchingPrefs
+  /** Source file -> functions map from the repo's chaos-db (srcpath's answers). Lets a ready
+   *  `match` call point at the real file of a bucketed or folded function instead of guessing
+   *  `src/<name>.c`. Absent or null falls back to the guess. */
+  srcIndex?: () => SrcFileIndex | null
   batchApi?: BatchApi
   // main supplies the runner so it can wrap mutating runs in safe-mode git handling
   run: (
@@ -127,12 +138,20 @@ function describeTool(tool: TangosTool): string {
 
 /** Build a ready-to-run `match` call for a batch target so the agent never has to guess
  *  (and never omits the required `c` arg - the failure that stalled the first batch). */
-function verifyCallFor(item: BatchItem, descriptor: TangosDescriptor): string | null {
+export function verifyCallFor(
+  item: BatchItem,
+  descriptor: TangosDescriptor,
+  srcIndex?: SrcFileIndex | null
+): string | null {
   const match = descriptor.tools?.find((t) => t.id === 'match')
   if (!match) return null
   const name = item.ref
-  const ext = name.startsWith('_Z') ? 'cpp' : 'c'
-  const c = item.srcPath || `src/${name}.${ext}`
+  const hasTool = (id: string): boolean => !!descriptor.tools?.some((t) => t.id === id)
+  // A class-first repo writes .cpp; a mangled name is C++ in any repo. Only a function the atlas
+  // has no file for falls through to this guess.
+  const ext = name.startsWith('_Z') || prefersCpp(descriptor.project) ? 'cpp' : 'c'
+  const known = srcIndex?.byName.get(name)
+  const c = item.srcPath || known || `src/${name}.${ext}`
   let addr = item.addr != null ? '0x' + item.addr.toString(16).padStart(8, '0') : null
   if (!addr) {
     const m = /_([0-9a-f]{8})$/i.exec(name)
@@ -153,7 +172,16 @@ function verifyCallFor(item: BatchItem, descriptor: TangosDescriptor): string | 
   if (mod && mod.startsWith('ov')) args.module = mod // overlays need it or the target reads empty
   if (item.size != null && item.size > 0x800) args.brief = true // big function -> keep output small
   const missing = [!addr ? 'addr' : '', !size ? 'size' : ''].filter(Boolean)
-  const note = missing.length ? `   (fill ${missing.join(' + ')}: worklist --addr ${addr ?? '0x...'} --pretty)` : ''
+  let note = missing.length ? `   (fill ${missing.join(' + ')}: worklist --addr ${addr ?? '0x...'} --pretty)` : ''
+  // A file that holds several functions is a folded translation unit. A single-function match still
+  // works against it (it compiles the file and compares this one function), but the unit is only
+  // proved by the whole-unit check, and a new file's directory is srcpath's call, not ours.
+  const file = classifySrcFile(srcIndex, c)
+  if (file.kind === 'unit' && hasTool('tubuild_verify')) {
+    note += `   (${c} holds ${file.members.length} functions, a translation unit: prove the whole unit with tubuild_verify, not only this method)`
+  } else if (!known && !item.srcPath && hasTool('srcpath')) {
+    note += `   (new file? ask srcpath for its directory instead of using this guessed path)`
+  }
   return JSON.stringify(args) + note
 }
 
@@ -177,7 +205,7 @@ function capOutput(s: string): string {
 // client by dropping a string into WORK_GUIDES; anything unlisted falls back to the default.
 const WORK_GUIDE_DEFAULT =
   '\n\nHOW TO WORK EACH TARGET (never end a turn on a failed call):\n' +
-  'FIRST - this is a WORK turn, not a planning turn. The batch is your go-ahead (do not ask permission to start; a matching session overrides any "ask before coding" habit). Your very next output is tool calls (pull context, write C, fdiff), NOT tool-schema shopping beyond a single missing tool, a todo list, a plan, or a status report. If agents mode is on, actually SPAWN the sub-agents now (~8 targets each) - planning the split in a todo is not doing it; the spawn is the work.\n' +
+  'FIRST - this is a WORK turn, not a planning turn. The batch is your go-ahead (do not ask permission to start; a matching session overrides any "ask before coding" habit). Your very next output is tool calls (pull context, write @LANG@, fdiff), NOT tool-schema shopping beyond a single missing tool, a todo list, a plan, or a status report. If agents mode is on, actually SPAWN the sub-agents now (~8 targets each) - planning the split in a todo is not doing it; the spawn is the work.\n' +
   '1. Every target has a ready `match` call above (required args: c, func, addr, size). Use it verbatim - never omit `c`.\n' +
   '2. BEFORE any match/fdiff on a target, make sure its `c` candidate file EXISTS. If it does not, CREATE the draft first from `worklist --addr <addr> --pretty` (or disasm / chaos-db.json). Never diff a file you have not created - that is the #1 avoidable error (FileNotFoundError).\n' +
   '3. On ANY tool error - validation (-32602), compile failure, OR missing-file/FileNotFoundError - diagnose and RETRY in the SAME turn (check tangos.json tools[] for required args if unsure). A turn may only end on a successful call or an explicit "blocked because X" hand-off sentence - never right after a failed call.\n' +
@@ -185,9 +213,9 @@ const WORK_GUIDE_DEFAULT =
   '5. Overlay (ov*) targets: keep the `module` in the ready call - it auto-loads the overlay binary, so you do NOT need bin/base. (If overlay bytes read back empty/0, your repo is a stale ZIP snapshot - use a fresh `git clone`.) Run heavy tools one at a time; pass `"brief": true` for large functions.\n' +
   '6. End EVERY working turn with a one-line status: what you just did, the current best divergence, and the single next action. Never end a turn silently after a tool result - and a mid-batch status question from the human is not a stop: answer in one line, then keep tool-calling.\n' +
   '7. When these targets are done, call `next_batch` for more IN THE SAME TURN. "Done" means THIS BATCH, not the session: finishing is a checkpoint, NEVER a stopping point - whether you landed 0 matches or several. Do NOT end the turn on a human-facing session summary / results table, and NEVER ask whether to continue or re-park ("say if you want another loop" is the exact wrong move) - landing matches does not earn a stop, and cost/overrun is the console\'s job (it queues the work), not yours. Only an explicit human "stop" ends the loop. next_batch BLOCKS until there is work (or ~45s), so just call it - no waiting, sleeping, or heartbeat loop. If it returns empty (a timeout), your entire next response is one more next_batch call to keep parking - no worklist, coddog, notes, or self-assigned targets. After several empty waits it tells you to hand back.\n' +
-  '8. Do NOT hand-edit CLAIMS.md and do NOT push - the console handles landing. Your batch is distinct from the other console agents\', and the scheduler already excluded anything CLAIMS.md marks active/partial, so you do not need to check it yourself. Parallel agents editing that file would just conflict. When the operator is signed into GitHub the console auto-collects your matched files and opens a per-agent PR. NOTE: this protects you from taking work someone else holds; it does NOT announce your batch to contributors outside the console, so if you find a target already matched or half-done upstream, say so in your status rather than assuming it is free.\n' +
+  '8. Do NOT hand-edit CLAIMS.md and do NOT push - @LANDING@. Your batch is distinct from the other console agents\', and the scheduler already excluded anything CLAIMS.md marks active/partial, so you do not need to check it yourself. Parallel agents editing that file would just conflict. @PUBLISH@ NOTE: this protects you from taking work someone else holds; it does NOT announce your batch to contributors outside the console, so if you find a target already matched or half-done upstream, say so in your status rather than assuming it is free.\n' +
   '9. Stay in your lane: edit source ONLY for the targets above. If an edit regresses a function (worse diff or bigger size), REVERT it - never leave a tracked source file worse than you found it. Keep scratch files, notes, and session reports in a temp/scratch dir, NEVER inside the repo or beside source files.\n' +
-  '10. A byte transcription is NOT a match: an `asm { ... }` body of `dcd 0x...` words (or any raw dump of the disassembly) byte-matches by construction and will be REJECTED by the console and the repo. Write real C; if you cannot, bank your best real attempt as a near-miss instead.\n' +
+  '10. A byte transcription is NOT a match: an `asm { ... }` body of `dcd 0x...` words (or any raw dump of the disassembly) byte-matches by construction and will be REJECTED by the console and the repo. Write real @LANG@; if you cannot, bank your best real attempt as a near-miss instead.\n' +
   'Fallback if native MCP tools are unavailable in your client: run `npx tsx scripts/mcp-run.mts <calls.json> <your-name>` (e.g. grok) from the tangOS console dir, where calls.json is [{"tool":"match","args":{...}}]. Pass your name so the live viewer tags your runs correctly (omitting it shows "agent").'
 
 // Grok profile: short imperative lines with explicit `tool { args }` framing. Note step 2 forces
@@ -195,7 +223,7 @@ const WORK_GUIDE_DEFAULT =
 // against the "module None not found" foot-gun Grok kept hitting when it omitted it.
 const WORK_GUIDE_GROK =
   '\n\nHOW TO WORK EACH TARGET (terse - explicit calls; never end a turn on a failed call):\n' +
-  'FIRST - THIS IS A WORK TURN, NOT A PLANNING TURN. The batch IS your go-ahead (do not ask permission to start - your session/user "ask before coding" habit does NOT apply here). Your very NEXT output is TOOL CALLS (pull context -> write C -> fdiff), never: tool-schema shopping beyond the one tool you are missing, a todo list, a plan, or a status report. If agents mode is on, SPAWN the sub-agents NOW (~8 targets each); writing the split into a todo is NOT doing it - the spawn call is the work.\n' +
+  'FIRST - THIS IS A WORK TURN, NOT A PLANNING TURN. The batch IS your go-ahead (do not ask permission to start - your session/user "ask before coding" habit does NOT apply here). Your very NEXT output is TOOL CALLS (pull context -> write @LANG@ -> fdiff), never: tool-schema shopping beyond the one tool you are missing, a todo list, a plan, or a status report. If agents mode is on, SPAWN the sub-agents NOW (~8 targets each); writing the split into a todo is NOT doing it - the spawn call is the work.\n' +
   '1. File check: candidate `c` must exist. Missing -> create it FIRST via `worklist --addr <addr> --pretty` (or `disasm`), save to `c`. Never fdiff/match a file you did not create (FileNotFoundError = top wasted turn).\n' +
   '2. Triage: fdiff { c, name: <func>, addr, size, module, quiet: true }. For overlays copy the ovNNN module from the ready `match` call (an ov* module auto-loads its binary - no bin/base); arm9/main targets default to arm9, so module is optional there. Do NOT triage off match\'s full dump.\n' +
   '3. Fix the earliest mismatch, re-run fdiff. On ANY error (-32602, compile fail, missing file): fix and RETRY the SAME turn (see tangos.json tools[] for required args). End a turn only on a success or an explicit "blocked because X".\n' +
@@ -203,17 +231,53 @@ const WORK_GUIDE_GROK =
   '5. mismatches=0 -> leave `c` in src/ as a real match. Near-miss -> near-miss DB (nearmiss tools / nearmiss/db.jsonl), NOT a fake green src/ file. Edit regressed it (worse diff / bigger size)? REVERT.\n' +
   '6. Known wall? verify your near-miss IS one, say so in one line, move on - do not grind.\n' +
   '7. End every working turn with ONE line: what you did / best divergence now / next action. A mid-batch status question from the human ("hows it looking") is NOT a stop - give the one line, then immediately keep tool-calling in the same turn.\n' +
-  '8. Batch done -> call next_batch AGAIN, in this SAME turn. "Done" means THIS BATCH, not the session. Finishing a batch is a checkpoint, NEVER a stop - 0 matches or several, same rule. Do NOT write a human session summary / results table and stop, and NEVER ask whether to continue or re-park ("say if you want another loop on next_batch" is the exact failure to avoid) - landing matches does not earn a stop, and cost/overrun is the console\'s job, not yours. Only an explicit human "stop" ends the loop; until then, batch finished = next_batch, every time. (blocks server-side ~45s; no polling loop.) Do NOT hand-edit CLAIMS.md and do NOT push - the scheduler already dropped anything held there, and the console auto-collects your matches and opens your PR. Edit source only for the targets above; keep scratch in a temp dir, never beside source.\n' +
-  '9. `asm{}`/`dcd 0x...` transcription of the disasm = NOT a match (console + repo REJECT it). Real C only; anything less -> near-miss DB.\n' +
+  '8. Batch done -> call next_batch AGAIN, in this SAME turn. "Done" means THIS BATCH, not the session. Finishing a batch is a checkpoint, NEVER a stop - 0 matches or several, same rule. Do NOT write a human session summary / results table and stop, and NEVER ask whether to continue or re-park ("say if you want another loop on next_batch" is the exact failure to avoid) - landing matches does not earn a stop, and cost/overrun is the console\'s job, not yours. Only an explicit human "stop" ends the loop; until then, batch finished = next_batch, every time. (blocks server-side ~45s; no polling loop.) Do NOT hand-edit CLAIMS.md and do NOT push - the scheduler already dropped anything held there, and @GROKPUBLISH@. Edit source only for the targets above; keep scratch in a temp dir, never beside source.\n' +
+  '9. `asm{}`/`dcd 0x...` transcription of the disasm = NOT a match (console + repo REJECT it). Real @LANG@ only; anything less -> near-miss DB.\n' +
   'Fallback if native MCP is unavailable: `npx tsx scripts/mcp-run.mts <calls.json> grok` from the tangOS console dir (calls.json = [{"tool":"match","args":{...}}]).'
 
 const WORK_GUIDES: Record<string, string> = { Grok: WORK_GUIDE_GROK }
 
+// What the guide says about landing work. With the default function-match flow the console collects
+// verified files and opens a per-agent PR. A project that sets matchConventions.autoPr false
+// publishes class and unit work through its own integrator, so the console opens nothing and the
+// agent is told to hand its commit over instead.
+const LANDING_AUTO = 'the console handles landing'
+const LANDING_OFF = 'this project publishes through its integrator, the console opens no PR'
+const PUBLISH_AUTO = 'When the operator is signed into GitHub the console auto-collects your matched files and opens a per-agent PR.'
+const PUBLISH_OFF =
+  'This project publishes class and translation-unit work through its integrator, so the console does NOT auto-collect or open a PR: make small local commits in your own worktree and hand the exact commit and your proof to the verifier.'
+const GROK_PUBLISH_AUTO = 'the console auto-collects your matches and opens your PR'
+const GROK_PUBLISH_OFF = 'the console opens NO PR for this project (the integrator publishes) - commit locally and hand over the exact commit plus proof'
+
+// Class-first repos (descriptor language starts with C++) get one more step. Only added when the
+// descriptor actually exposes the unit tools, so a repo that lacks them never reads about them.
+const CLASS_STEP =
+  'Class-first C++: write real classes with compiler-spelled methods (`mangle` shows the symbol the compiler emits, never hand-spell a _ZN name), place new files with `srcpath`, and prove a whole translation unit with `tubuild_verify` then `tubuild_linkcheck`. A single-function `match` can pass a call to the wrong function; the unit check cannot. The project notes below (readFirst, what may land) carry the full workflow.'
+
 /** The working guide for this agent: its profile if one exists, else the default. Empty when the
- *  repo has no `match` tool (nothing to drive). */
-function workGuideFor(name: string | undefined, hasMatch: boolean): string {
+ *  repo has no `match` tool (nothing to drive). `opts` adapts the language and the landing wording
+ *  from the descriptor; with no opts the text is what every project has always received. */
+export function workGuideFor(
+  name: string | undefined,
+  hasMatch: boolean,
+  opts: { cpp?: boolean; autoPr?: boolean; unitTools?: boolean } = {}
+): string {
   if (!hasMatch) return ''
-  return (name && WORK_GUIDES[name]) || WORK_GUIDE_DEFAULT
+  const grok = !!name && !!WORK_GUIDES[name]
+  const autoPr = opts.autoPr !== false
+  let g = (grok ? WORK_GUIDES[name!] : WORK_GUIDE_DEFAULT)
+    .replace(/@LANG@/g, opts.cpp ? 'C++' : 'C')
+    .replace('@LANDING@', autoPr ? LANDING_AUTO : LANDING_OFF)
+    .replace('@PUBLISH@', autoPr ? PUBLISH_AUTO : PUBLISH_OFF)
+    .replace('@GROKPUBLISH@', autoPr ? GROK_PUBLISH_AUTO : GROK_PUBLISH_OFF)
+  if (opts.cpp && opts.unitTools) {
+    // Land the class-first step before the trailing "Fallback if native MCP..." paragraph.
+    const i = g.lastIndexOf('\nFallback if native MCP')
+    const nums = [...g.matchAll(/\n(\d+)\. /g)].map((m) => Number(m[1]))
+    const step = `\n${(nums.length ? Math.max(...nums) : 0) + 1}. ${CLASS_STEP}`
+    g = i >= 0 ? g.slice(0, i) + step + g.slice(i) : g + step
+  }
+  return g
 }
 
 /** Explain an empty next_batch to an agent that IS connected but keeps getting nothing: the queue
@@ -311,13 +375,14 @@ function buildMcpServer(
           ? `[You are the ${roles.map((r) => `"${r}"`).join(' + ')} agent.] ${roles.map((r) => ROLE_PRESETS[r]).join(' ')}\n\n`
           : ''
         const hasMatch = !!desc.tools?.find((t) => t.id === 'match')
+        const srcIndex = getCtx().srcIndex?.() ?? null
 
         const targets = b.items.length
           ? '\n\nTargets:\n' +
             b.items
               .map((i) => {
                 const head = `- ${i.ref}${i.label ? ` (${i.label})` : ''}`
-                const call = hasMatch ? verifyCallFor(i, desc) : null
+                const call = hasMatch ? verifyCallFor(i, desc, srcIndex) : null
                 return call ? `${head}\n    match -> ${call}` : head
               })
               .join('\n')
@@ -325,7 +390,11 @@ function buildMcpServer(
 
         // How to actually run the work without stalling on the first tool error - tailored to the
         // connecting agent (Grok gets a terser, explicit-call variant; everyone else the default).
-        const guide = workGuideFor(c?.name, hasMatch)
+        const guide = workGuideFor(c?.name, hasMatch, {
+          cpp: prefersCpp(desc.project),
+          autoPr: autoPrAllowed(desc.project),
+          unitTools: !!desc.tools?.some((t) => t.id === 'tubuild_verify')
+        })
 
         const walls = desc.project?.knownWalls
         const wallsNote = walls

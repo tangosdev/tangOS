@@ -62,6 +62,15 @@ export interface TangosMatchConventions {
    */
   srcLayout?: string
   /**
+   * Whether Console may open pull requests for this project. Absent or true keeps the
+   * function-match flow: with Writes + Review + Push on, Console collects each agent's verified
+   * one-function files and opens a rolling per-agent PR. false turns that off for good (the Push
+   * toggle is locked): the project publishes class and translation-unit work through its own
+   * integrator, so Console makes no PR of its own. Local verification, banking and the recovery
+   * branch are unaffected.
+   */
+  autoPr?: boolean
+  /**
    * Prefill matchProvenance on attempt-tree nodes (slugs, not display names).
    * Same idea as Chaos Viewer's model / reasoning / harness pickers.
    */
@@ -529,12 +538,28 @@ export interface AtlasFunction {
   noMatch?: { bucket: 'asm-primitive' | 'not-c-expressible'; reason: string }
 }
 
+/** The two tiers beside MATCHED that a chaos-db may publish under `stats.tiers` (flat keys, as the
+ *  decomp's chaos_db_ci.py writes them). Every field is optional: LINKED is absent when the repo
+ *  has no linked measurement, and the whole block is absent for repos that only track MATCHED.
+ *  The denominators differ on purpose: CONVERTED counts source-owned functions, LINKED counts
+ *  matched translation units. */
+export interface AtlasTiers {
+  converted?: number
+  convertedOf?: number
+  convertedPct?: number
+  linked?: number
+  linkedOf?: number
+  linkedPct?: number
+  linkedMeasuredAt?: string
+}
+
 export interface AtlasStats {
   totalFunctions: number
   matchedFunctions: number
   totalBytes: number
   matchedBytes: number
   moduleCount: number
+  tiers?: AtlasTiers
 }
 
 export interface AtlasDb {

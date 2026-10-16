@@ -25,6 +25,19 @@ export function conventionsOf(project?: TangosProject | null): TangosMatchConven
   return c
 }
 
+/** May Console open PRs for this project? Absent keeps the function-match flow; `autoPr: false`
+ *  hands publishing to the project's own integrator and locks the Push toggle. */
+export function autoPrAllowed(project?: TangosProject | null): boolean {
+  return conventionsOf(project)?.autoPr !== false
+}
+
+/** The language a new source should be written in. A descriptor whose `language` starts with C++
+ *  is class-first (real methods, compiler-spelled names); anything else keeps the plain-C wording
+ *  every function-match repo has always had. */
+export function prefersCpp(project?: TangosProject | null): boolean {
+  return /^\s*c\+\+/i.test(project?.language ?? '')
+}
+
 export function attemptTreeEnabled(project?: TangosProject | null): boolean {
   return !!conventionsOf(project)?.attemptTree
 }
@@ -107,7 +120,7 @@ export function matchConventionsGuide(desc: TangosDescriptor, opts: MatchGuideOp
         (hasNearMissTool ? ' and nearmiss_* tools' : '') +
         '. Keep compiling tip C; never bank non-reproducing C as a green src/ match.'
       : 'Near-miss tips: OFF — do NOT open nearmiss/db.jsonl, nearmiss_* tools, or // NONMATCHING tip C for these targets. Work them from scratch.',
-    'A raw byte transcription (`asm{}`/`dcd 0x...` dump of the disassembly) is never a match — the console rejects it at verify, bank, and push; write real C or bank the near-miss instead.'
+    `A raw byte transcription (\`asm{}\`/\`dcd 0x...\` dump of the disassembly) is never a match — the console rejects it at verify, bank, and push; write real ${prefersCpp(desc.project) ? 'C++' : 'C'} or bank the near-miss instead.`
   ]
 
   if (allowNear && desc.project.nearMissNote) {
