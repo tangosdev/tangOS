@@ -471,13 +471,28 @@ export default function AtlasView({
 
         <div className="atlas-stats">
           <div className="stat-bar">
-            <div className="stat-label">Functions <b>{pct(s.matchedFunctions, s.totalFunctions)}</b> · {s.matchedFunctions.toLocaleString()} / {s.totalFunctions.toLocaleString()}</div>
+            <div className="stat-label">{s.tiers ? 'Matched' : 'Functions'} <b>{pct(s.matchedFunctions, s.totalFunctions)}</b> · {s.matchedFunctions.toLocaleString()} / {s.totalFunctions.toLocaleString()}</div>
             <div className="bar"><div className="fill" style={{ width: pct(s.matchedFunctions, s.totalFunctions) }} /></div>
           </div>
           <div className="stat-bar">
             <div className="stat-label">Code <b>{pct(s.matchedBytes, s.totalBytes)}</b> · {s.matchedBytes.toLocaleString()} / {s.totalBytes.toLocaleString()} b</div>
             <div className="bar"><div className="fill" style={{ width: pct(s.matchedBytes, s.totalBytes) }} /></div>
           </div>
+          {/* The other two tiers, when the repo's chaos-db publishes them (stats.tiers). They are
+              not steps of one funnel and their denominators differ on purpose: CONVERTED counts
+              source-owned functions, LINKED counts matched translation units. */}
+          {typeof s.tiers?.converted === 'number' && typeof s.tiers.convertedOf === 'number' && (
+            <div className="stat-bar" title="Readable C++: a real name, no raw offset arithmetic, no unk_ fields, no codegen tricks, calls by real names. Counted over source-owned functions.">
+              <div className="stat-label">Converted <b>{pct(s.tiers.converted, s.tiers.convertedOf)}</b> · {s.tiers.converted.toLocaleString()} / {s.tiers.convertedOf.toLocaleString()}</div>
+              <div className="bar"><div className="fill tier-converted" style={{ width: pct(s.tiers.converted, s.tiers.convertedOf) }} /></div>
+            </div>
+          )}
+          {typeof s.tiers?.linked === 'number' && typeof s.tiers.linkedOf === 'number' && (
+            <div className="stat-bar" title={`Matched translation units that reach the PC port${s.tiers.linkedMeasuredAt ? ` (measured ${s.tiers.linkedMeasuredAt})` : ''}. Counted over matched units, not functions.`}>
+              <div className="stat-label">Linked <b>{pct(s.tiers.linked, s.tiers.linkedOf)}</b> · {s.tiers.linked.toLocaleString()} / {s.tiers.linkedOf.toLocaleString()} units</div>
+              <div className="bar"><div className="fill tier-linked" style={{ width: pct(s.tiers.linked, s.tiers.linkedOf) }} /></div>
+            </div>
+          )}
         </div>
 
         {contributors.length > 0 && (

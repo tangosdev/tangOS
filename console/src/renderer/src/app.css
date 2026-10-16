@@ -619,12 +619,14 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
 .atlas.center { align-items: center; justify-content: center; }
 .atlas .landing { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
 .atlas-head { padding: 14px; }
-.atlas-stats { display: flex; gap: 18px; margin-top: 12px; }
-.stat-bar { flex: 1; }
+.atlas-stats { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 12px; }
+.stat-bar { flex: 1 1 200px; min-width: 0; }
 .stat-label { font-size: 12px; color: var(--aero-text); margin-bottom: 5px; }
 .stat-label b { color: rgb(var(--aero-primary-rgb)); }
 .bar { height: 12px; border-radius: 999px; background: rgba(0,0,0,0.08); overflow: hidden; border: 1px solid var(--aero-border); }
 .bar .fill { height: 100%; background: linear-gradient(90deg, rgb(var(--aero-matched-rgb)), rgb(var(--aero-accent-rgb))); }
+.bar .fill.tier-converted { background: linear-gradient(90deg, #f6a623, #f7d154); }
+.bar .fill.tier-linked { background: linear-gradient(90deg, #7c5cff, #b39dff); }
 .atlas-treemap { padding: 8px; }
 /* Atlas two-column layout: viewer takes the left 2/3 at full height, the
    detail/search/list stack rides the right 1/3. */
