@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { TangosDescriptor, PreflightItem, PreflightFixResult } from '../shared/types'
 
@@ -24,6 +24,62 @@ function run(cmd: string, args: string[], cwd: string): Promise<{ code: number; 
       resolve({ code: -1, out })
     }
   })
+}
+
+/** The compiler build a project pins as its default: the `version` default of its `match` tool
+ *  (sm64ds: 2004/b56). Undefined when the descriptor names none, which keeps every project that
+ *  never declared one on the old "the compiler folder exists" check. */
+export function pinnedCompilerVersion(desc: TangosDescriptor): string | undefined {
+  const v = desc.tools?.find((t) => t.id === 'match')?.args?.find((a) => a.name === 'version')?.default
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined
+}
+
+export interface CompilerPinStatus {
+  pin: string
+  ok: boolean
+  /** every build found under tools/<compiler>/, as version strings (e.g. 1.2/sp2p3) */
+  installed: string[]
+}
+
+/** Is the pinned compiler build actually installed under tools/<compiler>/<pin>/? Null when there
+ *  is nothing to check: no pin declared, no compiler named, or no tools/<compiler>/ folder (a
+ *  compiler found on PATH, or a layout this check knows nothing about). A machine that only has
+ *  the older builds passes a bare "folder exists" check and then fails every verify the descriptor
+ *  tells the AI to run, which is the failure this exists to name up front. */
+export function compilerPinStatus(repoPath: string, desc: TangosDescriptor): CompilerPinStatus | null {
+  const name = desc.requirements?.compiler
+  const pin = pinnedCompilerVersion(desc)
+  if (!name || !pin) return null
+  const root = join(repoPath, 'tools', name)
+  try {
+    if (!statSync(root).isDirectory()) return null
+  } catch {
+    return null
+  }
+  const exes = [`${name}.exe`, name]
+  const hasExe = (dir: string): boolean => exes.some((e) => existsSync(join(dir, e)))
+  const ok = hasExe(join(root, ...pin.split('/')))
+  const installed: string[] = []
+  const walk = (dir: string, rel: string[], depth: number): void => {
+    if (depth > 3) return
+    let entries: string[] = []
+    try {
+      entries = readdirSync(dir)
+    } catch {
+      return
+    }
+    if (rel.length && hasExe(dir)) installed.push(rel.join('/'))
+    for (const e of entries) {
+      const p = join(dir, e)
+      try {
+        if (statSync(p).isDirectory()) walk(p, [...rel, e], depth + 1)
+      } catch {
+        /* unreadable entry */
+      }
+    }
+  }
+  walk(root, [], 0)
+  return { pin, ok, installed: installed.sort() }
 }
 
 /** Actually check whether the repo's declared requirements are satisfied on this machine. */
@@ -83,12 +139,26 @@ export async function preflight(repoPath: string, desc: TangosDescriptor): Promi
       const w = await run(process.platform === 'win32' ? 'where' : 'which', [name], repoPath)
       if (w.code === 0 && w.out.trim()) found = w.out.trim().split(/\r?\n/)[0]
     }
-    items.push({
-      id: 'compiler', label: `Compiler (${name})`, ok: !!found,
-      detail: found ? `found: ${found}` : 'not found in repo tools/ or on PATH',
-      // No command can fetch a proprietary compiler; point at where it goes + where it comes from.
-      fix: `Put ${name} (and any license file it needs) in the repo's tools/${name}/ folder - it can't be auto-downloaded. The repo's setup notes say where to get it.`
-    })
+    const pin = found ? compilerPinStatus(repoPath, desc) : null
+    if (pin && !pin.ok) {
+      // The folder is there but the build the repo pins is not. Name that, and what IS installed,
+      // so the fix is "get this one build", not "install a compiler" to someone who has one.
+      const setup = desc.project?.setup?.trim()
+      items.push({
+        id: 'compiler', label: `Compiler (${name} ${pin.pin})`, ok: false,
+        detail: `${name} is installed, but the pinned build ${pin.pin} is missing (found: ${pin.installed.join(', ') || 'none'})`,
+        fix: `This repo verifies and builds with ${name} ${pin.pin}. Put that build in tools/${name}/${pin.pin}/ - it can't be auto-downloaded.${setup ? ` Setup notes: ${setup.slice(0, 420)}` : ''}`,
+        // Every ready-made verify call names this build, so nothing can pass without it.
+        blocksScheduling: true
+      })
+    } else {
+      items.push({
+        id: 'compiler', label: pin ? `Compiler (${name} ${pin.pin})` : `Compiler (${name})`, ok: !!found,
+        detail: found ? `found: ${found}${pin ? ` (pinned build ${pin.pin} present)` : ''}` : 'not found in repo tools/ or on PATH',
+        // No command can fetch a proprietary compiler; point at where it goes + where it comes from.
+        fix: `Put ${name} (and any license file it needs) in the repo's tools/${name}/ folder - it can't be auto-downloaded. The repo's setup notes say where to get it.`
+      })
+    }
   }
 
   if (req.rom) {
