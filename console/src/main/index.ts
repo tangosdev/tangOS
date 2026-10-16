@@ -11,8 +11,10 @@ import {
   defaultMatchingPrefs,
   matchConventionsConnectBlurb,
   attemptTreeEnabled,
+  autoPrAllowed,
   conventionsOf
 } from './matchConventions'
+import { loadSrcFileIndex, fileOwnsFunction, singleFunctionOf, classifySrcFile } from './srcFiles'
 import { loadDescriptor, validateDescriptor, DESCRIPTOR_FILENAME } from './descriptor'
 import { PROJECTS, projectBySlug, projectById, slugOf, customIdFor, descriptorUrlFor, registerProjects, REGISTRY_URL, type ProjectEntry } from '../shared/projects'
 import { detectRepo, writeDescriptor, looksLikeRepo } from './generate'
@@ -155,8 +157,17 @@ type AutoPushStatus = {
 }
 let autoPushStatus: AutoPushStatus = { state: 'idle' } // aggregate (most-recent) for the UI chip
 
+/** Why the Push toggle is locked for this project, or undefined when it is free to use. A project
+ *  that sets matchConventions.autoPr false publishes class and unit work through its integrator,
+ *  so Console must not open PRs for it however the toggles are set. */
+function autoPushLockedReason(): string | undefined {
+  return autoPrAllowed(state.descriptor?.project)
+    ? undefined
+    : 'Auto-PR is off for this project: its class and translation-unit work is published by the integrator, not by Console. Console still verifies and keeps local commits.'
+}
+
 function autoPushActive(): boolean {
-  return state.autoPushEnabled && state.allowMutations && state.safeMode
+  return state.autoPushEnabled && state.allowMutations && state.safeMode && !autoPushLockedReason()
 }
 
 // --- Per-agent isolation (per-agent branch + PR, chosen over shared-folder worktrees) ---
@@ -205,6 +216,8 @@ const harvestedMatches = new Map<string, { func: string; ts: number }>() // src 
 // a candidate whose bytes haven't changed since we last tried it; an edit toward a match bumps mtime
 // and re-opens it. Verified files are already skipped via harvestedMatches.
 const lastSweepAttempt = new Map<string, number>()
+// Multi-function (translation unit) files the sweep has already reported once.
+const unitFilesSeen = new Set<string>()
 let priorHarvestSurfaced = false // once-per-repo-load nag about a previous session's unlanded matches
 
 /** Bank the just-verified matches to the local recovery branch + harvest record. Cumulative and
@@ -349,12 +362,23 @@ async function noteMatchAndPush(
   const mine = pendingByAgent.get(slug) ?? new Set<string>()
   try {
     const changed = await changedSrcFiles(state.repoPath)
+    // The atlas knows which file each function really lives in (srcpath's answer), including a
+    // translation unit that owns many functions. Without it we fall back to the old basename rule.
+    const srcIdx = state.descriptor ? loadSrcFileIndex(state.repoPath, state.descriptor) : null
     for (const func of matchedFuncs) {
       if (!func) continue
       // The file lives wherever this repo's layout puts it (sm64ds: src/<name>.c, pictochat:
-      // src/arm9/<name>.c) - match by basename anywhere under src/, not one hardcoded flat path.
+      // src/arm9/<name>.c, a promoted unit: src/game/actors/d_a_foo.cpp) - ask the atlas first,
+      // then fall back to the basename anywhere under src/.
       for (const cand of changed) {
-        if (!cand.endsWith(`/${func}.c`) && !cand.endsWith(`/${func}.cpp`)) continue
+        if (!fileOwnsFunction(srcIdx, cand, func)) continue
+        // A file that owns several functions is a folded translation unit. A single-function
+        // match proves one member, not the unit, and unit work is published by the integrator, so
+        // it is never claimed, snapshotted or put in a per-agent PR from here.
+        if (classifySrcFile(srcIdx, cand).kind === 'unit') {
+          report('unit-file', { where: 'bank', agent: agentName ?? 'user', func, file: cand })
+          continue
+        }
         if (baselineDirtySrc.has(cand)) continue // pre-existing dirt, not this session's match
         // TRANSCRIPTION GATE: read the bytes we are about to claim. The verify said they equal
         // the ROM - which a raw dcd dump satisfies by construction - so the source text is the
@@ -770,12 +794,26 @@ async function runStrandedSweep(): Promise<void> {
     }
     const verified: string[] = []
     let checked = 0
+    const srcIdx = state.descriptor ? loadSrcFileIndex(repo, state.descriptor) : null
     for (const f of candidates) {
       if (checked >= SWEEP_CAP) {
         report('strandedSweep', { event: 'capped', checked, skipped: candidates.length - checked })
         break
       }
-      const func = f.replace(/^.*\//, '').replace(/\.(c|cpp)$/, '') // basename: nested layouts (src/arm9/<name>.c) name-key the same
+      // The function this file stands for: the atlas's answer when it has one (bucketed paths, a
+      // renamed unit), else the basename (nested layouts such as src/arm9/<name>.c name-key the
+      // same). A file that owns several functions is a folded translation unit: one single-function
+      // match cannot prove it, the repo's own whole-unit check does, so the sweep leaves it alone
+      // (and says so once) instead of silently skipping it on a name that matches nothing.
+      const one = singleFunctionOf(srcIdx, f)
+      if (one.kind === 'unit') {
+        if (!unitFilesSeen.has(f)) {
+          unitFilesSeen.add(f)
+          report('strandedSweep', { event: 'unit-file', file: f, functions: one.members.length })
+        }
+        continue
+      }
+      const func = one.name
       const m = meta.get(func)
       if (!m?.addr || !m?.size) continue
       // Skip a candidate whose bytes are unchanged since we last compiled it - re-verifying identical
@@ -1779,6 +1817,7 @@ const mcp = new McpManager(() => ({
   allowMutations: state.allowMutations,
   enabledToolIds: state.enabledToolIds,
   matchingPrefs,
+  srcIndex: () => (state.repoPath && state.descriptor ? loadSrcFileIndex(state.repoPath, state.descriptor) : null),
   batchApi: { next: pullNextBatch, wait: waitForBatchChecked, list: () => state.batches },
   run: runToolSafely
 }))
@@ -2206,7 +2245,7 @@ function fullState() {
     useAgents: state.useAgents,
     agentFanout: state.agentFanout,
     autoLand: state.autoLand,
-    autoPush: { enabled: state.autoPushEnabled, on: autoPushActive(), ...autoPushStatus },
+    autoPush: { enabled: state.autoPushEnabled, on: autoPushActive(), locked: autoPushLockedReason(), ...autoPushStatus },
     looping: [...agentLoop],
     projects: listProjects(),
     switchingProject,
@@ -4389,7 +4428,7 @@ ipcMain.handle('policy:setAutoLand', (_e, on: boolean) => {
   return state.autoLand
 })
 ipcMain.handle('policy:setAutoPush', (_e, on: boolean) => {
-  state.autoPushEnabled = !!on
+  state.autoPushEnabled = !!on && !autoPushLockedReason() // a locked project cannot be switched on
   autoPushStatus = { state: 'idle' } // clear any stale status when toggling
   if (!on) {
     for (const t of autoPushTimers.values()) clearTimeout(t)

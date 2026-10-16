@@ -62,6 +62,15 @@ export interface TangosMatchConventions {
    */
   srcLayout?: string
   /**
+   * Whether Console may open pull requests for this project. Absent or true keeps the
+   * function-match flow: with Writes + Review + Push on, Console collects each agent's verified
+   * one-function files and opens a rolling per-agent PR. false turns that off for good (the Push
+   * toggle is locked): the project publishes class and translation-unit work through its own
+   * integrator, so Console makes no PR of its own. Local verification, banking and the recovery
+   * branch are unaffected.
+   */
+  autoPr?: boolean
+  /**
    * Prefill matchProvenance on attempt-tree nodes (slugs, not display names).
    * Same idea as Chaos Viewer's model / reasoning / harness pickers.
    */

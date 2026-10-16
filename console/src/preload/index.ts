@@ -22,7 +22,7 @@ type FullState = {
   useAgents: boolean
   agentFanout: number
   autoLand: boolean
-  autoPush: { enabled: boolean; on: boolean; state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'; message?: string; prUrl?: string; at?: number }
+  autoPush: { enabled: boolean; on: boolean; locked?: string; state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'; message?: string; prUrl?: string; at?: number }
   looping: string[]
   projects: ProjectSummary[]
   switchingProject: boolean

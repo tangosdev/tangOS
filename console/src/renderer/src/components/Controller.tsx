@@ -96,7 +96,7 @@ export default function Controller({
   onOpenViewer: () => void
   allowMutations: boolean
   safeMode: boolean
-  autoPush: { enabled: boolean; on: boolean; state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'; message?: string; prUrl?: string }
+  autoPush: { enabled: boolean; on: boolean; locked?: string; state: 'idle' | 'pushing' | 'ok' | 'error' | 'skipped'; message?: string; prUrl?: string }
   onToggleWrites: () => void
   onToggleReview: () => void
   onOpenDetail: (name: string) => void
@@ -686,14 +686,17 @@ export default function Controller({
           <button
             className={`tb-btn ${autoPush.enabled ? 'active' : ''}`}
             onClick={() => window.tangos.setAutoPush(!autoPush.enabled)}
+            disabled={!!autoPush.locked}
             title={
-              autoPush.enabled
-                ? 'Auto-push matched work as a rolling PR. With Writes + Review also on, the pipeline runs end-to-end with no human step.'
-                : 'Turn on to auto-push matched work as a rolling PR (needs Writes + Review on, a git clone, and GitHub sign-in)'
+              autoPush.locked
+                ? autoPush.locked
+                : autoPush.enabled
+                  ? 'Auto-push matched work as a rolling PR. With Writes + Review also on, the pipeline runs end-to-end with no human step.'
+                  : 'Turn on to auto-push matched work as a rolling PR (needs Writes + Review on, a git clone, and GitHub sign-in)'
             }
           >
             <GitPullRequest size={14} />
-            Push: {autoPush.enabled ? 'ON' : 'OFF'}
+            {autoPush.locked ? 'Push: locked' : `Push: ${autoPush.enabled ? 'ON' : 'OFF'}`}
           </button>
           {autoPush.on && (
             <span

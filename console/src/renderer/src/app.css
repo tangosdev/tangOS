@@ -294,6 +294,7 @@ html[data-theme='deepsea'] .app-bg-bubble { opacity: 0.5; }
   box-shadow: inset 0 1px 0 rgba(var(--aero-gloss-rgb) / 0.6); transition: background 0.15s ease, filter 0.15s ease;
 }
 .tb-btn:hover { filter: brightness(1.04); background: rgba(var(--aero-gloss-rgb) / 0.55); }
+.tb-btn:disabled { opacity: 0.55; cursor: default; filter: none; }
 .tb-btn .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--aero-muted); flex: none; }
 .tb-btn.on {
   background: linear-gradient(180deg, rgba(var(--aero-gloss-rgb) / 0.45), rgba(var(--aero-matched-rgb) / 0.22));
