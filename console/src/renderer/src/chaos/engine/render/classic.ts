@@ -4,10 +4,11 @@ import type { Camera } from '../camera'
 import type { World } from '../../layout'
 import type { Rect } from '../../types'
 import type { Theme } from '../../themes/types'
+import type { ColorBy } from '../../types'
 
 export interface PaintView {
   theme: Theme
-  colorBy: 'status' | 'author'
+  colorBy: ColorBy
   authorColors?: Map<string, string>
   authorResolve?: Map<string, string>
   authorFilter: string | null
@@ -36,6 +37,11 @@ export function fnColor(f: AtlasFunction, v: PaintView): string {
     if (!f.matched) return c.unmatched
     const who = resolveAuthor(v, f.author)
     return (who && v.authorColors?.get(who)) || AUTHOR_FALLBACK
+  }
+  if (v.colorBy === 'converted' || v.colorBy === 'linked') {
+    // A tier view only has an opinion about work that is done: an unfinished function keeps its
+    // status colour, a matched one is either in the tier (its colour) or still waiting (pale).
+    if (f.matched) return (v.colorBy === 'converted' ? f.converted : f.linked) ? c[v.colorBy] : c.pending
   }
   if (f.matched) return c.matched
   // A committed src file that is NOT matched (e.g. a // NONMATCHING hand-asm/near-miss
@@ -207,7 +213,7 @@ export function paintModuleLabels(
     const hpx = m.h * cam.z
     if (wpx <= 30 || hpx <= 12) continue
     const p = cam.worldToScreen(m.x, m.y)
-    const label = `${m.module} (${counts[i]})`
+    const label = `${m.label ?? m.module} (${counts[i]})`
     ctx.lineWidth = 3
     ctx.strokeStyle = 'rgba(255,255,255,0.9)'
     ctx.strokeText(label, p.x + 4, p.y + 12, Math.max(20, wpx - 8))

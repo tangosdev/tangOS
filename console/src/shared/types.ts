@@ -560,6 +560,22 @@ export interface AtlasFunction {
   matched: boolean
   srcPath?: string
   author?: string
+  /** Compiled into the ROM build and byte-compared against the cartridge. Present only when true. */
+  verified?: boolean
+  /** Matched through a hand-assembly primitive: no original C exists to recover. Present only when true. */
+  handAsm?: boolean
+  /** The tier columns a decomp may publish per function, all present ONLY when true (absent = no):
+   *  `converted` = readable source (a real name, no raw offsets, no unk_ fields, no codegen tricks);
+   *  `linked` = the function's translation unit reaches the port or recompilation binary. */
+  converted?: boolean
+  linked?: boolean
+  /** The class (or namespace) a method belongs to, demangled from its symbol. */
+  class?: string
+  /** Translation unit the original source file held, from the decomp's TU manifest: an id such as
+   *  "arm9/Actor" and how far its reconstruction is (shadow, text-verified, promoted, ...). A
+   *  function in no manifest entry is a plain one-function file and carries neither. */
+  tuId?: string
+  tuState?: string
   div?: number
   cat?: string
   floor?: string
@@ -583,6 +599,7 @@ export interface AtlasTiers {
   converted?: number
   convertedOf?: number
   convertedPct?: number
+  convertedSourceFiles?: number
   linked?: number
   linkedOf?: number
   linkedPct?: number

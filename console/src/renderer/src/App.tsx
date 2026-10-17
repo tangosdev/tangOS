@@ -395,6 +395,7 @@ export default function App(): JSX.Element {
         draftRefs={draftRefs}
         liveEnabled={!!repo?.descriptor?.data?.committedDbUrl}
         localAvailable={!!repo?.path}
+        declaredTiers={repo?.descriptor?.data?.tiers}
       />
     )
   } else if (showControls) {

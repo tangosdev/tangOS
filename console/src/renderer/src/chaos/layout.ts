@@ -1,6 +1,7 @@
 import { squarify } from '../atlas/squarify'
 import type { AtlasDb, AtlasFunction } from '../../../shared/types'
 import type { LayoutMode, Rect } from './types'
+import { tuLabel } from './tiers'
 
 export interface FnNode {
   f: AtlasFunction
@@ -15,6 +16,8 @@ export interface FnNode {
 
 export interface ModNode {
   module: string
+  /** What the section header says when it is not the key itself (a source file in the TU layout). */
+  label?: string
   x: number
   y: number
   w: number
@@ -73,6 +76,7 @@ export function buildWorld(
   } else {
     const keyOf = (f: AtlasFunction): string => {
       if (mode === 'ov') return f.module
+      if (mode === 'tu') return f.srcPath ?? f.tuId ?? 'no source'
       if (mode === 'match') {
         if (f.matched) return 'matched'
         // Reproduces the ROM with nothing left to chase - its own band, so it stops
@@ -109,7 +113,14 @@ export function buildWorld(
       for (const ft of fnTiles) {
         fns.push({ f: ft.item.f, x: ft.x, y: ft.y, w: ft.w, h: ft.h, modIx, idHash: fnv1a(ft.item.f.id) })
       }
-      mods.push({ module: mt.item.module, x: mt.x, y: mt.y, w: mt.w, h: mt.h })
+      mods.push({
+        module: mt.item.module,
+        label: mode === 'tu' ? tuLabel(mt.item.module) : undefined,
+        x: mt.x,
+        y: mt.y,
+        w: mt.w,
+        h: mt.h
+      })
     }
   }
 

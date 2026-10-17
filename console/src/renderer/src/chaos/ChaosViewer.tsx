@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import type { AtlasDb, AtlasFunction } from '../../../shared/types'
 import { ChaosEngine } from './engine/engine'
 import { InputController } from './engine/input'
-import type { LayoutMode } from './types'
+import type { ColorBy, LayoutMode } from './types'
 
 /** The redesigned Chaos Viewer. Drop-in for the classic Treemap in AtlasView:
  *  same data/callback contract, rendering handled by the chaos engine. Overlay
@@ -25,7 +25,9 @@ export default function ChaosViewer({
   authorFilter = null,
   showNearMiss = true,
   layout = 'ov',
-  starredIds
+  starredIds,
+  focusTu = null,
+  legend
 }: {
   db: AtlasDb
   moduleFilter: string | null
@@ -36,14 +38,17 @@ export default function ChaosViewer({
   onDeselectAll?: () => void
   selectedId?: string
   cartRefs?: Set<string>
-  colorBy?: 'status' | 'author'
-  onColorBy?: (c: 'status' | 'author') => void
+  colorBy?: ColorBy
+  onColorBy?: (c: ColorBy) => void
   authorColors?: Map<string, string>
   authorResolve?: Map<string, string>
   authorFilter?: string | null
   showNearMiss?: boolean
   layout?: LayoutMode
   starredIds?: Set<string>
+  focusTu?: { key: string } | null
+  /** Colour key for the current view, shown over the map's bottom-left corner. */
+  legend?: ReactNode
 }): JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -104,9 +109,10 @@ export default function ChaosViewer({
       cartRefs,
       themeId: 'classic',
       layout,
-      starredIds
+      starredIds,
+      focusTu
     })
-  }, [colorBy, authorColors, authorResolve, authorFilter, moduleFilter, showNearMiss, selectedId, cartRefs, layout, starredIds])
+  }, [colorBy, authorColors, authorResolve, authorFilter, moduleFilter, showNearMiss, selectedId, cartRefs, layout, starredIds, focusTu])
 
   const refocus = (): void => canvasRef.current?.focus()
 
@@ -117,7 +123,8 @@ export default function ChaosViewer({
         tabIndex={0}
         style={{ display: 'block', cursor: 'pointer', borderRadius: 8, outline: 'none', touchAction: 'none' }}
       />
-      {onColorBy && (
+      {legend && <div className="chaos-overlay bl chaos-legend">{legend}</div>}
+      {onColorBy && !legend && (
         <div className="chaos-overlay bl">
           <div className="seg">
             <button
