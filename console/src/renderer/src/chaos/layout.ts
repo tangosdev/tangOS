@@ -1,6 +1,7 @@
 import { squarify } from '../atlas/squarify'
 import type { AtlasDb, AtlasFunction } from '../../../shared/types'
 import type { LayoutMode, Rect } from './types'
+import { tuLabel } from './tiers'
 
 export interface FnNode {
   f: AtlasFunction
@@ -15,6 +16,8 @@ export interface FnNode {
 
 export interface ModNode {
   module: string
+  /** What the section header says when it is not the key itself (a source file in the TU layout). */
+  label?: string
   x: number
   y: number
   w: number
@@ -73,6 +76,7 @@ export function buildWorld(
   } else {
     const keyOf = (f: AtlasFunction): string => {
       if (mode === 'ov') return f.module
+      if (mode === 'tu') return f.srcPath ?? f.tuId ?? 'no source'
       if (mode === 'match') {
         if (f.matched) return 'matched'
         // Reproduces the ROM with nothing left to chase - its own band, so it stops
@@ -105,11 +109,28 @@ export function buildWorld(
         .slice()
         .sort((a, b) => b.size - a.size)
         .map((f) => ({ f, value: Math.max(1, f.size) }))
-      const fnTiles = squarify(items, mt.x + 1, mt.y + 1, Math.max(0, mt.w - 2), Math.max(0, mt.h - 2))
+      // 2,500 sections leave the smallest ones under 2 px, where the usual 1 px inset would leave no
+      // area and squarify would drop the function. A one-function file is its own section, so it
+      // takes the whole box and nothing is lost.
+      const inset = mode === 'tu' && mt.item.funcs.length === 1 ? 0 : 1
+      const fnTiles = squarify(
+        items,
+        mt.x + inset,
+        mt.y + inset,
+        Math.max(0, mt.w - 2 * inset),
+        Math.max(0, mt.h - 2 * inset)
+      )
       for (const ft of fnTiles) {
         fns.push({ f: ft.item.f, x: ft.x, y: ft.y, w: ft.w, h: ft.h, modIx, idHash: fnv1a(ft.item.f.id) })
       }
-      mods.push({ module: mt.item.module, x: mt.x, y: mt.y, w: mt.w, h: mt.h })
+      mods.push({
+        module: mt.item.module,
+        label: mode === 'tu' ? tuLabel(mt.item.module) : undefined,
+        x: mt.x,
+        y: mt.y,
+        w: mt.w,
+        h: mt.h
+      })
     }
   }
 

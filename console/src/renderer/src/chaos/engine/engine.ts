@@ -3,7 +3,8 @@ import { buildWorld } from '../layout'
 import type { FnNode, World } from '../layout'
 import { SourceCache } from '../sourceCache'
 import { getTheme } from '../themes'
-import type { LayoutMode, Rect } from '../types'
+import type { ColorBy, LayoutMode, Rect } from '../types'
+import { tuKeyOf } from '../tiers'
 import { clamp, easeInOutCubic } from './anim'
 import { NameBubble } from './bubbles'
 import { Camera } from './camera'
@@ -32,7 +33,7 @@ export interface EngineCallbacks {
 }
 
 export interface ViewOptions {
-  colorBy: 'status' | 'author'
+  colorBy: ColorBy
   authorColors?: Map<string, string>
   authorResolve?: Map<string, string>
   authorFilter: string | null
@@ -46,6 +47,9 @@ export interface ViewOptions {
   cartRefs?: Set<string>
   // Function IDs carrying a bought star (Hermit's shop): gold outline + glyph, same as the website.
   starredIds?: Set<string>
+  // A translation unit (source file) to bring into view; a fresh object per request so asking twice flies twice. Takes effect in the By TU layout, where the
+  // unit is one section; set by the detail card's "show this file on the map" button.
+  focusTu?: { key: string } | null
 }
 
 declare global {
@@ -132,6 +136,9 @@ export class ChaosEngine {
   // Indices into world.fns of the functions currently in the batch cart, recomputed only when the
   // cart set or the world changes so the per-frame rainbow overlay is a cheap index walk.
   private cartNodes: number[] = []
+  // translation unit key -> indexes of its functions in world.fns, units of two or more only. Rebuilt
+  // with the world; drives the outline round the selected function's unit.
+  private tuIndex = new Map<string, number[]>()
   // Right-drag rubber-band selection, in CSS/screen space while dragging (add = Ctrl held).
   private marquee: { x0: number; y0: number; x1: number; y1: number; add: boolean } | null = null
   /** What the camera is currently flying toward - re-issued after a rebuild so
@@ -205,8 +212,10 @@ export class ChaosEngine {
     if (next.layout && next.layout !== prev.layout) {
       // grouping changed: a genuinely different geography - relayout and refit
       this.freshLayout()
+      if (this.opts.focusTu) this.focusTuSection(this.opts.focusTu.key)
       return
     }
+    if ('focusTu' in next && next.focusTu !== prev.focusTu && next.focusTu) this.focusTuSection(next.focusTu.key)
     if ('moduleFilter' in next && next.moduleFilter !== prev.moduleFilter) {
       // externally requested focus (toolbar chip, list selection, detail-bar close)
       if (this.opts.moduleFilter !== this.lastEmittedModule) this.externalFocus(this.opts.moduleFilter)
@@ -284,9 +293,21 @@ export class ChaosEngine {
     const mod = this.world.hitMod(p.x, p.y)
     if (mod && this.opts.layout === 'ov') {
       this.cb.onModule(this.opts.moduleFilter === mod.module ? null : mod.module)
+    } else if (mod && this.opts.layout === 'tu') {
+      this.focusTuSection(mod.module)
     }
   }
 
+  /** Fit one translation unit's section (By TU layout only: elsewhere its functions are scattered and
+   *  a bounding box of them would cover half the map). */
+  private focusTuSection(key: string): void {
+    if (!this.world || this.opts.layout !== 'tu') return
+    const mod = this.world.mods.find((m) => m.module === key)
+    if (!mod) return
+    this.flightTarget = { kind: 'mod', name: key }
+    this.cam.flyToRect(mod, MOD_PAD, performance.now())
+    this.wake()
+  }
   /** Pointer position in canvas CSS coordinates. Feeds the hover lift + bubbles. */
   pointerMove(cssX: number, cssY: number): void {
     const now = performance.now()
@@ -608,6 +629,15 @@ export class ChaosEngine {
     const relY = prev ? this.cam.y / prev.h : 0.5
     const relZ = prev ? this.cam.z / this.cam.fitZ : 1
     this.world = buildWorld(this.db, this.cssW, this.cssH, this.opts.layout, this.opts.authorResolve)
+    this.tuIndex = new Map()
+    for (let i = 0; i < this.world.fns.length; i++) {
+      const k = tuKeyOf(this.world.fns[i].f)
+      if (!k) continue
+      const list = this.tuIndex.get(k)
+      if (list) list.push(i)
+      else this.tuIndex.set(k, [i])
+    }
+    for (const [k, list] of this.tuIndex) if (list.length < 2) this.tuIndex.delete(k)
     this.recomputeCartNodes() // indices are world-relative; the fresh layout invalidates the old ones
     this.worldGen++
     this.lod.compute(this.world, this.cssW, this.cssH)
@@ -742,6 +772,7 @@ export class ChaosEngine {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     this.drawCart(now)
     this.bubble.draw(ctx, this.cam, now)
+    this.drawTuOutline()
     this.drawSelection(now)
     this.drawMarquee()
     this.drawMinimap()
@@ -868,6 +899,36 @@ export class ChaosEngine {
       this.bubble.show(fn.f.name, fn.x + fn.w / 2, fn.y, now, fn.f.noMatch?.reason ?? '')
     } else {
       this.pendingBubble = true
+    }
+  }
+
+  /** Outline every function of the selected function's translation unit, so a file that is spread
+   *  across the map (the By ov / By size layouts) reads as one thing. Screen space, drawn each frame
+   *  under the selection ring; units of a single function have nothing to outline. */
+  private drawTuOutline(): void {
+    const { world, ctx, cam } = this
+    const id = this.opts.selectedId
+    if (!world || !id) return
+    const sel = world.byId.get(id)
+    if (sel == null) return
+    const key = tuKeyOf(world.fns[sel].f)
+    const members = key ? this.tuIndex.get(key) : undefined
+    if (!members) return
+    const color = getTheme(this.opts.themeId).colors.tuOutline
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
+    ctx.lineJoin = 'round'
+    for (const ix of members) {
+      const n = world.fns[ix]
+      const p = cam.worldToScreen(n.x, n.y)
+      const mw = Math.max(n.w * cam.z, 3)
+      const mh = Math.max(n.h * cam.z * cam.sy, 3)
+      if (p.x + mw < 0 || p.y + mh < 0 || p.x > this.cssW || p.y > this.cssH) continue
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+      ctx.lineWidth = 3.5
+      ctx.strokeRect(p.x - 0.5, p.y - 0.5, mw + 1, mh + 1)
+      ctx.strokeStyle = color
+      ctx.lineWidth = 1.75
+      ctx.strokeRect(p.x - 0.5, p.y - 0.5, mw + 1, mh + 1)
     }
   }
 

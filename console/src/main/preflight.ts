@@ -26,10 +26,12 @@ function run(cmd: string, args: string[], cwd: string): Promise<{ code: number; 
   })
 }
 
-/** The compiler build a project pins as its default: the `version` default of its `match` tool
- *  (sm64ds: 2004/b56). Undefined when the descriptor names none, which keeps every project that
+/** The compiler build a project pins as its default: `project.compilerPin` when the descriptor
+ *  states it, else the `version` default of its `match` tool (sm64ds: 2004/b56). Undefined when the descriptor names none, which keeps every project that
  *  never declared one on the old "the compiler folder exists" check. */
 export function pinnedCompilerVersion(desc: TangosDescriptor): string | undefined {
+  const explicit = desc.project?.compilerPin
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim()
   const v = desc.tools?.find((t) => t.id === 'match')?.args?.find((a) => a.name === 'version')?.default
   return typeof v === 'string' && v.trim() ? v.trim() : undefined
 }

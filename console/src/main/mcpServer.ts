@@ -116,11 +116,15 @@ function zodForArg(tool: TangosTool): Record<string, ZodTypeAny> {
     if (a.description) base = base.describe(a.description)
     shape[a.name] = a.required ? base : base.optional()
   }
-  if (tool.apply) {
+  if (tool.apply || tool.previewFlag) {
     shape.apply = z
       .boolean()
       .optional()
-      .describe(`Pass ${tool.apply} to actually mutate repo state. Default false = dry run (safe preview).`)
+      .describe(
+        tool.apply
+          ? `Pass ${tool.apply} to actually mutate repo state. Default false = dry run (safe preview).`
+          : `Set true to actually mutate repo state (drops ${tool.previewFlag}). Default false = preview (${tool.previewFlag}).`
+      )
   }
   return shape
 }
@@ -130,6 +134,7 @@ function describeTool(tool: TangosTool): string {
   parts.push(tool.description || tool.label || tool.id)
   parts.push(tool.readOnly ? '[read-only]' : '[MUTATES repo state]')
   if (tool.apply) parts.push(`Defaults to a dry run; set apply=true to write changes (${tool.apply}).`)
+  else if (tool.previewFlag) parts.push(`Defaults to a preview (${tool.previewFlag}); set apply=true to write changes.`)
   if (tool.needs?.length) parts.push(`Requires: ${tool.needs.join(', ')}.`)
   const req = (tool.args ?? []).filter((a) => a.required).map((a) => a.name)
   if (req.length) parts.push(`REQUIRED args: ${req.join(', ')}.`)

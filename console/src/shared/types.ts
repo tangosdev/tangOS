@@ -21,6 +21,12 @@ export interface TangosTool {
   readOnly: boolean
   command: string
   apply?: string
+  /** For a tool that mutates by default: the flag that only previews (e.g. --dry-run). Passed unless
+   *  the caller explicitly confirms a real run. The mirror image of `apply`. */
+  previewFlag?: string
+  /** Regular expression (JavaScript syntax) matching the tool's output when it succeeded, for tools
+   *  whose exit code does not say. */
+  successPattern?: string
   longRunning?: boolean
   needs?: string[]
   args?: TangosArg[]
@@ -101,6 +107,25 @@ export interface TangosProject {
   knownWalls?: string // proven-unreachable shapes; surfaced to connected AIs via next_batch
   /** Experimental / extended matching conventions (attempt tree, Ghidra, near-miss DB). */
   matchConventions?: TangosMatchConventions
+  /** What one piece of work is: a function (default), a class, or a whole translation unit. */
+  workUnit?: 'function' | 'class' | 'tu'
+  /** The language new source is written in. More exact than the free-text `language`. */
+  languageMode?: 'c' | 'cpp' | 'mixed'
+  /** The canonical compiler build, as the folder name under tools/<compiler>/ (e.g. 2004/b56). */
+  compilerPin?: string
+  /** Tool id that says where a source file for a symbol belongs. */
+  srcPathTool?: string
+  /** Checks to pass before publishing, in order, each naming a tool from this descriptor. */
+  gates?: TangosGate[]
+  /** Pull request shape for projects whose PRs are not "matched N functions". */
+  pr?: { titleTemplate?: string; bodyTemplate?: string }
+}
+
+export interface TangosGate {
+  name: string
+  tool: string
+  when?: 'pre-push' | 'pre-pr' | 'pre-merge'
+  description?: string
 }
 
 export interface EnvKeyHelp {
@@ -141,6 +166,9 @@ export interface TangosData {
   // Raw URL of the live CLAIMS.md. Optional: if absent the console derives it from
   // committedDbUrl (same owner/repo, main branch, /CLAIMS.md).
   claimsMdUrl?: string
+  /** Which per-function tier columns this project's chaos-db publishes (see AtlasFunction). The
+   *  Atlas offers a colour mode for each one declared; absent means it looks in the data. */
+  tiers?: { converted?: boolean; linked?: boolean; units?: boolean }
 }
 
 export interface ClaimsResult {
@@ -201,6 +229,14 @@ export interface TangosConsoleRoles {
   logAttempt?: string
   /** Verifies one candidate against the ROM. The merge gate. */
   verify?: string
+  /** Ranks classes or translation units and writes a unit worklist (project.workUnit class / tu). */
+  unitScheduler?: string
+  /** Verifies a whole unit against the ROM and prints one machine-readable verdict. */
+  unitVerify?: string
+  /** Enrolls a verified unit into the build. Mutating. */
+  unitPromote?: string
+  /** Source review of a unit by someone who did not write it. */
+  unitReview?: string
 }
 
 export interface TangosDescriptor {
@@ -524,6 +560,22 @@ export interface AtlasFunction {
   matched: boolean
   srcPath?: string
   author?: string
+  /** Compiled into the ROM build and byte-compared against the cartridge. Present only when true. */
+  verified?: boolean
+  /** Matched through a hand-assembly primitive: no original C exists to recover. Present only when true. */
+  handAsm?: boolean
+  /** The tier columns a decomp may publish per function, all present ONLY when true (absent = no):
+   *  `converted` = readable source (a real name, no raw offsets, no unk_ fields, no codegen tricks);
+   *  `linked` = the function's translation unit reaches the port or recompilation binary. */
+  converted?: boolean
+  linked?: boolean
+  /** The class (or namespace) a method belongs to, demangled from its symbol. */
+  class?: string
+  /** Translation unit the original source file held, from the decomp's TU manifest: an id such as
+   *  "arm9/Actor" and how far its reconstruction is (shadow, text-verified, promoted, ...). A
+   *  function in no manifest entry is a plain one-function file and carries neither. */
+  tuId?: string
+  tuState?: string
   div?: number
   cat?: string
   floor?: string
@@ -541,16 +593,21 @@ export interface AtlasFunction {
 /** The two tiers beside MATCHED that a chaos-db may publish under `stats.tiers` (flat keys, as the
  *  decomp's chaos_db_ci.py writes them). Every field is optional: LINKED is absent when the repo
  *  has no linked measurement, and the whole block is absent for repos that only track MATCHED.
- *  The denominators differ on purpose: CONVERTED counts source-owned functions, LINKED counts
- *  matched translation units. */
+ *  MATCHED, CONVERTED and LINKED all count functions. An older chaos-db counts LINKED in matched
+ *  translation units instead; it has no `linkedUnits`, which is how a reader tells the two apart. */
 export interface AtlasTiers {
   converted?: number
   convertedOf?: number
   convertedPct?: number
+  convertedSourceFiles?: number
   linked?: number
   linkedOf?: number
   linkedPct?: number
   linkedMeasuredAt?: string
+  /** The same stamped build counted in translation units, as detail. Present when `linked` counts
+   *  functions; a chaos-db without it counts `linked` in matched units (an older stamp). */
+  linkedUnits?: number
+  linkedUnitsOf?: number
 }
 
 export interface AtlasStats {

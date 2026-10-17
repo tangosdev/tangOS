@@ -1,10 +1,12 @@
 name: Descriptor schema check
 
 # Validates the published reference descriptors against schema/tangos.schema.json so the
-# schema and the dialect the Console actually consumes (console/src/shared/types.ts) cannot
-# drift apart silently. The schema once shipped for months missing runtime.envKeyHelp,
-# data.liveApi/projectId and matchConventions.srcLayout - fields every production descriptor
-# used - and nothing failed until someone ran a strict validator by hand.
+# schema and the dialect the Console actually consumes (console/src/shared/types.ts and the
+# roles console/src/main/descriptor.ts accepts) cannot drift apart silently. validate.mjs also
+# compares those three files field by field before it looks at any descriptor. The schema
+# once shipped for months missing runtime.envKeyHelp, data.liveApi/projectId and
+# matchConventions.srcLayout - fields every production descriptor used - and nothing failed
+# until someone ran a strict validator by hand.
 #
 # Runs on any change to the schema, the shared descriptor types, or this workflow; weekly on
 # a cron so a reference-descriptor change upstream is caught too; and manually. mkds-decomp
@@ -19,11 +21,13 @@ on:
     paths:
       - 'schema/**'
       - 'console/src/shared/types.ts'
+      - 'console/src/main/descriptor.ts'
       - '.github/workflows/schema-check.yml'
   pull_request:
     paths:
       - 'schema/**'
       - 'console/src/shared/types.ts'
+      - 'console/src/main/descriptor.ts'
       - '.github/workflows/schema-check.yml'
 
 permissions:

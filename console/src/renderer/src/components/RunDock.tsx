@@ -16,6 +16,7 @@ export function previewArgv(tool: TangosTool, values: Record<string, unknown>, p
     else flags.push(a.flag, s)
   }
   if (tool.apply && apply) flags.push(tool.apply)
+  if (tool.previewFlag && !apply) flags.push(tool.previewFlag)
   const out: string[] = []
   for (const tok of tool.command.trim().split(/\s+/)) {
     if (tok === '{flags}') out.push(...flags)
@@ -94,7 +95,7 @@ export default function RunDock({
   async function run(): Promise<void> {
     setRunning(true)
     try {
-      await window.tangos.runTool(tool.id, { ...values, ...(tool.apply ? { apply } : {}) })
+      await window.tangos.runTool(tool.id, { ...values, ...(tool.apply || tool.previewFlag ? { apply } : {}) })
     } finally {
       setRunning(false)
     }
@@ -116,12 +117,14 @@ export default function RunDock({
             <Field key={a.name} arg={a} value={values[a.name]} onChange={(v) => setValues((p) => ({ ...p, [a.name]: v }))} />
           ))}
 
-          {tool.apply && (
+          {(tool.apply || tool.previewFlag) && (
             <div className="field checkbox">
               <input type="checkbox" checked={apply} onChange={(e) => setApply(e.target.checked)} />
               <label>
                 <ShieldAlert size={13} style={{ verticalAlign: -2, marginRight: 4, color: 'var(--aero-danger)' }} />
-                apply - actually mutate ({tool.apply}). Off = dry run.
+                {tool.apply
+                  ? `apply - actually mutate (${tool.apply}). Off = dry run.`
+                  : `apply - actually mutate (drops ${tool.previewFlag}). Off = preview.`}
               </label>
             </div>
           )}

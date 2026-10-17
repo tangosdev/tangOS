@@ -40,6 +40,9 @@ export function renderArgv(
   }
 
   if (tool.apply && allowApply) flags.push(tool.apply)
+  // A tool that mutates unless told otherwise declares the flag that only previews. It is passed
+  // on every run that was not explicitly confirmed, so the default is still a preview.
+  if (tool.previewFlag && !allowApply) flags.push(tool.previewFlag)
 
   // Expand the command template token-by-token so {flags} becomes multiple argv items.
   const baseTokens = tool.command.trim().split(/\s+/)
@@ -74,7 +77,7 @@ export function runTool(opts: RunOptions): Promise<RunResult> {
   const { tool, values, runtime, repoPath, source, allowMutations, client } = opts
   const runId = randomUUID()
   const mutating = !tool.readOnly
-  const allowApply = !!tool.apply && values.apply === true
+  const allowApply = (!!tool.apply || !!tool.previewFlag) && values.apply === true
   const commandPreview = previewCommand(tool, values, runtime, allowApply)
   const startedAt = Date.now()
 

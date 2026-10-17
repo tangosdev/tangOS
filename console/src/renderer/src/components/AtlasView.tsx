@@ -21,7 +21,8 @@ import type {
   GithubCredits
 } from '../../../shared/types'
 import ChaosViewer from '../chaos/ChaosViewer'
-import type { LayoutMode } from '../chaos/types'
+import type { ColorBy, LayoutMode } from '../chaos/types'
+import { tierSupport, tuKeyOf, tuLabel, tuMembers, type DeclaredTiers } from '../chaos/tiers'
 import { sortFns, SORT_LABELS, type SortKey } from '../atlas/sort'
 
 const pct = (n: number, d: number): string => (d ? `${((n / d) * 100).toFixed(1)}%` : '0%')
@@ -38,7 +39,8 @@ export default function AtlasView({
   onReplace,
   draftRefs,
   liveEnabled,
-  localAvailable
+  localAvailable,
+  declaredTiers
 }: {
   onAdd: (item: BatchItem) => void
   onRemove: (ref: string) => void
@@ -47,6 +49,8 @@ export default function AtlasView({
   liveEnabled: boolean
   /** false = no checkout here, so there is no local chaos-db to read or generate. */
   localAvailable: boolean
+  /** descriptor data.tiers: which tier columns the chaos-db publishes. Absent = look in the data. */
+  declaredTiers?: DeclaredTiers
 }): JSX.Element {
   // The loaded atlas as fetched/generated. The VPS's live match state is overlaid onto it
   // below; `db` is what the rest of the view renders.
@@ -67,8 +71,10 @@ export default function AtlasView({
   const [filter, setFilter] = useState<'all' | 'unmatched' | 'matched'>('all')
   const [moduleFilter, setModuleFilter] = useState<string | null>(null)
   const [sort, setSort] = useState<SortKey>('unmatched')
-  const [colorBy, setColorBy] = useState<'status' | 'author'>('status')
+  const [colorBy, setColorBy] = useState<ColorBy>('status')
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('ov')
+  // A fresh object per request, so "show this file" flies every time it is pressed.
+  const [focusTu, setFocusTu] = useState<{ key: string } | null>(null)
   const [authorFilter, setAuthorFilter] = useState<string | null>(null)
   const [showNearMiss, setShowNearMiss] = useState(true)
   const [selectedFn, setSelectedFn] = useState<AtlasFunction | null>(null)
@@ -223,14 +229,31 @@ export default function AtlasView({
     }
   }, [])
 
-  const pickColorBy = (c: 'status' | 'author'): void => {
+  const pickColorBy = (c: ColorBy): void => {
     setColorBy(c)
+    // Only the contributor view is remembered between launches: the tier views need data a freshly
+    // opened (or switched) atlas may not have yet, and Matched is the safe default.
     void window.tangos.viewerPrefsSet({ contributorColors: c === 'author' }).catch(() => {})
   }
   const pickLayout = (m: LayoutMode): void => {
     setLayoutMode(m)
+    setFocusTu(null)
     if (m !== 'ov') setModuleFilter(null) // group names are not ov names - keep the list unfiltered
   }
+  // The detail card's "show this file on the map": group by file and fly to the unit's section.
+  const showTu = (key: string): void => {
+    setLayoutMode('tu')
+    setModuleFilter(null)
+    setFocusTu({ key })
+  }
+
+  // Which tier views this atlas can offer, from the descriptor's declaration or else the data itself.
+  const tiers = useMemo(() => tierSupport(db, declaredTiers), [db, declaredTiers])
+  const tuFiles = useMemo(() => tuMembers(db), [db])
+  // A view the data does not support (the source switched from a local file without the columns to
+  // live data, or the reverse) falls back to Matched instead of painting everything "not yet".
+  const shownColorBy: ColorBy =
+    (colorBy === 'converted' && !tiers.converted) || (colorBy === 'linked' && !tiers.linked) ? 'status' : colorBy
 
   // data-file author key -> canonical GitHub login (dedups an email-derived key vs the GitHub login, etc.)
   const keyToLogin = useMemo(() => new Map(Object.entries(gh?.keyToLogin ?? {})), [gh])
@@ -439,6 +462,9 @@ export default function AtlasView({
   }
 
   const s = db.stats
+  // New chaos-dbs count LINKED in functions like the other bars and carry the unit figures as detail;
+  // one without linkedUnits is an older stamp counted in matched translation units.
+  const perFunction = s.tiers?.linkedUnits !== undefined
   return (
     <div className={`atlas${fullAtlas ? ' full' : ''}`}>
       <div className="atlas-head aero-panel">
@@ -479,8 +505,8 @@ export default function AtlasView({
             <div className="bar"><div className="fill" style={{ width: pct(s.matchedBytes, s.totalBytes) }} /></div>
           </div>
           {/* The other two tiers, when the repo's chaos-db publishes them (stats.tiers). They are
-              not steps of one funnel and their denominators differ on purpose: CONVERTED counts
-              source-owned functions, LINKED counts matched translation units. */}
+              not steps of one funnel. All three count functions; an older chaos-db counts LINKED in
+              matched translation units, and the label says which. */}
           {typeof s.tiers?.converted === 'number' && typeof s.tiers.convertedOf === 'number' && (
             <div className="stat-bar" title="Readable C++: a real name, no raw offset arithmetic, no unk_ fields, no codegen tricks, calls by real names. Counted over source-owned functions.">
               <div className="stat-label">Converted <b>{pct(s.tiers.converted, s.tiers.convertedOf)}</b> · {s.tiers.converted.toLocaleString()} / {s.tiers.convertedOf.toLocaleString()}</div>
@@ -488,8 +514,8 @@ export default function AtlasView({
             </div>
           )}
           {typeof s.tiers?.linked === 'number' && typeof s.tiers.linkedOf === 'number' && (
-            <div className="stat-bar" title={`Matched translation units that reach the PC port${s.tiers.linkedMeasuredAt ? ` (measured ${s.tiers.linkedMeasuredAt})` : ''}. Counted over matched units, not functions.`}>
-              <div className="stat-label">Linked <b>{pct(s.tiers.linked, s.tiers.linkedOf)}</b> · {s.tiers.linked.toLocaleString()} / {s.tiers.linkedOf.toLocaleString()} units</div>
+            <div className="stat-bar" title={`${perFunction ? 'Functions whose translation unit reaches the PC port' : 'Matched translation units that reach the PC port'}${s.tiers.linkedMeasuredAt ? ` (measured ${s.tiers.linkedMeasuredAt})` : ''}.${perFunction && s.tiers.linkedUnits !== undefined && s.tiers.linkedUnitsOf !== undefined ? ` The same build counted in units: ${s.tiers.linkedUnits.toLocaleString()} of ${s.tiers.linkedUnitsOf.toLocaleString()}.` : ''}`}>
+              <div className="stat-label">Linked <b>{pct(s.tiers.linked, s.tiers.linkedOf)}</b> · {s.tiers.linked.toLocaleString()} / {s.tiers.linkedOf.toLocaleString()} {perFunction ? 'functions' : 'units'}</div>
               <div className="bar"><div className="fill tier-linked" style={{ width: pct(s.tiers.linked, s.tiers.linkedOf) }} /></div>
             </div>
           )}
@@ -578,21 +604,40 @@ export default function AtlasView({
           if (add) items.forEach(onAdd)
           else onReplace(items)
         }}
-        colorBy={colorBy}
+        colorBy={shownColorBy}
         authorColors={authorColors}
         authorResolve={keyToLogin}
         authorFilter={authorFilter}
         showNearMiss={showNearMiss}
-        layout={layoutMode}
+        layout={layoutMode === 'tu' && !tiers.units ? 'ov' : layoutMode}
         starredIds={starredIds}
+        focusTu={focusTu}
+        legend={
+          shownColorBy === 'converted' || shownColorBy === 'linked' ? (
+            <span className="tier-legend">
+              <i className={`lg ${shownColorBy}`} />
+              {shownColorBy === 'converted' ? 'readable' : 'in the port'}
+              <i className="lg pending" />
+              matched, not yet
+              <i className="lg open" />
+              not matched
+            </span>
+          ) : undefined
+        }
       />
       {/* Bottom bar INSIDE the map column, so "centered" means centered on the atlas box and the
           popout/fullscreen buttons sit at the map's bottom-right corner. */}
       <div className="atlas-bottombar">
         <div className="bb-left">
           <div className="seg">
-            <button className={colorBy === 'status' ? 'on' : ''} onClick={() => pickColorBy('status')}>Status</button>
-            <button className={colorBy === 'author' ? 'on' : ''} onClick={() => pickColorBy('author')}>Contributor</button>
+            <button className={shownColorBy === 'status' ? 'on' : ''} onClick={() => pickColorBy('status')} title="Matched: byte-identical to the ROM">Matched</button>
+            {tiers.converted && (
+              <button className={shownColorBy === 'converted' ? 'on' : ''} onClick={() => pickColorBy('converted')} title="Converted: readable source, not just a byte match">Converted</button>
+            )}
+            {tiers.linked && (
+              <button className={shownColorBy === 'linked' ? 'on' : ''} onClick={() => pickColorBy('linked')} title="Linked: the function's translation unit reaches the PC port">Linked</button>
+            )}
+            <button className={shownColorBy === 'author' ? 'on' : ''} onClick={() => pickColorBy('author')}>Contributor</button>
           </div>
         </div>
         <div className="bb-center">
@@ -602,13 +647,16 @@ export default function AtlasView({
                 ['ov', 'By ov'],
                 ['size', 'By size'],
                 ['match', 'By match'],
-                ['contributor', 'By contributor']
+                ['contributor', 'By contributor'],
+                ['tu', 'By file']
               ] as Array<[LayoutMode, string]>
-            ).map(([m, label]) => (
+            )
+              .filter(([m]) => m !== 'tu' || tiers.units)
+              .map(([m, label]) => (
               <button key={m} className={layoutMode === m ? 'on' : ''} onClick={() => pickLayout(m)}>
                 {label}
               </button>
-            ))}
+              ))}
           </div>
         </div>
         <div className="bb-right">
@@ -682,6 +730,16 @@ export default function AtlasView({
               <b>Needs no match</b>
               <span> {selectedFn.noMatch.reason}</span>
             </div>
+          )}
+
+          {selectedFn.srcPath && (
+            <TuBlock
+              fn={selectedFn}
+              members={tuFiles.get(tuKeyOf(selectedFn) ?? '') ?? [selectedFn]}
+              tiers={tiers}
+              onPick={setSelectedFn}
+              onShow={tiers.units ? () => showTu(tuKeyOf(selectedFn)!) : undefined}
+            />
           )}
 
           {/* Prior tries: plan before queueing — data from repo logs, not pasted into agent prompts */}
@@ -846,6 +904,65 @@ export default function AtlasView({
       </div>
       </div>
       </div>
+    </div>
+  )
+}
+
+/** The translation unit the selected function sits in: its file, how far the unit has got and which
+ *  other functions share it. The chips are the click-through: pick one and the map flies to it. */
+function TuBlock({
+  fn,
+  members,
+  tiers,
+  onPick,
+  onShow
+}: {
+  fn: AtlasFunction
+  members: AtlasFunction[]
+  tiers: { converted: boolean; linked: boolean }
+  onPick: (f: AtlasFunction) => void
+  onShow?: () => void
+}): JSX.Element {
+  const key = tuKeyOf(fn) ?? ''
+  const sorted = useMemo(() => members.slice().sort((a, b) => a.addr - b.addr), [members])
+  const shown = sorted.slice(0, 40)
+  const count = (pick: (f: AtlasFunction) => boolean | undefined): number => members.filter((m) => pick(m)).length
+  return (
+    <div className="ad-tu">
+      <div className="ad-tu-head">
+        <span className="ad-tu-title mono" title={key}>{tuLabel(key)}</span>
+        {fn.tuState && <span className={`ad-tu-state tu-${fn.tuState}`} title="How far this unit's reconstruction has got">{fn.tuState}</span>}
+        {fn.class && <span className="hint mono" title="class">{fn.class}</span>}
+        <span className="hint">
+          {members.length === 1 ? 'one function in this file' : `${members.length} functions in this file`}
+          {tiers.converted && members.length > 0 ? ` · ${count((m) => m.converted)} converted` : ''}
+          {tiers.linked && members.length > 0 ? ` · ${count((m) => m.linked)} linked` : ''}
+        </span>
+        <div style={{ flex: 1 }} />
+        {onShow && members.length > 1 && (
+          <button className="mini-btn" onClick={onShow} title="Group the map by file and fly to this one">
+            Show this file on the map
+          </button>
+        )}
+      </div>
+      {fn.srcPath && <div className="hint mono ad-tu-path">{fn.srcPath}</div>}
+      {members.length > 1 && (
+        <div className="ad-tu-members aero-scroll">
+          {shown.map((m) => (
+            <button
+              key={m.id}
+              className={`tu-chip mono${m.id === fn.id ? ' sel' : ''}`}
+              title={`${m.name} · 0x${m.addr.toString(16).padStart(8, '0')}`}
+              onClick={() => onPick(m)}
+            >
+              {tiers.converted && <i className={`dot${m.converted ? ' conv' : ''}`} />}
+              {tiers.linked && <i className={`dot${m.linked ? ' link' : ''}`} />}
+              {m.name}
+            </button>
+          ))}
+          {sorted.length > shown.length && <span className="hint">+{sorted.length - shown.length} more</span>}
+        </div>
+      )}
     </div>
   )
 }
