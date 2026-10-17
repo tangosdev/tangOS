@@ -15,8 +15,16 @@ const CONSOLE_ROLES = new Set([
   'driver',
   'land',
   'logAttempt',
-  'verify'
+  'verify',
+  'unitScheduler',
+  'unitVerify',
+  'unitPromote',
+  'unitReview'
 ])
+const WORK_UNITS = new Set(['function', 'class', 'tu'])
+const LANGUAGE_MODES = new Set(['c', 'cpp', 'mixed'])
+const GATE_WHEN = new Set(['pre-push', 'pre-pr', 'pre-merge'])
+const TIER_KEYS = new Set(['converted', 'linked', 'units'])
 
 export function descriptorPathFor(repoPath: string): string {
   return join(repoPath, DESCRIPTOR_FILENAME)
@@ -42,6 +50,30 @@ export function validateDescriptor(desc: unknown): string[] {
   else {
     if (!project.name) errs.push('project.name is required')
     if (!project.title) errs.push('project.title is required')
+    if (project.workUnit !== undefined && !WORK_UNITS.has(String(project.workUnit))) {
+      errs.push('project.workUnit must be "function", "class" or "tu"')
+    }
+    if (project.languageMode !== undefined && !LANGUAGE_MODES.has(String(project.languageMode))) {
+      errs.push('project.languageMode must be "c", "cpp" or "mixed"')
+    }
+    if (project.compilerPin !== undefined && (typeof project.compilerPin !== 'string' || !project.compilerPin.trim())) {
+      errs.push('project.compilerPin must be a non-empty string')
+    }
+    if (project.gates !== undefined && !Array.isArray(project.gates)) errs.push('project.gates must be an array')
+    if (project.pr !== undefined && (typeof project.pr !== 'object' || project.pr === null || Array.isArray(project.pr))) {
+      errs.push('project.pr must be an object')
+    }
+  }
+  const dataBlock = d.data as Record<string, unknown> | undefined
+  if (dataBlock && dataBlock.tiers !== undefined) {
+    const t = dataBlock.tiers
+    if (typeof t !== 'object' || t === null || Array.isArray(t)) errs.push('data.tiers must be an object')
+    else {
+      for (const [k, v] of Object.entries(t as Record<string, unknown>)) {
+        if (!TIER_KEYS.has(k)) errs.push(`data.tiers: unknown key "${k}"`)
+        else if (typeof v !== 'boolean') errs.push(`data.tiers.${k} must be a boolean`)
+      }
+    }
   }
 
   const cats = new Set<string>()
@@ -69,6 +101,21 @@ export function validateDescriptor(desc: unknown): string[] {
     if (typeof t.readOnly !== 'boolean') errs.push(`tool ${id}: readOnly must be a boolean`)
     if (typeof t.command !== 'string' || !t.command) errs.push(`tool ${id}: command is required`)
     if (t.apply && t.readOnly) errs.push(`tool ${id}: has an apply flag but is marked readOnly`)
+    if (t.previewFlag !== undefined && (typeof t.previewFlag !== 'string' || !t.previewFlag)) {
+      errs.push(`tool ${id}: previewFlag must be a non-empty string`)
+    }
+    if (t.previewFlag && t.readOnly) errs.push(`tool ${id}: has a previewFlag but is marked readOnly`)
+    if (t.previewFlag && t.apply) errs.push(`tool ${id}: declares both apply and previewFlag (pick one switch)`)
+    if (t.successPattern !== undefined) {
+      if (typeof t.successPattern !== 'string' || !t.successPattern) errs.push(`tool ${id}: successPattern must be a non-empty string`)
+      else {
+        try {
+          new RegExp(t.successPattern)
+        } catch {
+          errs.push(`tool ${id}: successPattern is not a valid regular expression`)
+        }
+      }
+    }
     if (typeof t.category === 'string' && t.category && cats.size > 0 && !cats.has(t.category)) {
       errs.push(`tool ${id}: references unknown category "${t.category}"`)
     }
@@ -80,6 +127,27 @@ export function validateDescriptor(desc: unknown): string[] {
           if (typeof a.type !== 'string' || !ARG_TYPES.has(a.type)) {
             errs.push(`tool ${id}: arg ${String(a.name)} has invalid type ${String(a.type)}`)
           }
+        }
+      }
+    }
+  }
+
+  // Fields that name a tool: a typo is silent otherwise (the gate or the path helper just never runs).
+  if (project && typeof project === 'object') {
+    if (typeof project.srcPathTool === 'string' && !ids.has(project.srcPathTool)) {
+      errs.push(`project.srcPathTool: no tool with id "${project.srcPathTool}"`)
+    }
+    if (Array.isArray(project.gates)) {
+      for (const [i, g] of (project.gates as Record<string, unknown>[]).entries()) {
+        if (!g || typeof g !== 'object' || typeof g.name !== 'string' || !g.name) {
+          errs.push(`project.gates[${i}]: name is required`)
+          continue
+        }
+        if (typeof g.tool !== 'string' || !ids.has(g.tool)) {
+          errs.push(`project.gates[${i}] (${g.name}): no tool with id "${String(g.tool)}"`)
+        }
+        if (g.when !== undefined && !GATE_WHEN.has(String(g.when))) {
+          errs.push(`project.gates[${i}] (${g.name}): when must be "pre-push", "pre-pr" or "pre-merge"`)
         }
       }
     }

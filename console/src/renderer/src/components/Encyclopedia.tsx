@@ -132,6 +132,11 @@ export default function Encyclopedia({
                             Dry-run by default; pass {t.apply} to actually write changes.
                           </p>
                         )}
+                        {!t.apply && t.previewFlag && (
+                          <p className="hint" style={{ margin: '4px 0 0' }}>
+                            Previews by default ({t.previewFlag}); confirm a real run to write changes.
+                          </p>
+                        )}
                         <div className="ency-actions">
                           <button className="mini-btn go" onClick={() => setDockToolId(t.id)}>
                             <SlidersHorizontal size={12} /> Run it yourself

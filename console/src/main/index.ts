@@ -1536,7 +1536,9 @@ function projectEnv(): Record<string, string> {
 // that named its equivalents anything else got "this repo has no similarity scheduler" despite
 // shipping a complete toolchain. Roles are declared per repo in descriptor.console; these ids are
 // the fallback, so every descriptor written before that block keeps working untouched.
-const LEGACY_ROLE_IDS: Record<keyof TangosConsoleRoles, string> = {
+// The unit roles (unitScheduler ...) came with class and TU work and have no historical id, so they
+// only resolve when a descriptor names them.
+const LEGACY_ROLE_IDS: Partial<Record<keyof TangosConsoleRoles, string>> = {
   scheduler: 'coddog',
   refineScheduler: 'refine_wl',
   randomScheduler: 'worklist',
