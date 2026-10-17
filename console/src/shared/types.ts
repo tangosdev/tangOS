@@ -593,8 +593,8 @@ export interface AtlasFunction {
 /** The two tiers beside MATCHED that a chaos-db may publish under `stats.tiers` (flat keys, as the
  *  decomp's chaos_db_ci.py writes them). Every field is optional: LINKED is absent when the repo
  *  has no linked measurement, and the whole block is absent for repos that only track MATCHED.
- *  The denominators differ on purpose: CONVERTED counts source-owned functions, LINKED counts
- *  matched translation units. */
+ *  MATCHED, CONVERTED and LINKED all count functions. An older chaos-db counts LINKED in matched
+ *  translation units instead; it has no `linkedUnits`, which is how a reader tells the two apart. */
 export interface AtlasTiers {
   converted?: number
   convertedOf?: number
@@ -604,6 +604,10 @@ export interface AtlasTiers {
   linkedOf?: number
   linkedPct?: number
   linkedMeasuredAt?: string
+  /** The same stamped build counted in translation units, as detail. Present when `linked` counts
+   *  functions; a chaos-db without it counts `linked` in matched units (an older stamp). */
+  linkedUnits?: number
+  linkedUnitsOf?: number
 }
 
 export interface AtlasStats {
