@@ -109,7 +109,17 @@ export function buildWorld(
         .slice()
         .sort((a, b) => b.size - a.size)
         .map((f) => ({ f, value: Math.max(1, f.size) }))
-      const fnTiles = squarify(items, mt.x + 1, mt.y + 1, Math.max(0, mt.w - 2), Math.max(0, mt.h - 2))
+      // 2,500 sections leave the smallest ones under 2 px, where the usual 1 px inset would leave no
+      // area and squarify would drop the function. A one-function file is its own section, so it
+      // takes the whole box and nothing is lost.
+      const inset = mode === 'tu' && mt.item.funcs.length === 1 ? 0 : 1
+      const fnTiles = squarify(
+        items,
+        mt.x + inset,
+        mt.y + inset,
+        Math.max(0, mt.w - 2 * inset),
+        Math.max(0, mt.h - 2 * inset)
+      )
       for (const ft of fnTiles) {
         fns.push({ f: ft.item.f, x: ft.x, y: ft.y, w: ft.w, h: ft.h, modIx, idHash: fnv1a(ft.item.f.id) })
       }
