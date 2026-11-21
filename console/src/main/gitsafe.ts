@@ -185,29 +185,6 @@ export async function fetchRemote(repo: string): Promise<boolean> {
   return (await git(repo, ['fetch', '--quiet', 'origin'])).code === 0
 }
 
-/** src/*.c|.cpp files ADDED to origin/<branch> in the last `sinceHours` - i.e. functions matched
- *  (a match lands by adding its source) in that window. Fetches first so the window reflects true
- *  main, not wherever the local checkout sits. Returns the bare filename stems (no dir, no ext:
- *  "func_02048720"), which are the function names the Atlas keys on. */
-export async function recentlyAddedSrc(repo: string, branch: string, sinceHours: number): Promise<string[]> {
-  await git(repo, ['fetch', '--quiet', 'origin', branch])
-  // A + M, not just A: most matches land by editing an existing NONMATCHING stub into a
-  // real match (a modify), so filtering to added-only files badly undercounts a
-  // contributor's recent work. The caller cross-references these stems against the
-  // matched set in the loaded atlas, so a stub still unmatched never counts anyway.
-  const r = await git(repo, [
-    'log', `origin/${branch}`, `--since=${sinceHours} hours ago`,
-    '--diff-filter=AM', '--name-only', '--pretty=format:'
-  ])
-  if (r.code !== 0) return []
-  const stems = new Set<string>()
-  for (const line of r.out.split('\n')) {
-    const p = line.trim()
-    if (p.startsWith('src/') && /\.(c|cpp)$/.test(p)) stems.add(p.replace(/^src\//, '').replace(/\.(c|cpp)$/, ''))
-  }
-  return [...stems]
-}
-
 /** Bring in new upstream work while keeping local commits: rebase the current branch onto
  *  origin/<branch>. Fast-forwards with no local commits; otherwise replays them (dropping any that
  *  were already merged). --autostash handles uncommitted TRACKED changes.

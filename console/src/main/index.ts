@@ -41,7 +41,7 @@ import {
   remoteSlug, defaultBranch, currentBranch,
   pushSubsetToBranch, commitSubsetToLocalBranch, changedSrcFiles,
   isDirty, aheadBehind, unmergedAhead, fetchRemote, rebasePull, gitUserName,
-  recentlyAddedSrc, fetchBase, upstreamState, upstreamIsNonmatching, newSrcVsBase,
+  fetchBase, upstreamState, upstreamIsNonmatching, newSrcVsBase,
   syncPreview, backupBeforeSync, syncToOrigin, showFile
 } from './gitsafe'
 import { saveHarvest, listHarvests, type HarvestRecord } from './harvest'
@@ -3002,18 +3002,6 @@ ipcMain.handle('bg:setPrefs', (_e, p: Partial<BackgroundPrefs>): BackgroundPrefs
   bgPrefs = { enabled: typeof p?.enabled === 'boolean' ? p.enabled : bgPrefs.enabled }
   saveSettings()
   return bgPrefs
-})
-
-// Function names matched (src file added to origin/main) within the last `sinceHours` (default 24),
-// for the contributors legend's "recent activity" badge. Best-effort: [] when not a git checkout.
-ipcMain.handle('atlas:recentAdds', async (_e, sinceHours?: number): Promise<string[]> => {
-  const repo = state.repoPath
-  if (!repo || !(await isGitRepo(repo))) return []
-  try {
-    return await recentlyAddedSrc(repo, await defaultBranch(repo), sinceHours ?? 24)
-  } catch {
-    return []
-  }
 })
 
 // Regenerate the local Atlas DB (chaos-db.json) from the current repo state and refresh the cache,

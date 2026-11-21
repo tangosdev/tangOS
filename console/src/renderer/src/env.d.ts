@@ -50,7 +50,6 @@ export interface TangosApi {
   atlasLoadLive(force?: boolean): Promise<AtlasDb | null>
   atlasCurrent(): Promise<AtlasDb | null>
   atlasGenerate(): Promise<AtlasDb | null>
-  recentAdds(sinceHours?: number): Promise<string[]>
   atlasSource(req: { id: string; srcPath?: string }): Promise<AtlasSource | null>
   functionHistory(req: {
     functionId?: string

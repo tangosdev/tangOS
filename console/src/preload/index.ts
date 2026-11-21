@@ -44,7 +44,6 @@ const api = {
   atlasLoadLive: (force?: boolean): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:loadLive', force),
   atlasCurrent: (): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:current'),
   atlasGenerate: (): Promise<AtlasDb | null> => ipcRenderer.invoke('atlas:generate'),
-  recentAdds: (sinceHours?: number): Promise<string[]> => ipcRenderer.invoke('atlas:recentAdds', sinceHours),
   atlasSource: (req: { id: string; srcPath?: string }): Promise<AtlasSource | null> =>
     ipcRenderer.invoke('atlas:source', req),
   functionHistory: (req: {
