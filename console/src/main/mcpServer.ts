@@ -71,8 +71,8 @@ function isNearMissTool(id: string): boolean {
 export function normalizeName(raw?: string): string {
   if (!raw) return 'AI'
   const n = raw.toLowerCase()
-  // Claude models get their OWN boxes (Opus/Fable/Sonnet run + score independently), so resolve the
-  // specific model before the generic 'Claude' fallback. Order matters: "claude-opus-4-8" -> Opus.
+  // Claude models get their OWN boxes (each runs + scores independently), so resolve the specific
+  // model before the generic 'Claude' fallback. Order matters: "claude-opus-5-5" -> Opus.
   if (n.includes('opus')) return 'Opus'
   if (n.includes('fable')) return 'Fable'
   if (n.includes('sonnet')) return 'Sonnet'

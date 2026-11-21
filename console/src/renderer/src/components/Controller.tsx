@@ -5,6 +5,7 @@ import { ROLE_NAMES, ROLE_PRESETS, ROLE_STRENGTH, roleBatchSize } from '../../..
 import { aiColor } from '../aiColor'
 import { recommendRole, autoRole } from '../roleRec'
 import { effortSpec, currentEffort } from '../efforts'
+import { modelBox, modelLabel } from '../../../shared/models'
 import GithubSignIn from './GithubSignIn'
 
 
@@ -527,7 +528,7 @@ export default function Controller({
                               className="agent-effort"
                               value={currentEffort(a)}
                               onChange={(e) => window.tangos.setClientEffort(a.name, e.target.value)}
-                              title={`Reasoning effort${spec.note ? ` - ${spec.note}` : ''}`}
+                              title={`${modelBox(a.name) ? `${modelLabel(a.name)}: ` : ''}Reasoning effort${spec.note ? ` - ${spec.note}` : ''}`}
                             >
                               {spec.options.map((o) => (
                                 <option key={o} value={o}>

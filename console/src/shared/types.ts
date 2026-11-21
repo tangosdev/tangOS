@@ -1,5 +1,6 @@
 // Types shared between the Electron main process and the renderer.
 // The descriptor types mirror schema/tangos.schema.json.
+import { modelLabel } from './models'
 
 export interface TangosArg {
   name: string
@@ -371,10 +372,11 @@ export const ROLE_PRESETS: Record<string, string> = {
  *  connected model with them, so the label an operator reads and the role the app picks can't drift
  *  apart. `names` is tried first against the agent name (a Claude box can be Fable or Haiku; the
  *  family alone can't tell them apart); `families` is the coarse fallback, keyed by efforts.ts
- *  `familyOf`. Never injected into an agent's instructions - edit the reference models freely. */
+ *  `familyOf`. The Claude reference models are read from the model table (models.ts) so the label
+ *  moves with the box. Never injected into an agent's instructions - edit freely. */
 export const ROLE_FIT: Record<string, { strength: string; names?: RegExp; families?: string[] }> = {
-  'Hard matcher': { strength: 'very high, Fable 5+', names: /fable|opus|gpt-?5|\bo[34]\b/ },
-  'Random': { strength: 'high, Sonnet 5 / Grok', names: /sonnet|grok/, families: ['Claude', 'Grok', 'GPT'] },
+  'Hard matcher': { strength: `very high, ${modelLabel('Fable')}`, names: /fable|opus|gpt-?[5-9]|\bo[34]\b/ },
+  'Random': { strength: `high, ${modelLabel('Sonnet')} / Grok`, names: /sonnet|grok/, families: ['Claude', 'Grok', 'GPT'] },
   'Drafter': { strength: 'medium, DeepSeek', names: /deepseek|kimi|moonshot/, families: ['DeepSeek', 'Kimi'] },
   'Refiner': {
     strength: 'low, GLM / Nemotron',

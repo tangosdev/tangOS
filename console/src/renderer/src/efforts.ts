@@ -1,49 +1,15 @@
 import type { AiAgent } from '../../shared/types'
+import { EFFORT_CATALOG, EFFORT_FALLBACK, effortInForce, modelBox, type EffortSpec } from '../../shared/models'
 
-// Reasoning-effort options per model family. These mirror the knob each provider actually exposes,
-// so a box prefills to the right choices for whatever model is behind it:
-//   Claude   - effort tiers (low..max), map to the extended-thinking budget
-//   GLM      - GLM-4.6 hybrid reasoning is a toggle (thinking disabled/enabled)
-//   GPT      - reasoning_effort: minimal | low | medium | high
-//   Grok     - grok reasoning_effort (low | high); grok-4 reasons by default
-//   DeepSeek - deepseek-chat (V3) vs deepseek-reasoner (R1)
-export interface EffortSpec {
-  options: string[]
-  default: string
-  note?: string // shown in the tooltip so people know what the knob is
-}
+// Reasoning-effort options per model family. The catalog itself lives in shared/models.ts, next
+// to the table of which model sits behind each box, so the main process (which hands the effort
+// to the driver) and this dropdown read the same list.
+export type { EffortSpec }
 
-const CATALOG: Record<string, EffortSpec> = {
-  Claude: { options: ['low', 'medium', 'high', 'xhigh', 'max'], default: 'high', note: 'extended-thinking budget' },
-  GLM: { options: ['off'], default: 'off', note: 'thinking off: the refine driver emits code directly, and reasoning starves its token budget' },
-  GPT: { options: ['minimal', 'low', 'medium', 'high'], default: 'high', note: 'reasoning_effort' },
-  Grok: { options: ['low', 'high'], default: 'high', note: 'grok reasoning_effort' },
-  DeepSeek: { options: ['chat', 'reasoner'], default: 'reasoner', note: 'V3 chat vs R1 reasoner' },
-  Nemotron: { options: ['off'], default: 'off', note: 'local LM Studio (model nemo): reasons internally, the driver reads the answer' },
-  // Requesty is a gateway; the "effort" box picks WHICH free model this single agent runs (one at a
-  // time, not a fan-out - all 8 at once share one key's quota and rate-limit each other).
-  Requesty: {
-    options: [
-      'nvidia/nemotron-3-super-120b-a12b',
-      'nvidia/nemotron-3-ultra-550b-a55b',
-      'nvidia/nemotron-3-nano-30b-a3b',
-      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
-      'google/gemma-4-31b-it',
-      'mistral/leanstral-1-5',
-      'novita/tencent/hy3',
-      'poolside/laguna-m.1'
-    ],
-    default: 'nvidia/nemotron-3-super-120b-a12b',
-    note: 'which free Requesty model to run'
-  },
-  Kimi: { options: ['off'], default: 'off', note: 'Moonshot Kimi K3: the driver reads the answer (OpenAI-compatible)' }
-}
-
-const FALLBACK: EffortSpec = { options: ['low', 'medium', 'high'], default: 'medium' }
-
-/** Model family for an agent: its provider if we key it, else inferred from the name. */
+/** Model family for an agent: its row in the model table if it has one, else inferred from the name. */
 export function familyOf(a: Pick<AiAgent, 'provider' | 'name'>): string {
-  if (a.provider && CATALOG[a.provider]) return a.provider
+  const row = modelBox(a.provider ?? '') ?? modelBox(a.name ?? '')
+  if (row) return row.family
   const n = (a.name || '').toLowerCase()
   if (/claude|opus|sonnet|haiku|fable/.test(n)) return 'Claude'
   if (/glm|zhipu/.test(n)) return 'GLM'
@@ -57,11 +23,10 @@ export function familyOf(a: Pick<AiAgent, 'provider' | 'name'>): string {
 
 /** Effort options + default for whatever model is behind this box. */
 export function effortSpec(a: Pick<AiAgent, 'provider' | 'name'>): EffortSpec {
-  return CATALOG[familyOf(a)] ?? FALLBACK
+  return EFFORT_CATALOG[familyOf(a)] ?? EFFORT_FALLBACK
 }
 
 /** The effort currently in force for an agent: its saved choice if valid, else the family default. */
 export function currentEffort(a: Pick<AiAgent, 'provider' | 'name' | 'effort'>): string {
-  const spec = effortSpec(a)
-  return a.effort && spec.options.includes(a.effort) ? a.effort : spec.default
+  return effortInForce(familyOf(a), a.effort)
 }

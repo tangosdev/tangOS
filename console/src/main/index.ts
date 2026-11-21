@@ -56,6 +56,7 @@ import type {
   PreflightItem, PreflightFixId, PreflightFixResult
 } from '../shared/types'
 import { roleBatchSize, ROLE_LADDER } from '../shared/types'
+import { MODEL_BOXES, boxesForKey, driveSettings } from '../shared/models'
 
 const DEFAULT_PORT = 4808
 
@@ -2100,26 +2101,13 @@ function agentPrompt(): string {
   return lines.filter((l) => l !== null).join('\n').trim()
 }
 
-// Stored API keys that surface a provider as an AI in the controller, mapped to its name.
-// Claude (Opus/Fable/Sonnet) + GLM + DeepSeek + Nemotron (local LM Studio) are console-drivable
-// (glm_refine driver); the rest appear as available AIs. One key can back several provider boxes:
-// the Anthropic key drives three distinct model boxes (Opus, Fable, Sonnet) that run and score
-// independently. Nemotron's key is a local nominal one - LM Studio ignores it, so the stored value
-// just acts as the provider's on/off switch (a stored key = box appears + is drivable).
-const LLM_KEYS: Record<string, string[]> = {
-  ANTHROPIC_API_KEY: ['Opus', 'Fable', 'Sonnet'],
-  GLM_API_KEY: ['GLM'],
-  DEEPSEEK_API_KEY: ['DeepSeek'],
-  GROK_API_KEY: ['Grok'],
-  // 'GPT', not 'ChatGPT': normalizeName folds gpt/codex/chatgpt MCP clients to 'GPT', and a
-  // mismatched provider name split one agent into two boxes with divided roles/efforts/stats.
-  OPENAI_API_KEY: ['GPT'],
-  NEMOTRON_API_KEY: ['Nemotron'],
-  // One box that runs a single free Requesty model (picked via the box's dropdown).
-  REQUESTY_API_KEY: ['Requesty'],
-  // Moonshot AI - Kimi K3, OpenAI-compatible (api.moonshot.ai).
-  MOONSHOT_API_KEY: ['Kimi']
-}
+// Stored API keys that surface a provider as an AI in the controller, mapped to its box names.
+// Built from the model table (shared/models.ts), which also says which boxes the console can
+// drive itself and with which model. One key can back several boxes: the Anthropic key drives one
+// box per Claude model, each of which runs and scores independently.
+const LLM_KEYS: Record<string, string[]> = Object.fromEntries(
+  [...new Set(MODEL_BOXES.map((b) => b.key))].map((key) => [key, boxesForKey(key)])
+)
 // Providers currently being driven by the console (Phase D populates this).
 const apiDriving = new Set<string>()
 // Stop was pressed while this agent was mid-drive: the driver is killed but its post-run pipeline
@@ -2161,8 +2149,8 @@ function agentsSnapshot(): AiAgent[] {
     })
   }
 
-  // 2. keyed API providers (drivable). One key can back several boxes (Anthropic -> Opus/Fable/
-  //    Sonnet). If already live via MCP, just tag the provider.
+  // 2. keyed API providers (drivable). One key can back several boxes (Anthropic -> one box per
+  //    Claude model). If already live via MCP, just tag the provider.
   for (const s of listSecrets()) {
     for (const provider of LLM_KEYS[s.name] ?? []) {
     const existing = byName.get(provider)
@@ -3780,76 +3768,29 @@ async function driveBatchInner(agentName: string): Promise<void> {
   const epochAtStart = projectEpoch
   const env = projectEnv()
   const driverEnv: Record<string, string> = {}
-  // Claude models share the Anthropic key but drive different models, each its own box.
-  const CLAUDE_MODEL: Record<string, string> = {
-    Opus: 'claude-opus-4-8',
-    Fable: 'claude-fable-5',
-    Sonnet: 'claude-sonnet-5'
-  }
-  if (agentName === 'GLM') {
-    if (!env.GLM_API_KEY) throw new Error('no GLM_API_KEY stored - add it in Settings')
-  } else if (CLAUDE_MODEL[agentName]) {
-    if (!env.ANTHROPIC_API_KEY) throw new Error('no ANTHROPIC_API_KEY stored - add it in Settings')
-    driverEnv.GLM_API_KEY = env.ANTHROPIC_API_KEY // the driver reads GLM_API_KEY; point it at Anthropic
-    driverEnv.GLM_BASE_URL = 'https://api.anthropic.com'
-    driverEnv.GLM_MODEL = CLAUDE_MODEL[agentName]
-  } else if (agentName === 'DeepSeek') {
-    if (!env.DEEPSEEK_API_KEY) throw new Error('no DEEPSEEK_API_KEY stored - add it in Settings')
-    driverEnv.GLM_API_KEY = env.DEEPSEEK_API_KEY
-    driverEnv.GLM_BASE_URL = 'https://api.deepseek.com'
-    driverEnv.GLM_DIALECT = 'openai' // DeepSeek is OpenAI /chat/completions, not the Anthropic dialect
-    // The effort box picks the model. IMPORTANT: default to reasoner when no choice is stored -
-    // the dropdown DISPLAYS "reasoner" (the family default) without ever writing agentEfforts, so
-    // requiring === 'reasoner' silently drove deepseek-chat while the UI said reasoner.
-    driverEnv.GLM_MODEL = agentEfforts['DeepSeek'] === 'chat' ? 'deepseek-chat' : 'deepseek-reasoner'
-  } else if (agentName === 'Nemotron') {
-    // Local Nemotron-3 via LM Studio's OpenAI-compatible server on localhost:1234. Same driver path
-    // as DeepSeek - OpenAI /chat/completions dialect, answer in `content` (its reasoning goes to
-    // reasoning_content, which glm_refine ignores). The local server ignores the key, but glm_refine
-    // requires GLM_API_KEY set, so fall back to a nominal value. The health-check doubles as model
-    // discovery: it fails fast with a clear message if the server is down and returns the loaded id.
+  // Which endpoint, model and effort this box drives comes from the model table
+  // (shared/models.ts). The driver reads its settings from GLM_* variables whatever the provider.
+  const drive = driveSettings(agentName, agentEfforts[agentName])
+  if (!drive) throw new Error(`${agentName} has no console driver yet (idle-only)`)
+  if (drive.modelFrom === 'runtime') {
+    // A local LM Studio server (Nemotron). The health check doubles as model discovery: it fails
+    // fast with a clear message if the server is down and returns the id of the loaded model.
     driverEnv.GLM_MODEL = await nemotronModelId()
-    driverEnv.GLM_API_KEY = env.NEMOTRON_API_KEY || 'lm-studio'
-    driverEnv.GLM_BASE_URL = 'http://localhost:1234/v1'
-    driverEnv.GLM_DIALECT = 'openai'
-  } else if (agentName === 'Requesty') {
-    // ONE free model via the Requesty gateway (OpenAI dialect). The effort box picks which model;
-    // default nemotron-super-120b. A single model at a time - NOT a fan-out - because all the free
-    // models share one key's quota, so running 8 at once just rate-limits them against each other.
-    if (!env.REQUESTY_API_KEY) throw new Error('no REQUESTY_API_KEY stored - add it in Settings')
-    driverEnv.GLM_API_KEY = env.REQUESTY_API_KEY
-    driverEnv.GLM_BASE_URL = 'https://router.requesty.ai/v1'
-    driverEnv.GLM_DIALECT = 'openai'
-    driverEnv.GLM_MODEL = agentEfforts['Requesty'] || 'nvidia/nemotron-3-super-120b-a12b'
-  } else if (agentName === 'Kimi') {
-    // Moonshot AI - Kimi K3, OpenAI-compatible (/v1/chat/completions). Same driver path as DeepSeek.
-    if (!env.MOONSHOT_API_KEY) throw new Error('no MOONSHOT_API_KEY stored - add it in Settings')
-    driverEnv.GLM_API_KEY = env.MOONSHOT_API_KEY
-    driverEnv.GLM_BASE_URL = 'https://api.moonshot.ai/v1'
-    driverEnv.GLM_DIALECT = 'openai'
-    driverEnv.GLM_MODEL = 'kimi-k3'
-  } else if (agentName === 'GPT') {
-    // OpenAI - GPT-5.6 Luna on the native /v1/chat/completions dialect. Unlike the other OpenAI-dialect
-    // boxes the effort is NOT forced off: the driver maps it to `reasoning_effort` (minimal|low|medium|
-    // high, per efforts.ts) for gpt-5/o-series models, so the box's dropdown actually takes effect.
-    if (!env.OPENAI_API_KEY) throw new Error('no OPENAI_API_KEY stored - add it in Settings')
-    driverEnv.GLM_API_KEY = env.OPENAI_API_KEY
-    driverEnv.GLM_BASE_URL = 'https://api.openai.com/v1'
-    driverEnv.GLM_DIALECT = 'openai'
-    driverEnv.GLM_MODEL = 'gpt-5.6-luna'
-  } else {
-    throw new Error(`${agentName} has no console driver yet (idle-only)`)
+  } else if (!env[drive.key]) {
+    throw new Error(`no ${drive.key} stored - add it in Settings`)
   }
-  // Reasoning effort chosen on the AI box (falls back to the family default). Claude models map it to
-  // the extended-thinking budget; GLM forces it off (thinking starves its code block); DeepSeek picks
-  // the model by effort (chat vs reasoner) and the reasoner thinks on its own, so both pass 'off'.
-  // Must mirror efforts.ts: without an entry here an un-picked box resolves to '' and the driver
-  // sends NO reasoning knob at all, so the dropdown's displayed default would be a lie.
-  const effortDefault: Record<string, string> = { Opus: 'high', Fable: 'high', Sonnet: 'high', GPT: 'high' }
-  driverEnv.TANGOS_EFFORT =
-    agentName === 'GLM' || agentName === 'DeepSeek' || agentName === 'Nemotron'
-      ? 'off'
-      : agentEfforts[agentName] ?? effortDefault[agentName] ?? ''
+  if (drive.modelFrom !== 'driver') {
+    // The driver reads GLM_API_KEY; point it at this box's provider. (A 'driver' box is the
+    // driver's native provider, so its own key, endpoint and default model stand.)
+    driverEnv.GLM_API_KEY = env[drive.key] || drive.keyFallback || ''
+    if (drive.baseUrl) driverEnv.GLM_BASE_URL = drive.baseUrl
+    if (drive.dialect) driverEnv.GLM_DIALECT = drive.dialect
+    if (drive.model) driverEnv.GLM_MODEL = drive.model
+  }
+  // Reasoning effort for the driver: the box's dropdown pick (or the family default when nothing
+  // valid is stored, the same rule the dropdown displays by), or 'off' for a box whose dropdown
+  // picks the model instead or whose model reasons on its own.
+  driverEnv.TANGOS_EFFORT = drive.effort
   const batch = state.batches.find((b) => b.targetAgent === agentName && b.status !== 'done')
   if (!batch) throw new Error(`no batch assigned to ${agentName} - assign one first`)
   // Final hand-over check (same as next_batch): main may have finished some of these targets while
