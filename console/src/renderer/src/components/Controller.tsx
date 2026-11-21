@@ -631,13 +631,15 @@ export default function Controller({
                             disabled={!canDrive || !capabilities.drive}
                             onClick={() => drive(a.name)}
                             title={
-                              !capabilities.drive
-                                ? "This project has no API driver, so there's nothing to work the queue with. Connect an agent over MCP instead, or declare a driver in tangos.json under console.driver."
-                                : canDrive
-                                  ? `Work through the queue (${queueRemaining} function${queueRemaining === 1 ? '' : 's'}) via this AI's API key`
-                                  : queueRemaining > 0
-                                    ? 'Busy - finish the current action first, then this works through the queue'
-                                    : 'Add functions to the queue first, then this drives through them via the API key'
+                              capabilities.localOnly
+                                ? 'This project is local only, so Console never sends its code to a model API. Connect an agent over MCP instead.'
+                                : !capabilities.drive
+                                  ? "This project has no API driver, so there's nothing to work the queue with. Connect an agent over MCP instead, or declare a driver in tangos.json under console.driver."
+                                  : canDrive
+                                    ? `Work through the queue (${queueRemaining} function${queueRemaining === 1 ? '' : 's'}) via this AI's API key`
+                                    : queueRemaining > 0
+                                      ? 'Busy - finish the current action first, then this works through the queue'
+                                      : 'Add functions to the queue first, then this drives through them via the API key'
                             }
                           >
                             <Play size={12} /> Drive queue ({queueRemaining})

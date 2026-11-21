@@ -57,7 +57,7 @@ import type {
 } from '../shared/types'
 import { roleBatchSize, ROLE_LADDER } from '../shared/types'
 import { MODEL_BOXES, boxesForKey, driveSettings } from '../shared/models'
-import { enforceLocalOnly } from '../shared/projectPolicy'
+import { LOCAL_ONLY_REASON, enforceLocalOnly, isLocalOnly, singleFunctionFlows } from '../shared/projectPolicy'
 
 const DEFAULT_PORT = 4808
 
@@ -159,10 +159,21 @@ type AutoPushStatus = {
 }
 let autoPushStatus: AutoPushStatus = { state: 'idle' } // aggregate (most-recent) for the UI chip
 
+/** Why every network feature is off for the open project, or undefined for an ordinary project.
+ *  A project whose descriptor says project.localOnly never leaves this machine: each place below
+ *  that would fetch, pull, push, open a pull request, look something up on GitHub or send work to
+ *  a model provider asks this first. scripts/verify-localonly.mts holds the list of those places. */
+function localOnlyReason(): string | undefined {
+  return isLocalOnly(state.descriptor) ? LOCAL_ONLY_REASON : undefined
+}
+
 /** Why the Push toggle is locked for this project, or undefined when it is free to use. A project
  *  that sets matchConventions.autoPr false publishes class and unit work through its integrator,
- *  so Console must not open PRs for it however the toggles are set. */
+ *  so Console must not open PRs for it however the toggles are set. A local-only project is
+ *  locked for the stronger reason that nothing about it goes anywhere. */
 function autoPushLockedReason(): string | undefined {
+  const local = localOnlyReason()
+  if (local) return local
   return autoPrAllowed(state.descriptor?.project)
     ? undefined
     : 'Auto-PR is off for this project: its class and translation-unit work is published by the integrator, not by Console. Console still verifies and keeps local commits.'
@@ -277,6 +288,7 @@ async function bankRecovered(repo: string, verifiedPaths: string[]): Promise<voi
 /** On repo load, tell the operator if a PREVIOUS session left verified matches that never reached
  *  origin/<base> - the signal that was missing when the 13 matches were stranded. Best-effort. */
 async function surfacePriorHarvests(repo: string): Promise<void> {
+  if (localOnlyReason()) return // it fetches origin to compare; a local-only project is never fetched
   try {
     const prior = listHarvests(repo).filter((h) => h.session !== SESSION_TAG && !h.landed)
     if (!prior.length) return
@@ -756,6 +768,11 @@ async function runStrandedSweep(): Promise<void> {
   const repo = state.repoPath
   const matchTool = state.descriptor?.tools.find((t) => t.id === 'match')
   if (!repo || !matchTool || !(await isGitRepo(repo))) return
+  // The sweep rescues loose one-function files: it fetches origin, re-verifies each file as a
+  // single function and banks it on a harvest branch. None of that applies to a local-only
+  // project (no fetch) or to one whose unit of work is a class or a whole file (a file there is
+  // built and checked by the project's own gates, not one function at a time).
+  if (localOnlyReason() || !singleFunctionFlows(state.descriptor)) return
   sweepRunning = true
   try {
     // Once per repo load, nag about a PREVIOUS session's verified matches that never reached
@@ -936,6 +953,8 @@ function startSweepCadence(repoPath: string | null): void {
     srcWatcher = null
   }
   if (!repoPath) return
+  // No timer and no src/ watcher for a project the sweep never runs on (see runStrandedSweep).
+  if (localOnlyReason() || !singleFunctionFlows(state.descriptor)) return
   sweepPeriodTimer = setInterval(() => scheduleStrandedSweep(1_000), SWEEP_PERIOD_MS)
   try {
     const srcDir = join(repoPath, 'src')
@@ -1581,11 +1600,13 @@ function consoleCapabilities(): Record<string, boolean> {
     refine: !!roleTool('refineScheduler'),
     random: !!roleTool('randomScheduler'),
     enrich: !!roleTool('enrich'),
-    drive: !!roleTool('driver') || hasScript('tools/glm_refine.py'),
+    // An API drive sends the project's code to a model provider, so a local-only project has none.
+    drive: !localOnlyReason() && (!!roleTool('driver') || hasScript('tools/glm_refine.py')),
     land: !!roleTool('land') || hasScript('tools/crackloop.py'),
     logAttempt: !!roleTool('logAttempt'),
     verify: !!roleTool('verify'),
-    generate: !!state.descriptor?.data?.generate
+    generate: !!state.descriptor?.data?.generate,
+    localOnly: !!localOnlyReason()
   }
 }
 
@@ -2852,7 +2873,10 @@ function maybeRegenChaosDb(repoPath: string): void {
 }
 
 ipcMain.handle('github:credits', async () => {
-  return githubCredits(state.descriptor?.project?.github ?? '', secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN)
+  // A local-only project has no repo address (the loader removes it), so there is nothing to look
+  // up. Passing '' explicitly keeps that true even if a caller ever hands in a raw descriptor.
+  const url = localOnlyReason() ? '' : (state.descriptor?.project?.github ?? '')
+  return githubCredits(url, secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN)
 })
 
 // Atlas cosmetics from the shop backend: contributor colors + function stars, the same
@@ -3749,6 +3773,8 @@ async function driveBatch(agentName: string): Promise<void> {
 
 async function driveBatchInner(agentName: string): Promise<void> {
   if (!state.repoPath) throw new Error('no repo selected')
+  const local = localOnlyReason()
+  if (local) throw new Error(local)
   // Pin the repo and project for the run. A drive is the longest thing the console does - minutes
   // of model calls, then a land step that writes C into src/, ingests near-misses and can claim
   // address ranges. Re-reading state.repoPath at land time would aim all of that at whatever
@@ -4213,6 +4239,9 @@ function autoStopExhausted(agentName: string, reason: string): void {
 
 async function startDriveLoop(agentName: string): Promise<void> {
   if (driveLoopActive.has(agentName) || apiDriving.has(agentName)) return
+  // Refuse before a batch is generated for the drive, not only when the model call would start.
+  const local = localOnlyReason()
+  if (local) throw new Error(local)
   exhausted.delete(agentName) // a manual (re)start clears a prior out-of-usage stop
   quickFailStreak.delete(agentName)
   driveLoopActive.add(agentName)
@@ -4488,6 +4517,12 @@ ipcMain.handle('repo:updateStatus', async (): Promise<RepoUpdateStatus> => {
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo))) return { isGit: false }
   try {
+    if (localOnlyReason()) {
+      // Never fetched and never compared with a remote: there is nothing to update from and
+      // nowhere to publish to, so the banner has nothing to offer.
+      const [branch, dirty] = await Promise.all([currentBranch(repo), isDirty(repo)])
+      return { isGit: true, branch, ahead: 0, unmergedAhead: 0, behind: 0, dirty, fetched: false }
+    }
     const fetched = await fetchRemote(repo)
     const [branch, db, dirty] = await Promise.all([currentBranch(repo), defaultBranch(repo), isDirty(repo)])
     const ab = await aheadBehind(repo, db)
@@ -4511,6 +4546,8 @@ ipcMain.handle('repo:updateStatus', async (): Promise<RepoUpdateStatus> => {
 ipcMain.handle('repo:pull', async (): Promise<{ ok: boolean; err?: string; behind?: number; note?: string }> => {
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo))) return { ok: false, err: 'not a git checkout' }
+  const local = localOnlyReason()
+  if (local) return { ok: false, err: local }
   const db = await defaultBranch(repo)
   const res = await rebasePull(repo, db, (label, pct) =>
     mainWindow?.webContents.send('repo:pullProgress', { label, pct })
@@ -4528,6 +4565,8 @@ ipcMain.handle('repo:syncPreview', async (): Promise<SyncPreview> => {
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo)))
     return { branch: '', defaultBranch: 'main', behind: 0, ahead: 0, localChanges: 0, untracked: 0, error: 'not a git checkout' }
+  const local = localOnlyReason()
+  if (local) return { branch: '', defaultBranch: 'main', behind: 0, ahead: 0, localChanges: 0, untracked: 0, error: local }
   try {
     return await syncPreview(repo)
   } catch (e) {
@@ -4557,6 +4596,8 @@ ipcMain.handle('repo:backup', async (): Promise<{ ok: boolean; path?: string; fi
 ipcMain.handle('repo:sync', async (): Promise<{ ok: boolean; branch?: string; head?: string; backup?: string; error?: string }> => {
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo))) return { ok: false, error: 'not a git checkout' }
+  const local = localOnlyReason()
+  if (local) return { ok: false, error: local }
   // Crash-safe cleanup: reset --hard + clean -fd would discard any verified match still sitting
   // uncommitted in the worktree. Run the sweep FIRST so those get banked to the local recovery branch
   // (a ref survives reset/clean), so a Sync can never silently destroy finished-but-unlanded work.
@@ -4599,6 +4640,8 @@ ipcMain.handle('repo:sync', async (): Promise<{ ok: boolean; branch?: string; he
 ipcMain.handle('repo:pushWorkPr', async (): Promise<{ ok: boolean; url?: string; error?: string }> => {
   const repo = state.repoPath
   if (!repo || !(await isGitRepo(repo))) return { ok: false, error: 'not a git checkout' }
+  const local = localOnlyReason()
+  if (local) return { ok: false, error: local }
   const gh = await remoteSlug(repo)
   if (!gh) return { ok: false, error: 'no GitHub "origin" remote to push to' }
   const token = secretsEnv().GITHUB_TOKEN || process.env.GITHUB_TOKEN

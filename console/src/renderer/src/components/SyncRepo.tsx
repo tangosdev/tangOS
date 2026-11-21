@@ -18,7 +18,8 @@ export default function SyncRepo({ repo }: { repo: RepoState | null }): JSX.Elem
   useEffect(() => window.tangos.onRepoSyncProgress(setProgress), [])
 
   // Only a real git checkout can be synced (a Download-ZIP snapshot has no origin to reset to).
-  if (!repo?.path || repo.isGit === false) return null
+  // A local-only project is never fetched, so it has no origin state to reset to either.
+  if (!repo?.path || repo.isGit === false || repo.descriptor?.project?.localOnly) return null
 
   async function expand(): Promise<void> {
     setOpen(true)
