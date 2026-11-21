@@ -25,19 +25,23 @@ async function main(): Promise<void> {
   const queue: Batch[] = [
     { id: 'b1', title: 'Test batch', prompt: 'Match these please.', items: [{ id: 'i1', ref: 'func_x' }], status: 'queued', createdAt: 0 }
   ]
+  const takeNext = (): Batch | null => {
+    const b = queue.find((x) => x.status === 'queued')
+    if (!b) return null
+    queue.forEach((x) => { if (x.status === 'active') x.status = 'done' })
+    b.status = 'active'
+    return b
+  }
   const ctx: McpContext = {
     descriptor,
     repoPath: REPO,
     runtime: descriptor.runtime ?? { cwd: '.', python: 'python' },
     allowMutations: true,
     batchApi: {
-      next: () => {
-        const b = queue.find((x) => x.status === 'queued')
-        if (!b) return null
-        queue.forEach((x) => { if (x.status === 'active') x.status = 'done' })
-        b.status = 'active'
-        return b
-      },
+      next: () => takeNext(),
+      // The app long-polls here; the check answers at once so an empty queue does not hold the
+      // run for the full wait.
+      wait: async () => takeNext(),
       list: () => queue
     },
     run: (tool, values, source) =>
@@ -76,7 +80,7 @@ async function main(): Promise<void> {
   if (!/Test batch/.test(nbText) || !/func_x/.test(nbText)) throw new Error('next_batch did not return the queued batch')
   if (queue[0].status !== 'active') throw new Error('batch was not marked active')
   const nb2: any = await client.callTool({ name: 'next_batch', arguments: {} })
-  if (!/empty/.test(nb2.content?.[0]?.text ?? '')) throw new Error('second next_batch should be empty')
+  if (!/no work yet/.test(nb2.content?.[0]?.text ?? '')) throw new Error('second next_batch should report no work')
   log('next_batch (2nd) -> queue empty (correct)')
 
   // mutation gate
@@ -100,7 +104,7 @@ async function main(): Promise<void> {
   log('activity events:', events.join(' | '))
   if (!events.some((e) => e.startsWith('start:progress:ai'))) throw new Error('no ai activity captured')
 
-  log('ALL CHECKS PASSED ✓')
+  log('ALL CHECKS PASSED')
   process.exit(0)
 }
 

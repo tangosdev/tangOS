@@ -25,7 +25,7 @@ async function main(): Promise<void> {
     run: (tool, values, source, client) => runTool({ tool, values, runtime: rt, repoPath: REPO, source, client, allowMutations: true })
   }
   const mgr = new McpManager(() => ctx)
-  mgr.onClientsChange = () => log('roster:', mgr.getClients().map((c) => `${c.name}[${c.role}]`).join(', ') || '(none)')
+  mgr.onClientsChange = () => log('roster:', mgr.getClients().map((c) => `${c.name}[${c.roles.join('+') || '-'}]`).join(', ') || '(none)')
   const { url } = await mgr.start(PORT)
 
   // connect two AIs with different client names
@@ -43,8 +43,8 @@ async function main(): Promise<void> {
 
   // designate the Grok client as Verifier
   const grokClient = roster.find((c) => c.name === 'Grok')!
-  mgr.setRole(grokClient.id, 'Verifier')
-  assert(mgr.getClients().find((c) => c.id === grokClient.id)!.role === 'Verifier', 'role should be set')
+  mgr.setRoles(grokClient.id, ['Verifier'])
+  assert(mgr.getClients().find((c) => c.id === grokClient.id)!.roles[0] === 'Verifier', 'role should be set')
 
   // a tool call from Grok should be tagged with its name + role
   let tagged: { name: string; role?: string } | undefined
@@ -63,7 +63,7 @@ async function main(): Promise<void> {
   log('after disconnect count:', mgr.getClients().length)
   await mgr.stop()
 
-  log('ALL CLIENT CHECKS PASSED ✓')
+  log('ALL CLIENT CHECKS PASSED')
   process.exit(0)
 }
 

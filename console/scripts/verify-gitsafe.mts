@@ -73,7 +73,7 @@ async function main(): Promise<void> {
   assert(sh(repo, ['rev-parse', '--verify', WORK_BRANCH]).status !== 0, 'work branch should be deleted after discard')
   log('DISCARD path OK')
 
-  log('ALL GITSAFE CHECKS PASSED ✓')
+  log('ALL GITSAFE CHECKS PASSED')
   process.exit(0)
 }
 
