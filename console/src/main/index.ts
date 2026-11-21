@@ -57,6 +57,7 @@ import type {
 } from '../shared/types'
 import { roleBatchSize, ROLE_LADDER } from '../shared/types'
 import { MODEL_BOXES, boxesForKey, driveSettings } from '../shared/models'
+import { enforceLocalOnly } from '../shared/projectPolicy'
 
 const DEFAULT_PORT = 4808
 
@@ -2314,7 +2315,7 @@ function setRepo(path: string | null, remote?: TangosDescriptor | null): RepoSta
       state.validationErrors = []
     }
   } else if (remote) {
-    state.descriptor = remote
+    state.descriptor = enforceLocalOnly(remote)
     state.descriptorPath = null
     state.validationErrors = validateDescriptor(remote)
   } else {

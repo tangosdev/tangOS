@@ -94,6 +94,8 @@ export interface TangosProject {
   tagline?: string
   github?: string
   githubClientId?: string // optional OAuth app client_id for the "Sign into GitHub" device flow
+  /** true = the project never leaves this machine: no network request about it, see projectPolicy.ts. */
+  localOnly?: boolean
   language?: string
   platform?: string
   compiler?: string

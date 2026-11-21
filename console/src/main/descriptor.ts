@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { TangosDescriptor } from '../shared/types'
+import { enforceLocalOnly, localOnlyConflicts } from '../shared/projectPolicy'
 
 export const DESCRIPTOR_FILENAME = 'tangos.json'
 
@@ -58,6 +59,12 @@ export function validateDescriptor(desc: unknown): string[] {
     }
     if (project.compilerPin !== undefined && (typeof project.compilerPin !== 'string' || !project.compilerPin.trim())) {
       errs.push('project.compilerPin must be a non-empty string')
+    }
+    if (project.localOnly !== undefined && typeof project.localOnly !== 'boolean') {
+      errs.push('project.localOnly must be true or false')
+    }
+    for (const field of localOnlyConflicts(d)) {
+      errs.push(`${field} is not allowed when project.localOnly is true (a local-only project names no place on the network)`)
     }
     if (project.gates !== undefined && !Array.isArray(project.gates)) errs.push('project.gates must be an array')
     if (project.pr !== undefined && (typeof project.pr !== 'object' || project.pr === null || Array.isArray(project.pr))) {
@@ -193,6 +200,8 @@ export function loadDescriptor(repoPath: string): LoadResult {
   }
   const errors = validateDescriptor(parsed)
   // A descriptor with errors is still returned (so the UI can show + let the user fix it),
-  // but callers should refuse to start the MCP server if errors are non-empty.
-  return { descriptor: parsed as TangosDescriptor, descriptorPath: p, errors }
+  // but callers should refuse to start the MCP server if errors are non-empty. Because it is
+  // still loaded, a local-only descriptor has its network fields removed here, not just reported:
+  // nothing downstream ever holds an address to contact for such a project.
+  return { descriptor: enforceLocalOnly(parsed) as TangosDescriptor, descriptorPath: p, errors }
 }

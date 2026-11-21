@@ -6,6 +6,34 @@
   "type": "object",
   "required": ["tangosVersion", "project", "tools"],
   "additionalProperties": false,
+  "allOf": [
+    {
+      "$comment": "A local-only project declares no place on the network.",
+      "if": {
+        "type": "object",
+        "required": ["project"],
+        "properties": {
+          "project": { "type": "object", "required": ["localOnly"], "properties": { "localOnly": { "const": true } } }
+        }
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "project": { "type": "object", "properties": { "github": false, "githubClientId": false } },
+          "data": {
+            "type": "object",
+            "properties": {
+              "committedDbUrl": false,
+              "claimsApi": false,
+              "projectId": false,
+              "liveApi": false,
+              "claimsMdUrl": false
+            }
+          }
+        }
+      }
+    }
+  ],
   "properties": {
     "tangosVersion": {
       "description": "Descriptor schema version. Current: \"1\".",
@@ -23,6 +51,10 @@
         "tagline": { "type": "string" },
         "github": { "type": "string", "description": "Repo URL." },
         "githubClientId": { "type": "string", "description": "Optional GitHub OAuth app client_id for Console's \"Sign into GitHub\" device flow." },
+        "localOnly": {
+          "type": "boolean",
+          "description": "true = this project never leaves this machine. Console makes no network request about it (no fetch, pull, push or pull request, no claims, live stream or hosted data, no GitHub lookup, no API drive) and keeps its name and paths out of bug reports and debug bundles. A local-only descriptor must not declare project.github, project.githubClientId, data.committedDbUrl, data.claimsApi, data.projectId, data.liveApi or data.claimsMdUrl."
+        },
         "language": { "type": "string", "description": "Primary source language, e.g. \"C\", \"C++\"." },
         "platform": { "type": "string", "description": "Console/arch hint, e.g. \"nds\", \"gc\", \"n64\", \"gba\", \"ps2\"." },
         "compiler": { "type": "string", "description": "Compiler + flags, free text." },
