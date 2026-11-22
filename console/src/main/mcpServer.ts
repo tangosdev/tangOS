@@ -25,6 +25,7 @@ import {
 } from './matchConventions'
 import { classifySrcFile, type SrcFileIndex } from './srcFiles'
 import { roleToolOf } from '../shared/projectPolicy'
+import { unitBatches, unitTargetLine, unitWorkGuide } from './unitWork'
 
 // Re-export so consumers can observe the exact bus instance runTool publishes to.
 export { activityBus } from './activityBus'
@@ -384,11 +385,15 @@ function buildMcpServer(
         const verifyId = roleToolOf(desc, 'verify')?.id
         const hasMatch = !!verifyId
         const srcIndex = getCtx().srcIndex?.() ?? null
+        // A class or whole-file project: targets are units, so no source path is guessed and no
+        // single-function call is offered, and the guide is written from the descriptor.
+        const units = unitBatches(desc)
 
         const targets = b.items.length
           ? '\n\nTargets:\n' +
             b.items
               .map((i) => {
+                if (units) return unitTargetLine(i)
                 const head = `- ${i.ref}${i.label ? ` (${i.label})` : ''}`
                 const call = hasMatch ? verifyCallFor(i, desc, srcIndex) : null
                 return call ? `${head}\n    ${verifyId} -> ${call}` : head
@@ -398,11 +403,15 @@ function buildMcpServer(
 
         // How to actually run the work without stalling on the first tool error - tailored to the
         // connecting agent (Grok gets a terser, explicit-call variant; everyone else the default).
-        const guide = workGuideFor(c?.name, hasMatch, {
-          cpp: prefersCpp(desc.project),
-          autoPr: autoPrAllowed(desc.project),
-          unitTools: !!desc.tools?.some((t) => t.id === 'tubuild_verify')
-        })
+        const live = getCtx()
+        const prefs = live.matchingPrefs ?? defaultMatchingPrefs(desc.project)
+        const guide = units
+          ? unitWorkGuide(desc, { allowNearMiss: prefs.allowNearMiss !== false })
+          : workGuideFor(c?.name, hasMatch, {
+              cpp: prefersCpp(desc.project),
+              autoPr: autoPrAllowed(desc.project),
+              unitTools: !!desc.tools?.some((t) => t.id === 'tubuild_verify')
+            })
 
         const walls = desc.project?.knownWalls
         const wallsNote = walls
@@ -414,11 +423,8 @@ function buildMcpServer(
           : ''
         // Draft-source policy + optional attempt-tree rules once per batch (not per target).
         // Never inlines disasm / tip C / Ghidra C — only whether the agent may call tools for them.
-        const live = getCtx()
-        const loggingNote = matchConventionsGuide(desc, {
-          batchSize: b.items.length || 1,
-          prefs: live.matchingPrefs ?? defaultMatchingPrefs(desc.project)
-        })
+        // The unit guide already says where a file goes and what the near-miss toggle means.
+        const loggingNote = units ? '' : matchConventionsGuide(desc, { batchSize: b.items.length || 1, prefs })
         return {
           content: [
             {

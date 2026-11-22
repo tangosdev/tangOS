@@ -61,7 +61,7 @@
         "workUnit": {
           "type": "string",
           "enum": ["function", "class", "tu"],
-          "description": "What one piece of work is in this project: a single function (the classic match-one-function flow), a class, or a whole translation unit (a source file that holds several functions). Absent means \"function\". Console reads it to decide whether to hand out functions or units; a project that is fully matched and now converts code to real classes says \"class\" or \"tu\"."
+          "description": "What one piece of work is in this project: a single function (the classic match-one-function flow), a class, or a whole translation unit (a source file that holds several functions). Absent means \"function\". Console reads it to decide whether to hand out functions or units: for \"class\" or \"tu\" a batch comes from console.unitScheduler, its guide is written from this descriptor (readFirst, srcLayout, srcPathTool, gates, verifyCommand, the unit roles), and the flows that publish one matched function per file (the stranded-file sweep and the Push toggle) are off. A project that is fully matched and now converts code to real classes says \"class\" or \"tu\"."
         },
         "languageMode": {
           "type": "string",
@@ -264,8 +264,8 @@
         },
         "logAttempt": { "type": "string", "description": "Appends to the attempt log." },
         "verify": { "type": "string", "description": "Verifies one candidate against the ROM. The merge gate." },
-        "unitScheduler": { "type": "string", "description": "Ranks classes or translation units (project.workUnit \"class\" / \"tu\") and writes a unit worklist, the way `scheduler` ranks functions." },
-        "unitVerify": { "type": "string", "description": "Verifies a whole unit against the ROM and prints one machine-readable verdict (see the tool's `successPattern`)." },
+        "unitScheduler": { "type": "string", "description": "Ranks classes or translation units (project.workUnit \"class\" / \"tu\") and writes a unit worklist, the way `scheduler` ranks functions. Takes `limit` and, when it writes a file, `out`; each JSONL row is {name, module, addr, size, label}, where `name` is the unit id the unit tools take, `addr` and `size` are hex strings for the unit's range and `label` is a short note. For a unit project Console builds every batch from this tool." },
+        "unitVerify": { "type": "string", "description": "Verifies a whole unit against the ROM and prints one machine-readable verdict (see the tool's `successPattern`). A passing run that names a batch target's unit id in one of its arguments ticks that target; with no `successPattern` a clean exit is the pass." },
         "unitPromote": { "type": "string", "description": "Enrolls a verified unit into the build. Mutating: should declare `previewFlag` or `apply`." },
         "unitReview": { "type": "string", "description": "Source review of a unit by someone who did not write it (readability and fidelity, separate from the byte check)." }
       }

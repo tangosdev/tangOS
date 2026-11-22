@@ -60,6 +60,7 @@ import { MODEL_BOXES, boxesForKey, driveSettings } from '../shared/models'
 import {
   LOCAL_ONLY_REASON, enforceLocalOnly, isLocalOnly, localOnlyDebug, roleToolOf, singleFunctionFlows
 } from '../shared/projectPolicy'
+import { unitBatchPrompt, unitBatchTitle, unitBatches, unitItemFromRow, unitRefInRun, unitWord, unitsContaining } from './unitWork'
 
 const DEFAULT_PORT = 4808
 
@@ -184,6 +185,10 @@ function report(kind: string, data: Record<string, unknown>): void {
 function autoPushLockedReason(): string | undefined {
   const local = localOnlyReason()
   if (local) return local
+  // The push flow publishes one matched function per file. A project whose unit of work is a
+  // class or a whole file has no such files to publish, whatever its autoPr setting says.
+  if (!singleFunctionFlows(state.descriptor))
+    return 'Auto-PR is off for this project: its unit of work is a class or a whole file, and Console only publishes one matched function per file. Console still verifies and keeps local commits.'
   return autoPrAllowed(state.descriptor?.project)
     ? undefined
     : 'Auto-PR is off for this project: its class and translation-unit work is published by the integrator, not by Console. Console still verifies and keeps local commits.'
@@ -1096,6 +1101,11 @@ function afterRun(
     args: values,
     outputTail: (res.output || '').slice(-4000)
   })
+  const units = unitBatches(state.descriptor)
+  if (units && tool.id === roleTool('unitVerify')?.id) {
+    noteUnitVerifyRun(tool, values, client, res)
+    return
+  }
   if (tool.id !== roleTool('verify')?.id) return
   let ok = res.status === 'ok' && outputIsMatch(res.output, tool.successPattern)
   const func = typeof values.func === 'string' ? values.func : undefined
@@ -1135,10 +1145,45 @@ function afterRun(
     if (ok) markItemDone(func)
     else markItemWorked(func)
   }
+  // In a class or whole-file project a batch target is a unit, not this function. One function
+  // passing proves nothing about the unit, so the unit holding this address is only marked worked.
+  if (units) {
+    const open = state.batches.flatMap((b) => b.items)
+    const mod = typeof values.module === 'string' ? values.module : undefined
+    for (const it of unitsContaining(open, mod, parseHexish(values.addr))) markItemWorked(it.ref)
+  }
   // A verified match means the agent wrote a matching source; when Writes + Review + Push are on,
   // attribute ONLY this matched function's src to the agent and roll it into its branch/PR (debounced
   // so a burst becomes one push). Gate on the specific func so ambient near-miss files aren't swept.
   if (ok && typeof values.func === 'string') void noteMatchAndPush(client?.name, [values.func])
+}
+
+/** A run of the project's whole-unit check (console.unitVerify) in a class or whole-file project.
+ *  The unit is named by one of the run's arguments. A pass (the tool's `successPattern`, or a clean
+ *  exit when it declares none) ticks that batch target; anything else marks it worked. The same
+ *  transcription rule as a function match applies when the run names its source file as `c`. */
+function noteUnitVerifyRun(
+  tool: TangosTool,
+  values: Record<string, unknown>,
+  client: { name: string; role?: string } | undefined,
+  res: RunResult
+): void {
+  const ref = unitRefInRun(state.batches.flatMap((b) => b.items.map((i) => i.ref)), values)
+  if (!ref) return
+  let ok = res.status === 'ok' && (tool.successPattern ? outputIsMatch(res.output, tool.successPattern) : true)
+  if (ok && state.repoPath && typeof values.c === 'string') {
+    try {
+      const p = isAbsolute(values.c) ? values.c : join(state.repoPath, values.c)
+      if (classifySource(readFileSync(p, 'utf8')) === 'transcribed') {
+        ok = false
+        rejectTranscription('verify', client?.name, ref, values.c)
+      }
+    } catch {
+      /* unreadable: nothing to classify */
+    }
+  }
+  if (ok) markItemDone(ref)
+  else markItemWorked(ref)
 }
 
 /** Console-side attempt logging: run the repo's log_attempt tool for a match run, stamping the fields
@@ -2106,8 +2151,12 @@ function agentPrompt(): string {
     '',
     'THEN:',
     '  1. Your first and ONLY action is to call next_batch. It BLOCKS server-side until a batch is ready (or ~45s) - so you do NOT wait, sleep, or heartbeat yourself; just call it and it parks until there is work. If it ever returns empty (a timeout), your entire next response is a single next_batch call to keep parking, nothing else. While idle do NOTHING else - no other tools, no reading files or notes, no "setting up" or picking your own targets. Self-assigning work on an empty queue is the #1 way to waste tokens here; do not do it.',
-    `  2. ONLY once next_batch hands you a real batch do you start using tools. It gives your role (if any), each target WITH a ready-to-run match call, this repo's KNOWN WALLS, and how to work them. Then drive the toolchain: ${shown}.`,
-    '  3. Respect required args: each tool lists its REQUIRED args (see list_tools or tangos.json tools[]) - e.g. match needs c, func, addr, size. Use the ready call next_batch gives you; never omit `c`.',
+    unitBatches(state.descriptor)
+      ? `  2. ONLY once next_batch hands you a real batch do you start using tools. Each target is a whole ${unitWord(state.descriptor)} (one source file holding every function in its range), and the reply lists this project's gates and how to work a target. Then drive the toolchain: ${shown}.`
+      : `  2. ONLY once next_batch hands you a real batch do you start using tools. It gives your role (if any), each target WITH a ready-to-run match call, this repo's KNOWN WALLS, and how to work them. Then drive the toolchain: ${shown}.`,
+    unitBatches(state.descriptor)
+      ? '  3. Respect required args: each tool lists its REQUIRED args (see list_tools or tangos.json tools[]).'
+      : '  3. Respect required args: each tool lists its REQUIRED args (see list_tools or tangos.json tools[]) - e.g. match needs c, func, addr, size. Use the ready call next_batch gives you; never omit `c`.',
     '  4. On any tool error (-32602 / compile fail): read that tool\'s args in tangos.json, fix the call, and RETRY. Never end your turn on the first failed call.',
     '  5. Every call streams into the human\'s live viewer tagged with your name - skip the narration and just work. If you hit a known wall, say so plainly and move on rather than grinding.',
     '  6. Stay in your lane: edit source only for your assigned targets, and if an edit makes a function worse, revert it - never leave a tracked file regressed. Keep scratch files, notes, and reports in a temp dir, not in the repo or next to source.',
@@ -3169,13 +3218,21 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   // is on: on a clone that's behind main, a chunk of each pull is dropped as already-matched
   // upstream (see the liveDone filter below), so budget for that drop instead of landing short.
   const liveDropBudget = state.descriptor.data?.committedDbUrl ? count * 2 : 0
-  const plan = genPlanFor(role, count + taken.size + Math.max(count, 16) + liveDropBudget)
+  // A class or whole-file project hands out units: its unit scheduler picks them, whatever role
+  // the agent has (the role pools below are all made of single functions).
+  const units = unitBatches(state.descriptor)
+  const want = count + taken.size + Math.max(count, 16) + liveDropBudget
+  const plan = units
+    ? { role: 'unitScheduler' as keyof TangosConsoleRoles, values: { limit: want } as Record<string, unknown> }
+    : genPlanFor(role, want)
   // The role this plan wants, falling back to the default scheduler, then any read-only limit+out
   // tool. A repo names its own tools for these in descriptor.console.
   const sched = roleTool(plan.role) ?? roleTool('scheduler') ?? duckSchedulerTool()
   if (!sched) {
     throw new Error(
-      `${state.descriptor.project.title} has no worklist scheduler. Declare one in tangos.json under console.scheduler.`
+      units
+        ? `${state.descriptor.project.title} has no unit scheduler. Its unit of work is a ${unitWord(state.descriptor)}, so declare the tool that lists them in tangos.json under console.unitScheduler.`
+        : `${state.descriptor.project.title} has no worklist scheduler. Declare one in tangos.json under console.scheduler.`
     )
   }
   // Most schedulers (coddog/refine_wl) write their worklist JSONL to a temp `out` file; some
@@ -3270,9 +3327,13 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
     }
     let hint: string
     if (/ModuleNotFoundError|No module named|ImportError/i.test(out))
-      hint = 'Python packages are missing. In the repo folder run:  pip install -r requirements.txt  (needs capstone, ndspy, pyelftools).'
+      hint = `Python packages are missing. In the repo folder run:  pip install -r requirements.txt  (needs ${
+        state.descriptor.requirements?.pythonPackages?.join(', ') || 'capstone, ndspy, pyelftools'
+      }).`
     else if (/extracted|FileNotFoundError|No such file|\.bin/i.test(out))
-      hint = 'The ROM does not look extracted. Run the repo setup (tools/unpack.py on your own legally-dumped ROM) to create the extracted/ folder coddog reads.'
+      hint = state.descriptor.project.setup
+        ? `The ROM does not look extracted. Run the repo setup first: ${state.descriptor.project.setup}`
+        : 'The ROM does not look extracted. Run the repo setup (tools/unpack.py on your own legally-dumped ROM) to create the extracted/ folder coddog reads.'
     else if (res.status === 'error' && !out)
       hint = 'Could not run Python at all - check that `python` is installed and on PATH (the repo\'s runtime uses `python`).'
     else hint = 'The scheduler ran but wrote nothing. Check the output below and that the repo is fully set up (deps + extracted ROM).'
@@ -3291,9 +3352,18 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
     try {
       const r = JSON.parse(line) as {
         name: string; module?: string; addr?: string; size?: string; target_hex?: string
-        coddog_sim?: number; siblings?: { name: string; sim: number }[]
+        coddog_sim?: number; siblings?: { name: string; sim: number }[]; label?: string
       }
       if (taken.has(r.name)) return // already assigned elsewhere, or a same-name sibling above
+      if (units) {
+        // A unit row: its id, where it sits and a short note. No sibling, no target bytes.
+        const it = unitItemFromRow(r)
+        if (it) {
+          items.push(it)
+          taken.add(it.ref)
+        }
+        return
+      }
       // Already matched on main since this clone synced, or tagged needs-no-match - never hand it out.
       if (liveDone && (liveDone.matched.has(r.name) || liveDone.noMatch.has(r.name))) { droppedMatched++; return }
       const addr = r.addr ? parseInt(r.addr, 16) : undefined
@@ -3333,7 +3403,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   // Skipped for roles with a purpose-built pool: Hard matcher (size floor - random small funcs defeat
   // it), Refiner (near-miss pile, not raw unmatched), and Random (already random).
   let randomFill = 0
-  if (items.length < count && role !== 'Hard matcher' && role !== 'Refiner' && role !== 'Random') {
+  if (!units && items.length < count && role !== 'Hard matcher' && role !== 'Refiner' && role !== 'Random') {
     const before = items.length
     const need = count - items.length
     // Same over-fetch headroom as the primary plan: dedup drops taken/matched rows, so ask for more
@@ -3347,8 +3417,21 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
     throw new Error(
       droppedMatched
         ? `Every candidate for this batch is already finished on main (${droppedMatched} skipped as matched or needs-no-match) - your clone is behind. Hit Refresh, then generate again.`
-        : 'scheduler returned no functions'
+        : units
+          ? `The unit scheduler (${sched.id}) listed nothing that is not already in a batch.`
+          : 'scheduler returned no functions'
     )
+  }
+  if (units) {
+    // The guide for unit work is written from the descriptor by next_batch (unitWork.ts).
+    const note =
+      items.length < count ? `Got ${items.length} of ${count} - that is every open unit the scheduler listed.` : undefined
+    return {
+      title: unitBatchTitle(state.descriptor, items.length),
+      prompt: unitBatchPrompt(state.descriptor),
+      items,
+      note
+    } satisfies BatchDraft
   }
   // Batch prompt stays short; MATCH LOGGING / SHARED DEFAULTS are appended by next_batch
   // when project.matchConventions.attemptTree is set (same once-per-batch rule as Chaos Viewer).
