@@ -2,7 +2,8 @@ import { resolve } from 'node:path'
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 
-// NOTE: we intentionally do NOT use externalizeDepsPlugin. Bundling the npm deps
+// NOTE: we intentionally do NOT externalize dependencies (`externalizeDeps: false`; electron-vite 5
+// turns it on by default). Bundling the npm deps
 // (express, @modelcontextprotocol/sdk, zod) into the main/preload output makes the
 // packaged app self-contained - no runtime node_modules - which sidesteps the
 // hoisted-node_modules problem when packaging this workspace member with electron-builder.
@@ -10,6 +11,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   main: {
     build: {
+      externalizeDeps: false,
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') }
       }
@@ -17,6 +19,7 @@ export default defineConfig({
   },
   preload: {
     build: {
+      externalizeDeps: false,
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/preload/index.ts') }
       }
