@@ -66,6 +66,9 @@ tangOS/
 
 ## Develop
 
+Needs Node 22.12 or newer, which Electron 40 and later ask for. The first
+`npm run console` downloads the Electron binary; `npm install` no longer does.
+
 ```
 npm install                      # from the repo root (workspaces)
 npm run console                  # start Console in dev (electron-vite)
