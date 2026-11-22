@@ -7,7 +7,8 @@
 //   3. Let a development or test run use its own data folder. The dev app and the installed app
 //      share one name, so without this a dev boot reads and writes the installed app's settings,
 //      key vault and resume state. Set TANGOS_USER_DATA to a folder and this run keeps everything
-//      there instead, and leaves the old-folder migration alone.
+//      there instead (debug snapshots included, see debug.ts), and leaves the old-folder
+//      migration alone.
 // We copy ONLY our own files, one at a time. Copying the whole old folder throws on Chromium's
 // locked cache/state files and aborts the migration (which once dropped the key vault); the cache
 // dirs regenerate anyway. The uninstaller (build/installer.nsh) deletes "tangOS Console" so

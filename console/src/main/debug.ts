@@ -7,7 +7,11 @@ import { join } from 'node:path'
 // without guessing. Triggered by a hotkey (Ctrl+Shift+D) or a Settings button.
 
 export function debugDir(): string {
-  return join(app.getPath('documents'), 'tangos-debug')
+  // A run that was given its own data folder (TANGOS_USER_DATA, see appName.ts) keeps its
+  // snapshots there too, so a dev or test run never writes into the Documents folder that the
+  // installed app uses.
+  const ownData = (process.env.TANGOS_USER_DATA ?? '').trim()
+  return join(ownData ? app.getPath('userData') : app.getPath('documents'), 'tangos-debug')
 }
 
 // Runs INSIDE the renderer (injected as a string, so it's plain JS - not type-checked against the
