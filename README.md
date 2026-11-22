@@ -79,7 +79,5 @@ bridge, local-only projects, unit batches and so on). Run one with `npx tsx scri
 from `console/`.
 
 A dev run shares the installed app's data folder (settings, key vault, resume state). Set
-`TANGOS_USER_DATA` to an empty folder to give a dev or test run its own; debug snapshots then
-stay in that folder too.
-
-Built with Claude Code.
+`TANGOS_USER_DATA` to an empty folder to give a dev or test run its own. Debug snapshots
+(Ctrl+Shift+D) go to a `tangos-debug` folder inside whichever data folder the run uses.

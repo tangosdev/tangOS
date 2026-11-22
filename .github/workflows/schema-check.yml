@@ -9,9 +9,9 @@ name: Descriptor schema check
 # until someone ran a strict validator by hand.
 #
 # Runs on any change to the schema, the shared descriptor types, or this workflow; weekly on
-# a cron so a reference-descriptor change upstream is caught too; and manually. mkds-decomp
-# is private, so CI covers the two public descriptors; validate the private one locally with
-#   node schema/validate.mjs ../mkds-decomp/tangos.json
+# a cron so a reference-descriptor change upstream is caught too; and manually. CI covers
+# the public descriptors; validate a private one locally with
+#   node schema/validate.mjs <path to its tangos.json>
 on:
   workflow_dispatch:
   schedule:
