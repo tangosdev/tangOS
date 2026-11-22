@@ -54,20 +54,33 @@ interface Current {
   progress?: { done: number; total: number }
 }
 
-/** True if a `match`/driver run's output reports a REAL byte match. The tool prints
- *  "MATCHING VERSIONS: 1.2/sp2p3" on a hit but "MATCHING VERSIONS: none" on a miss - so a
- *  bare "MATCHING VERSIONS" test counts misses as matches (100%-hit inflation). Require a
- *  real version token after the colon, and never accept "none". */
-export function outputIsMatch(output: string): boolean {
+/** True if a verify or driver run's output reports a REAL byte match.
+ *
+ *  A verify tool that declares `successPattern` in the descriptor is scored by that pattern and
+ *  nothing else (the schema's promise: "Console scores a run as a pass when it matches"). A
+ *  pattern that does not compile scores nothing, so a typo can never turn misses into passes.
+ *
+ *  Without one, the historical line is used. That tool prints "MATCHING VERSIONS: 1.2/sp2p3" on a
+ *  hit but "MATCHING VERSIONS: none" on a miss - so a bare "MATCHING VERSIONS" test counts misses
+ *  as matches (100%-hit inflation). Require a real version token after the colon, and never accept
+ *  "none". */
+export function outputIsMatch(output: string, successPattern?: string): boolean {
+  if (typeof successPattern === 'string' && successPattern.trim()) {
+    try {
+      return new RegExp(successPattern).test(output || '')
+    } catch {
+      return false
+    }
+  }
   return /MATCHING VERSIONS:\s*(?!none\b)\S/i.test(output)
 }
 
-/** Smallest byte-diff a match/driver run reports ("N word(s) differ" or "divergences=N"), or null
- *  if none parses. A non-match with a real, small diff (compiled to the right size, a few words
- *  off) is a NEAR MISS; the sentinel 999 (size differs / way off) is not. */
+/** Smallest byte-diff a match/driver run reports ("N word(s) differ", "N unit(s) differ" or
+ *  "divergences=N"), or null if none parses. A non-match with a real, small diff (compiled to the
+ *  right size, a few words off) is a NEAR MISS; the sentinel 999 (size differs / way off) is not. */
 export function matchDivergence(output: string): number | null {
   let min: number | null = null
-  const re = /(\d+)\s+word\(s\)\s+differ|divergences?\s*=\s*(\d+)/gi
+  const re = /(\d+)\s+(?:word|unit)\(s\)\s+differ|divergences?\s*=\s*(\d+)/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(output || '')) !== null) {
     const n = Number(m[1] ?? m[2])

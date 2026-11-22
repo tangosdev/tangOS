@@ -57,7 +57,9 @@ import type {
 } from '../shared/types'
 import { roleBatchSize, ROLE_LADDER } from '../shared/types'
 import { MODEL_BOXES, boxesForKey, driveSettings } from '../shared/models'
-import { LOCAL_ONLY_REASON, enforceLocalOnly, isLocalOnly, localOnlyDebug, singleFunctionFlows } from '../shared/projectPolicy'
+import {
+  LOCAL_ONLY_REASON, enforceLocalOnly, isLocalOnly, localOnlyDebug, roleToolOf, singleFunctionFlows
+} from '../shared/projectPolicy'
 
 const DEFAULT_PORT = 4808
 
@@ -774,7 +776,7 @@ function scheduleStrandedSweep(delayMs = 20_000): void {
 async function runStrandedSweep(): Promise<void> {
   if (sweepRunning) return
   const repo = state.repoPath
-  const matchTool = state.descriptor?.tools.find((t) => t.id === 'match')
+  const matchTool = roleTool('verify')
   if (!repo || !matchTool || !(await isGitRepo(repo))) return
   // The sweep rescues loose one-function files: it fetches origin, re-verifies each file as a
   // single function and banks it on a harvest branch. None of that applies to a local-only
@@ -872,7 +874,7 @@ async function runStrandedSweep(): Promise<void> {
         allowMutations: true, // match is read-only; this just skips the safe-mode wrap
         extraEnv: projectEnv()
       })
-      if (res.status === 'ok' && outputIsMatch(res.output)) verified.push(f)
+      if (res.status === 'ok' && outputIsMatch(res.output, matchTool.successPattern)) verified.push(f)
     }
     if (!verified.length) return
     report('strandedSweep', { event: 'found', files: verified })
@@ -1077,7 +1079,9 @@ function parseHexish(v: unknown): number | undefined {
   return undefined
 }
 
-/** Post-run bookkeeping: derive per-AI match stats + mark batch items done from `match` runs. */
+/** Post-run bookkeeping: derive per-AI match stats and mark batch items done from runs of the
+ *  project's verify tool (console.verify in its descriptor, else the tool called `match`). A run
+ *  passes when the output matches that tool's `successPattern`, else the historical verdict line. */
 function afterRun(
   tool: TangosTool,
   values: Record<string, unknown>,
@@ -1092,8 +1096,8 @@ function afterRun(
     args: values,
     outputTail: (res.output || '').slice(-4000)
   })
-  if (tool.id !== 'match') return
-  let ok = res.status === 'ok' && outputIsMatch(res.output)
+  if (tool.id !== roleTool('verify')?.id) return
+  let ok = res.status === 'ok' && outputIsMatch(res.output, tool.successPattern)
   const func = typeof values.func === 'string' ? values.func : undefined
   // TRANSCRIPTION GATE: a "MATCHING VERSIONS" verdict on a raw dcd transcription is vacuous - the
   // dump equals the ROM by construction (asmPolicy.ts). Demote it BEFORE any credit: no match
@@ -1563,28 +1567,13 @@ function projectEnv(): Record<string, string> {
 // The Controller needs certain jobs done - pick targets, enrich one, drive an agent over them, land
 // the result - and used to find the tools for them by assuming sm64ds's ids and file paths. A repo
 // that named its equivalents anything else got "this repo has no similarity scheduler" despite
-// shipping a complete toolchain. Roles are declared per repo in descriptor.console; these ids are
-// the fallback, so every descriptor written before that block keeps working untouched.
-// The unit roles (unitScheduler ...) came with class and TU work and have no historical id, so they
-// only resolve when a descriptor names them.
-const LEGACY_ROLE_IDS: Partial<Record<keyof TangosConsoleRoles, string>> = {
-  scheduler: 'coddog',
-  refineScheduler: 'refine_wl',
-  randomScheduler: 'worklist',
-  enrich: 'worklist',
-  driver: 'glm_refine',
-  land: 'crackloop_land',
-  logAttempt: 'log_attempt',
-  verify: 'match'
-}
+// shipping a complete toolchain. Roles are declared per repo in descriptor.console; the historical
+// ids are the fallback (LEGACY_ROLE_IDS in shared/projectPolicy.ts), so every descriptor written
+// before that block keeps working untouched.
 
-/** The tool filling a role: what the repo declared, else the legacy id. */
+/** The tool filling a role for the open project: what the repo declared, else the legacy id. */
 function roleTool(role: keyof TangosConsoleRoles): TangosTool | undefined {
-  const tools = state.descriptor?.tools
-  if (!tools?.length) return undefined
-  const declared = state.descriptor?.console?.[role]
-  if (declared) return tools.find((t) => t.id === declared)
-  return tools.find((t) => t.id === LEGACY_ROLE_IDS[role])
+  return roleToolOf(state.descriptor, role)
 }
 
 /** A scheduler can also be duck-typed: any read-only tool taking `out` and `limit` writes a

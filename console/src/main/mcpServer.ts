@@ -24,6 +24,7 @@ import {
   prefersCpp
 } from './matchConventions'
 import { classifySrcFile, type SrcFileIndex } from './srcFiles'
+import { roleToolOf } from '../shared/projectPolicy'
 
 // Re-export so consumers can observe the exact bus instance runTool publishes to.
 export { activityBus } from './activityBus'
@@ -141,14 +142,15 @@ function describeTool(tool: TangosTool): string {
   return parts.join(' ')
 }
 
-/** Build a ready-to-run `match` call for a batch target so the agent never has to guess
- *  (and never omits the required `c` arg - the failure that stalled the first batch). */
+/** Build a ready-to-run call of the project's verify tool (`match` unless the descriptor names
+ *  another under console.verify) for a batch target, so the agent never has to guess (and never
+ *  omits the required `c` arg - the failure that stalled the first batch). */
 export function verifyCallFor(
   item: BatchItem,
   descriptor: TangosDescriptor,
   srcIndex?: SrcFileIndex | null
 ): string | null {
-  const match = descriptor.tools?.find((t) => t.id === 'match')
+  const match = roleToolOf(descriptor, 'verify')
   if (!match) return null
   const name = item.ref
   const hasTool = (id: string): boolean => !!descriptor.tools?.some((t) => t.id === id)
@@ -379,7 +381,8 @@ function buildMcpServer(
         const prefix = roles.length
           ? `[You are the ${roles.map((r) => `"${r}"`).join(' + ')} agent.] ${roles.map((r) => ROLE_PRESETS[r]).join(' ')}\n\n`
           : ''
-        const hasMatch = !!desc.tools?.find((t) => t.id === 'match')
+        const verifyId = roleToolOf(desc, 'verify')?.id
+        const hasMatch = !!verifyId
         const srcIndex = getCtx().srcIndex?.() ?? null
 
         const targets = b.items.length
@@ -388,7 +391,7 @@ function buildMcpServer(
               .map((i) => {
                 const head = `- ${i.ref}${i.label ? ` (${i.label})` : ''}`
                 const call = hasMatch ? verifyCallFor(i, desc, srcIndex) : null
-                return call ? `${head}\n    match -> ${call}` : head
+                return call ? `${head}\n    ${verifyId} -> ${call}` : head
               })
               .join('\n')
           : ''

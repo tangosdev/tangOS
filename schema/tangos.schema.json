@@ -302,7 +302,7 @@
         },
         "successPattern": {
           "type": "string",
-          "description": "Regular expression (JavaScript syntax) that matches the tool's output when it succeeded, for tools whose exit code does not say (e.g. \"UNIT VERDICT: bytes=ok\"). Console scores a run as a pass when it matches."
+          "description": "Regular expression (JavaScript syntax) that matches the tool's output when it succeeded, for tools whose exit code does not say (e.g. \"UNIT VERDICT: bytes=ok\"). Console scores a run of the verify tool (console.verify, else the tool called `match`) as a pass when the run exits 0 and its output matches this. A verify tool without one is scored by the historical `MATCHING VERSIONS: <build>` line."
         },
         "longRunning": { "type": "boolean", "description": "Hint that this tool streams for a long time (orchestrators, batch runs). Default false.", "default": false },
         "needs": {

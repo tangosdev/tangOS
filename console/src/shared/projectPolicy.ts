@@ -10,8 +10,10 @@
 //   2. What is one piece of work? `project.workUnit` says function (the default), class or tu. The
 //      flows that land one function per file only make sense for the first.
 //
+// It also answers which of the project's tools fills each job the Console drives (roleToolOf).
+//
 // Everything here is pure (no Electron, no file access) so a script can check it.
-import type { TangosDescriptor, TangosProject } from './types'
+import type { TangosConsoleRoles, TangosDescriptor, TangosProject, TangosTool } from './types'
 
 /** Descriptor fields that name a place on the network. A local-only project may declare none. */
 export const LOCAL_ONLY_FORBIDDEN: ReadonlyArray<readonly [section: 'project' | 'data', key: string]> = [
@@ -103,6 +105,36 @@ export function localOnlyDebug(full: Record<string, unknown>): Record<string, un
     recentRuns: list(full.recentRuns).map((r) => keep(r, ['status', 'exitCode', 'source', 'client', 'ms'])),
     secretsPresent: list(full.secretsPresent).filter((s) => typeof s === 'string')
   }
+}
+
+/** The tool ids the Console looked for before a descriptor could name its own in its `console`
+ *  block. They are the fallback for a role left unset, so every descriptor written before that
+ *  block keeps working untouched. The unit roles (unitScheduler ...) came with class and
+ *  translation-unit work and have no historical id, so they only resolve when a descriptor names
+ *  them. */
+export const LEGACY_ROLE_IDS: Partial<Record<keyof TangosConsoleRoles, string>> = {
+  scheduler: 'coddog',
+  refineScheduler: 'refine_wl',
+  randomScheduler: 'worklist',
+  enrich: 'worklist',
+  driver: 'glm_refine',
+  land: 'crackloop_land',
+  logAttempt: 'log_attempt',
+  verify: 'match'
+}
+
+/** The tool filling a role: what the descriptor declared, else the legacy id. A declared id that
+ *  names no tool resolves to nothing (validation reports it); it never falls back to the legacy
+ *  id, so a project is never scored by a tool it did not choose. */
+export function roleToolOf(
+  desc: TangosDescriptor | null | undefined,
+  role: keyof TangosConsoleRoles
+): TangosTool | undefined {
+  const tools = desc?.tools
+  if (!tools?.length) return undefined
+  const declared = desc?.console?.[role]
+  if (declared) return tools.find((t) => t.id === declared)
+  return tools.find((t) => t.id === LEGACY_ROLE_IDS[role])
 }
 
 /** What one piece of work is in this project. Absent means a single function. */
