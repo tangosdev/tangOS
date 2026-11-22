@@ -26,7 +26,7 @@
     "@types/react-dom": "^18.3.1",
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^42.11.18",
+    "electron": "^43.8.12",
     "electron-builder": "~26.0.20",
     "electron-vite": "^5.0.0",
     "express": "^4.21.2",
@@ -42,7 +42,7 @@
   "build": {
     "appId": "com.tangos.console",
     "productName": "tangOS Console",
-    "electronVersion": "42.11.18",
+    "electronVersion": "43.8.12",
     "directories": {
       "output": "release",
       "buildResources": "build"

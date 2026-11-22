@@ -2830,10 +2830,21 @@ ipcMain.handle('repo:preflightFix', async (_e, id: PreflightFixId, filePath?: st
   }
 })
 
+/** Electron 43 opens a file dialog in Downloads when it gets no defaultPath; before, Windows and
+ *  macOS reopened the folder the user picked from last. Every picker goes through here, so it
+ *  starts in the folder of the last pick this session, else next to the open repo. */
+let lastPickDir: string | undefined
+async function pickPaths(win: BrowserWindow, opts: Electron.OpenDialogOptions): Promise<Electron.OpenDialogReturnValue> {
+  const start = lastPickDir ?? (state.repoPath ? dirname(state.repoPath) : undefined)
+  const res = await dialog.showOpenDialog(win, start ? { defaultPath: start, ...opts } : opts)
+  if (!res.canceled && res.filePaths[0]) lastPickDir = dirname(res.filePaths[0])
+  return res
+}
+
 /** File picker for a fix that needs one (the ROM). Returns null when cancelled. */
 ipcMain.handle('repo:pickFixFile', async (_e, title: string, extensions: string[]): Promise<string | null> => {
   if (!mainWindow) return null
-  const res = await dialog.showOpenDialog(mainWindow, {
+  const res = await pickPaths(mainWindow, {
     title,
     properties: ['openFile'],
     filters: [{ name: 'ROM', extensions }, { name: 'All files', extensions: ['*'] }]
@@ -3469,7 +3480,7 @@ ipcMain.handle('batch:generate', async (_e, arg: number | { count?: number; role
 })
 
 ipcMain.handle('repo:pick', async () => {
-  const res = await dialog.showOpenDialog(mainWindow!, {
+  const res = await pickPaths(mainWindow!, {
     title: 'Choose a decomp repo folder',
     properties: ['openDirectory']
   })
@@ -4563,7 +4574,7 @@ ipcMain.handle('review:discard', async () => {
 
 ipcMain.handle('repo:cloneAndOpen', async (_e, url: string) => {
   if (!mainWindow) return { ok: false, error: 'no window' }
-  const res = await dialog.showOpenDialog(mainWindow, {
+  const res = await pickPaths(mainWindow, {
     title: 'Choose a folder to clone the repo into',
     properties: ['openDirectory', 'createDirectory']
   })
@@ -4860,7 +4871,7 @@ ipcMain.handle('clipboard:write', (_e, text: string) => {
 // ---- bug report -----------------------------------------------------------
 ipcMain.handle('bug:pickScreenshots', async () => {
   if (!mainWindow) return []
-  const res = await dialog.showOpenDialog(mainWindow, {
+  const res = await pickPaths(mainWindow, {
     title: 'Attach screenshots',
     properties: ['openFile', 'multiSelections'],
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }]
