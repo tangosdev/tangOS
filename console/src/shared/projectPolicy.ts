@@ -6,7 +6,7 @@
 //      machine. The Console then makes no network request about it: no fetch, pull, push or pull
 //      request, no claims, live stream or hosted data, no GitHub lookup, and no API drive (a drive
 //      sends the project's code to a model provider). Its name and paths also stay out of bug
-//      reports and debug bundles.
+//      reports, debug snapshots and the optional run reports.
 //   2. What is one piece of work? `project.workUnit` says function (the default), class or tu. The
 //      flows that land one function per file only make sense for the first.
 //
@@ -69,6 +69,40 @@ export function enforceLocalOnly<T>(desc: T): T {
     d[sec] = copy
   }
   return d as T
+}
+
+/** Said inside a bug report or debug snapshot made while a local-only project is open. */
+export const LOCAL_ONLY_DEBUG_NOTE =
+  'A local-only project is open. Its name, folder, branch, tool names, tool output and counts are left out.'
+
+type Plain = Record<string, unknown>
+const plain = (v: unknown): Plain => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Plain) : {})
+const list = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
+function keep(src: unknown, keys: readonly string[]): Plain {
+  const s = plain(src)
+  const out: Plain = {}
+  for (const k of keys) if (k in s) out[k] = s[k]
+  return out
+}
+
+/** The debug section of a bug report, cut down to what may be shared while a local-only project
+ *  is open. It is built from a list of fields that cannot hold anything of the project's (the app
+ *  and system versions, the toggles, which agents are connected, how recent runs ended), never by
+ *  searching for the name and blanking it, so a field added to the full report later stays out
+ *  until someone adds it here on purpose. */
+export function localOnlyDebug(full: Record<string, unknown>): Record<string, unknown> {
+  const repo = plain(full.repo)
+  return {
+    generatedAt: full.generatedAt,
+    note: LOCAL_ONLY_DEBUG_NOTE,
+    app: keep(full.app, ['version', 'electron', 'node', 'platform', 'arch', 'os']),
+    repo: { localOnly: true, isGit: repo.isGit === true, validationErrors: list(repo.validation).length },
+    mcp: keep(full.mcp, ['running', 'port', 'connectedClients', 'requestsSeen', 'lastContactAt']),
+    policies: keep(full.policies, ['allowMutations', 'safeMode', 'useAgents', 'agentFanout', 'autoLand', 'autoPushEnabled']),
+    agents: list(full.agents).map((a) => keep(a, ['name', 'kind', 'roles', 'connected'])),
+    recentRuns: list(full.recentRuns).map((r) => keep(r, ['status', 'exitCode', 'source', 'client', 'ms'])),
+    secretsPresent: list(full.secretsPresent).filter((s) => typeof s === 'string')
+  }
 }
 
 /** What one piece of work is in this project. Absent means a single function. */

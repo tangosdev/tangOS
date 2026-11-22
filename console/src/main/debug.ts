@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Notification } from 'electron'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 // A one-shot debug snapshot: dumps a screenshot + full state + a DOM/computed-style map to a
@@ -31,11 +31,21 @@ const DOM_SNAPSHOT_JS = `(function () {
   return out;
 })()`
 
-/** Write screenshot.png + state.json + dom.json to the debug folder. Returns the folder path. */
-export async function dumpDebug(win: BrowserWindow | null, state: unknown, activity: unknown): Promise<string> {
+/** Write screenshot.png + state.json + dom.json to the debug folder. Returns the folder path.
+ *  With `stateOnly` the window is not captured: no screenshot and no DOM text (both show whatever
+ *  project is on screen), a screenshot or DOM file left by an earlier snapshot is removed so the
+ *  folder never mixes two projects, and `state` is written as given. */
+export async function dumpDebug(
+  win: BrowserWindow | null,
+  state: unknown,
+  activity: unknown,
+  opts: { stateOnly?: boolean } = {}
+): Promise<string> {
   const dir = debugDir()
   mkdirSync(dir, { recursive: true })
-  if (win && !win.isDestroyed()) {
+  if (opts.stateOnly) {
+    for (const f of ['screenshot.png', 'dom.json']) rmSync(join(dir, f), { force: true })
+  } else if (win && !win.isDestroyed()) {
     try {
       const img = await win.webContents.capturePage()
       writeFileSync(join(dir, 'screenshot.png'), img.toPNG())
@@ -56,7 +66,10 @@ export async function dumpDebug(win: BrowserWindow | null, state: unknown, activ
   // In-app toast (works in dev, unlike a native notification which needs the installed app's ID).
   if (win && !win.isDestroyed()) win.webContents.send('debug:dumped', dir)
   try {
-    new Notification({ title: 'tangOS debug', body: 'Snapshot saved (screenshot + state + dom)' }).show()
+    new Notification({
+      title: 'tangOS debug',
+      body: opts.stateOnly ? 'Snapshot saved (app state only, a local-only project is open)' : 'Snapshot saved (screenshot + state + dom)'
+    }).show()
   } catch {
     /* native notifications may be off (e.g. a dev build) */
   }

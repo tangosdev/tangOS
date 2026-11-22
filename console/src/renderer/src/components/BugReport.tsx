@@ -6,9 +6,12 @@ import { Bug, X, ImagePlus, Loader2, Check } from 'lucide-react'
  *  to the clipboard, and opens the folder so the user can attach the shots wherever they file it. */
 export default function BugReport({
   repoName,
+  localOnly,
   onClose
 }: {
   repoName?: string
+  /** A local-only project is open: the report leaves the project out, and the dialog says so. */
+  localOnly?: boolean
   onClose: () => void
 }): JSX.Element {
   const [desc, setDesc] = useState('')
@@ -72,9 +75,15 @@ export default function BugReport({
         ) : (
           <>
             <p className="hint" style={{ margin: '0 0 8px' }}>
-              What went wrong? We attach app version, OS, and recent activity{repoName ? ` in ${repoName}` : ''} -{' '}
+              What went wrong? We attach app version, OS, and recent activity{repoName && !localOnly ? ` in ${repoName}` : ''} -{' '}
               <b>no API keys</b>. Ctrl+V to paste a screenshot.
             </p>
+            {localOnly && (
+              <p className="hint" style={{ margin: '0 0 8px' }}>
+                This project is local only, so the attached details leave out its name, folder, branch and tool output.
+                Your own description and screenshots go in as they are: check them before you share the report.
+              </p>
+            )}
             <textarea
               className="bug-desc"
               placeholder="Describe the bug: what you did, what you expected, what happened…"

@@ -32,7 +32,7 @@ import { encryptionAvailable, listSecrets, setSecret, deleteSecret, secretsEnv, 
 import { aiStats, outputIsMatch, matchDivergence } from './aiStats'
 import { classifySource } from './asmPolicy'
 import * as nearMissWatch from './nearMissWatch'
-import { record as report, setReportsEnabled, reportsDir } from './reports'
+import { record as recordReport, setReportsEnabled, reportsDir } from './reports'
 import { ensureTips, readTips, openTips } from './tips'
 import { ensureTour, readTour, openTour } from './tour'
 import {
@@ -57,7 +57,7 @@ import type {
 } from '../shared/types'
 import { roleBatchSize, ROLE_LADDER } from '../shared/types'
 import { MODEL_BOXES, boxesForKey, driveSettings } from '../shared/models'
-import { LOCAL_ONLY_REASON, enforceLocalOnly, isLocalOnly, singleFunctionFlows } from '../shared/projectPolicy'
+import { LOCAL_ONLY_REASON, enforceLocalOnly, isLocalOnly, localOnlyDebug, singleFunctionFlows } from '../shared/projectPolicy'
 
 const DEFAULT_PORT = 4808
 
@@ -165,6 +165,14 @@ let autoPushStatus: AutoPushStatus = { state: 'idle' } // aggregate (most-recent
  *  a model provider asks this first. scripts/verify-localonly.mts holds the list of those places. */
 function localOnlyReason(): string | undefined {
   return isLocalOnly(state.descriptor) ? LOCAL_ONLY_REASON : undefined
+}
+
+/** Append one entry to the optional run reports (Settings, off by default). Those files exist to
+ *  be handed to someone else and they name functions, files and tool output, so nothing is
+ *  recorded while a local-only project is open. */
+function report(kind: string, data: Record<string, unknown>): void {
+  if (localOnlyReason()) return
+  recordReport(kind, data)
 }
 
 /** Why the Push toggle is locked for this project, or undefined when it is free to use. A project
@@ -4429,7 +4437,7 @@ ipcMain.handle('stats:clearAll', () => {
   aiStats.clearAll()
   return true
 })
-ipcMain.handle('debug:dump', () => dumpDebug(mainWindow, fullState(), activityBus.snapshot()))
+ipcMain.handle('debug:dump', () => snapshotDebug())
 ipcMain.handle('debug:open', async () => {
   await shell.openPath(debugDir())
   return debugDir()
@@ -4795,7 +4803,9 @@ ipcMain.handle('bug:saveImage', (_e, bytes: number[], ext: string) => {
     return null
   }
 })
-ipcMain.handle('bug:submit', async (_e, payload: { description: string; screenshots: string[] }) => {
+/** The auto-collected debug section of a bug report. With a local-only project open it is cut
+ *  down to the fields that cannot hold anything of the project's (see localOnlyDebug). */
+async function collectDebug(): Promise<Record<string, unknown>> {
   const isGit = !!state.repoPath && existsSync(join(state.repoPath, '.git'))
   let branch: string | undefined
   if (isGit && state.repoPath) {
@@ -4850,6 +4860,19 @@ ipcMain.handle('bug:submit', async (_e, payload: { description: string; screensh
       })),
     secretsPresent: listSecrets().map((s) => s.name) // NAMES only, never the values
   }
+  return localOnlyReason() ? localOnlyDebug(debug) : debug
+}
+
+/** The debug snapshot (Settings button and Ctrl+Shift+D). Normally a screenshot, the window's DOM
+ *  text and the whole app state. All three show the open project, so with a local-only project
+ *  open only the cut-down debug section is written. */
+async function snapshotDebug(): Promise<string> {
+  if (localOnlyReason()) return dumpDebug(mainWindow, await collectDebug(), [], { stateOnly: true })
+  return dumpDebug(mainWindow, fullState(), activityBus.snapshot())
+}
+
+ipcMain.handle('bug:submit', async (_e, payload: { description: string; screenshots: string[] }) => {
+  const debug = await collectDebug()
   const { folder, markdown } = writeBugReport({
     description: payload.description,
     screenshots: payload.screenshots ?? [],
@@ -4938,7 +4961,7 @@ app.whenReady().then(() => {
   // Debug hotkeys: Ctrl+Shift+D writes a snapshot (screenshot + state + dom) to the debug folder;
   // Ctrl+Shift+I toggles DevTools. Available in every build so bugs can be captured anywhere.
   globalShortcut.register('CommandOrControl+Shift+D', () => {
-    void dumpDebug(mainWindow, fullState(), activityBus.snapshot())
+    void snapshotDebug()
   })
   globalShortcut.register('CommandOrControl+Shift+I', () => {
     mainWindow?.webContents.toggleDevTools()

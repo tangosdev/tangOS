@@ -13,11 +13,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 import {
+  LOCAL_ONLY_DEBUG_NOTE,
   LOCAL_ONLY_FORBIDDEN,
   LOCAL_ONLY_REASON,
   enforceLocalOnly,
   isLocalOnly,
   localOnlyConflicts,
+  localOnlyDebug,
   singleFunctionFlows,
   workUnitOf
 } from '../src/shared/projectPolicy'
@@ -280,6 +282,56 @@ const assigns = index.filter((l) => /state\.descriptor = /.test(l)).map((l) => l
 ok(
   assigns.length > 0 && assigns.every((l) => /= (descriptor|null|enforceLocalOnly\(remote\))$/.test(l)),
   `every assignment of the open descriptor is the loader's result, enforceLocalOnly(...) or null (${assigns.length} found)`
+)
+
+// ---- bug reports, debug snapshots and run reports leave the project out ----------------------
+// Every field of the full debug section that the project can influence carries a marker here.
+// None may survive the cut, and a field the cut has never heard of must not get through either.
+const MARK = 'ZZ-PROJECT-MARKER'
+const fullDebug = {
+  generatedAt: '2000-01-01T00:00:00.000Z',
+  app: { version: '0.0.0', electron: '1', node: '1', platform: 'test', arch: 'test', os: 'test', extra: MARK },
+  repo: { path: `C:/work/${MARK}`, project: MARK, isGit: true, branch: MARK, validation: [MARK, MARK] },
+  mcp: { running: true, port: 1, url: `http://127.0.0.1:1/${MARK}`, connectedClients: 1, requestsSeen: 2, lastContactAt: 3 },
+  policies: { allowMutations: false, safeMode: true, useAgents: false, agentFanout: 1, autoLand: false, autoPushEnabled: false, extra: MARK },
+  autoPush: { state: 'error', error: MARK, url: MARK },
+  agents: [{ name: 'Fable', kind: 'api', roles: ['Hard matcher'], connected: true, matches: 12345, attempts: 67890, hitRate: 0.5, last: MARK }],
+  recentRuns: [
+    { tool: MARK, label: MARK, status: 'ok', exitCode: 0, source: 'mcp', client: 'a-client', ms: 5, outputTail: `${MARK} 12345` }
+  ],
+  secretsPresent: ['SOME_API_KEY'],
+  somethingAddedLater: MARK
+}
+const cut = localOnlyDebug(fullDebug)
+const cutText = JSON.stringify(cut)
+ok(!cutText.includes(MARK), 'the cut-down debug section carries no project name, folder, branch, tool name, tool output or validation text')
+ok(!cutText.includes('12345') && !cutText.includes('67890'), 'it carries no match or attempt counts')
+ok(!('somethingAddedLater' in cut) && !('autoPush' in cut), 'a field that is not on its list stays out')
+ok(cut.note === LOCAL_ONLY_DEBUG_NOTE, 'it says why it is short')
+ok(
+  same(cut.repo, { localOnly: true, isGit: true, validationErrors: 2 }) &&
+    same(cut.recentRuns, [{ status: 'ok', exitCode: 0, source: 'mcp', client: 'a-client', ms: 5 }]) &&
+    same(cut.agents, [{ name: 'Fable', kind: 'api', roles: ['Hard matcher'], connected: true }]),
+  'what is left is still useful: app and system versions, toggles, connected agents, how recent runs ended'
+)
+ok(same(localOnlyDebug({}).repo, { localOnly: true, isGit: false, validationErrors: 0 }), 'an empty report is cut without throwing')
+const collect = bodyOf('collectDebug')
+ok(collect.includes('return localOnlyReason() ? localOnlyDebug(debug) : debug'), 'the bug report builds its debug section through the cut')
+const snap = bodyOf('snapshotDebug')
+ok(
+  snap.indexOf('localOnlyReason()') >= 0 && snap.indexOf('localOnlyReason()') < snap.indexOf('fullState()') && snap.includes('stateOnly: true'),
+  'the debug snapshot writes no screenshot, DOM text or full state for a local-only project'
+)
+const rawIndex = index.join('\n')
+ok(
+  (rawIndex.match(/dumpDebug\(/g) ?? []).length === 2 &&
+    (rawIndex.match(/writeBugReport\(/g) ?? []).length === 1 &&
+    !rawIndex.replace(snap, '').includes('fullState(), activityBus'),
+  'nothing else writes a snapshot or a bug report'
+)
+ok(
+  bodyOf('report').includes('if (localOnlyReason()) return') && (rawIndex.match(/recordReport\(/g) ?? []).length === 1,
+  'the optional run reports record nothing for a local-only project'
 )
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nall checks passed')
