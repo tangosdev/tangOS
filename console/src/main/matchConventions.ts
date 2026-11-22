@@ -2,7 +2,7 @@
  * Match-convention helpers for MCP / next_batch.
  *
  * Mirrors the experimental Chaos Viewer fork: attempt-tree logging, near-miss
- * tip store, Ghidra scaffold policy, and SHARED DEFAULTS for provenance — so a
+ * tip store, Ghidra scaffold policy, and SHARED DEFAULTS for provenance - so a
  * batch does not re-paste model/harness/sessionScope on every target.
  *
  * Draft sources are NEVER inlined into next_batch (no pasted disasm / tip C /
@@ -50,7 +50,7 @@ export function defaultMatchingPrefs(project?: TangosProject | null): MatchingPr
   const c = conventionsOf(project)
   return {
     allowNearMiss: true,
-    // Ghidra off unless the descriptor opts in — matches conservative EP/viewer defaults.
+    // Ghidra off unless the descriptor opts in - matches conservative EP/viewer defaults.
     allowGhidra: !!c?.ghidraDrafts
   }
 }
@@ -113,17 +113,17 @@ export function matchConventionsGuide(desc: TangosDescriptor, opts: MatchGuideOp
     ...layout,
     '',
     '======================================================================',
-    'DRAFT SOURCES (operator toggle — this batch)',
+    'DRAFT SOURCES (operator toggle - this batch)',
     '======================================================================',
     'Do NOT expect disasm / near-miss C to be pasted into this message.',
     'Pull context with tools (worklist, disasm, nearmiss_*) or local files when allowed.',
     '',
     allowNear
-      ? `Near-miss tips: ON — you MAY use ${nearMiss}` +
+      ? `Near-miss tips: ON - you MAY use ${nearMiss}` +
         (hasNearMissTool ? ' and nearmiss_* tools' : '') +
         '. Keep compiling tip C; never bank non-reproducing C as a green src/ match.'
-      : 'Near-miss tips: OFF — do NOT open nearmiss/db.jsonl, nearmiss_* tools, or // NONMATCHING tip C for these targets. Work them from scratch.',
-    `A raw byte transcription (\`asm{}\`/\`dcd 0x...\` dump of the disassembly) is never a match — the console rejects it at verify, bank, and push; write real ${prefersCpp(desc.project) ? 'C++' : 'C'} or bank the near-miss instead.`
+      : 'Near-miss tips: OFF - do NOT open nearmiss/db.jsonl, nearmiss_* tools, or // NONMATCHING tip C for these targets. Work them from scratch.',
+    `A raw byte transcription (\`asm{}\`/\`dcd 0x...\` dump of the disassembly) is never a match - the console rejects it at verify, bank, and push; write real ${prefersCpp(desc.project) ? 'C++' : 'C'} or bank the near-miss instead.`
   ]
 
   if (allowNear && desc.project.nearMissNote) {

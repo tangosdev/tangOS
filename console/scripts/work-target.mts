@@ -1,5 +1,5 @@
 // Drive the real matching toolchain over the MCP connection: pull ONE genuinely
-// unmatched target with full context (disasm + few-shot sibling) — the exact
+// unmatched target with full context (disasm + few-shot sibling) - the exact
 // payload a looping agent uses to write a match. Run: npx tsx scripts/work-target.mts
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'

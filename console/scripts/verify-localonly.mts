@@ -126,7 +126,7 @@ try {
 ok(workUnitOf(undefined) === 'function' && workUnitOf({ name: 'x', title: 'X' }) === 'function', 'no workUnit means a single function')
 ok(workUnitOf({ name: 'x', title: 'X', workUnit: 'tu' }) === 'tu' && workUnitOf({ name: 'x', title: 'X', workUnit: 'class' }) === 'class', 'a declared class or tu unit is read back')
 ok(singleFunctionFlows(null) && singleFunctionFlows(shared as unknown as TangosDescriptor) === false, 'the one-function-per-file flows apply only to a function unit')
-ok(LOCAL_ONLY_REASON.length > 40 && !/—|–/.test(LOCAL_ONLY_REASON), 'the reason shown to the user is a plain sentence')
+ok(LOCAL_ONLY_REASON.length > 40 && !/[\u2013\u2014]/.test(LOCAL_ONLY_REASON), 'the reason shown to the user is a plain sentence')
 
 // ---- the address-driven requests stay silent -------------------------------------------------
 // These functions decide whether to contact a server from the descriptor fields alone. With the

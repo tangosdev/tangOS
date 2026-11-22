@@ -11,13 +11,13 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 async function main(): Promise<void> {
   const client = new Client({ name: 'claude-code', version: '1.0.0' })
   await client.connect(new StreamableHTTPClientTransport(new URL(SERVER)))
-  log('connected as "Claude" — check the Connected agents list + client count')
+  log('connected as "Claude" - check the Connected agents list + client count')
 
   const res = (await client.callTool({ name: 'progress', arguments: { bar: true } })) as { content: { text: string }[] }
   log('ran progress (visible in your live viewer):')
   console.log(res.content?.[0]?.text?.split('\n').slice(0, 6).join('\n'))
 
-  log('polling next_batch for ~5 min — designate me a role and Send a batch...')
+  log('polling next_batch for ~5 min - designate me a role and Send a batch...')
   const deadline = Date.now() + 300_000
   let pulled = 0
   while (Date.now() < deadline) {
@@ -25,7 +25,7 @@ async function main(): Promise<void> {
     const text = nb.content?.[0]?.text ?? ''
     if (!/queue is empty/.test(text)) {
       pulled++
-      log(`>>> PULLED A BATCH (#${pulled}) — note the role instructions if you designated me:`)
+      log(`>>> PULLED A BATCH (#${pulled}) - note the role instructions if you designated me:`)
       console.log(text)
     }
     await sleep(6000)

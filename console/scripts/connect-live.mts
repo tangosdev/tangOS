@@ -14,7 +14,7 @@ async function main(): Promise<void> {
   console.log(`[connect] server exposes ${tools.tools.length} tools:`)
   console.log('  ' + tools.tools.map((t) => t.name).join(', '))
 
-  console.log('\n[connect] calling progress(bar=true) — watch the live viewer...')
+  console.log('\n[connect] calling progress(bar=true) - watch the live viewer...')
   const res = (await client.callTool({ name: 'progress', arguments: { bar: true } })) as {
     content: { type: string; text: string }[]
   }
@@ -27,7 +27,7 @@ async function main(): Promise<void> {
   console.log(lb.content?.[0]?.text ?? '(no output)')
 
   await client.close()
-  console.log('\n[connect] done — disconnected cleanly')
+  console.log('\n[connect] done - disconnected cleanly')
   process.exit(0)
 }
 

@@ -682,7 +682,7 @@ export interface ViewerPrefs {
 
 /**
  * Session/app toggles for draft sources (like Chaos Viewer prompt checkboxes).
- * Do NOT paste disasm/near-miss/Ghidra C into next_batch — agents call tools / open
+ * Do NOT paste disasm/near-miss/Ghidra C into next_batch - agents call tools / open
  * files when allowed. These flags only change the policy text + which tip tools are exposed.
  */
 export interface MatchingPrefs {

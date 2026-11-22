@@ -422,7 +422,7 @@ function buildMcpServer(
           ? `\n\n[what may land in src/ - AGENTS.md has the full format]\n${submitting}`
           : ''
         // Draft-source policy + optional attempt-tree rules once per batch (not per target).
-        // Never inlines disasm / tip C / Ghidra C — only whether the agent may call tools for them.
+        // Never inlines disasm / tip C / Ghidra C - only whether the agent may call tools for them.
         // The unit guide already says where a file goes and what the near-miss toggle means.
         const loggingNote = units ? '' : matchConventionsGuide(desc, { batchSize: b.items.length || 1, prefs })
         return {

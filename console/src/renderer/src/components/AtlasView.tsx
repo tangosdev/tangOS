@@ -742,7 +742,7 @@ export default function AtlasView({
             />
           )}
 
-          {/* Prior tries: plan before queueing — data from repo logs, not pasted into agent prompts */}
+          {/* Prior tries: plan before queueing - data from repo logs, not pasted into agent prompts */}
           <div className="ad-history">
             <div className="ad-history-head">
               <span className="ad-history-title">Prior tries</span>
@@ -786,7 +786,7 @@ export default function AtlasView({
                       <span className="ad-div">div {a.divergences}</span>
                     )}
                     {a.improvedNearMiss && <span className="ad-flag">↑</span>}
-                    {/* Values only: "Grok 4.5 (high) · grok-build" — no model= keys, no timestamps */}
+                    {/* Values only: "Grok 4.5 (high) · grok-build" - no model= keys, no timestamps */}
                     {(a.model || a.harness || a.reasoning) && (
                       <span className="ad-model mono">
                         {[
@@ -822,7 +822,7 @@ export default function AtlasView({
                       // a hand-banked draft shows here with an empty history. Say the draft exists so
                       // "no attempts logged" is not misread as "no draft".
                       history?.tip || selectedFn.div != null || selectedFn.srcPath
-                      ? 'Draft on record (see above) — no console attempts logged yet.'
+                      ? 'Draft on record (see above) - no console attempts logged yet.'
                       : 'No draft and no attempts logged for this function yet.')}
               </p>
             )}

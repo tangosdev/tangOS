@@ -1,4 +1,4 @@
-/* tangOS aero — the shared Frutiger-Aero glass theme, lifted from Chaos Viewer.
+/* tangOS aero - the shared Frutiger-Aero glass theme, lifted from Chaos Viewer.
    Self-contained (no Tailwind required): CSS custom properties + glass component
    classes. Every color token exists twice: an rgb TRIPLET (for rgb(var()/alpha)
    composition) and a hex convenience var (for inline SVG/styles). Set the theme

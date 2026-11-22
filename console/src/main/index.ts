@@ -1679,7 +1679,7 @@ let bgPrefs: BackgroundPrefs = { enabled: true }
 // How much of the controller to show. Simple (default) = one Go/Stop per agent and a count field;
 // Advanced = every per-agent control. See UiPrefs.
 let uiPrefs: UiPrefs = { mode: 'simple' }
-// Draft-source toggles for agents (near-miss tips / Ghidra scaffolds). Policy only — never paste C.
+// Draft-source toggles for agents (near-miss tips / Ghidra scaffolds). Policy only - never paste C.
 let matchingPrefs: MatchingPrefs = { allowNearMiss: true, allowGhidra: false }
 function settingsFile(): string {
   return join(app.getPath('userData'), 'tangos-settings.json')
@@ -3058,7 +3058,7 @@ ipcMain.handle('matching:setPrefs', (_e, p: Partial<MatchingPrefs>): MatchingPre
   if (typeof p?.allowNearMiss === 'boolean') matchingPrefs.allowNearMiss = p.allowNearMiss
   if (typeof p?.allowGhidra === 'boolean') matchingPrefs.allowGhidra = p.allowGhidra
   saveSettings()
-  // next_batch policy is live via getCtx(); tool list is fixed per MCP session —
+  // next_batch policy is live via getCtx(); tool list is fixed per MCP session -
   // agent should reconnect (or restart MCP) after flipping Near-miss so nearmiss_* hide/show.
   return matchingPrefs
 })
@@ -3441,7 +3441,7 @@ async function genDraft(role: string | undefined, count: number): Promise<BatchD
   const prompt =
     'Match these targets. Each was picked by opcode similarity to an already-matched sibling ' +
     '(shown per target) - lean on that sibling as scaffolding. Run `match` on each; use `fdiff` on near-misses. ' +
-    'Bank near-misses to the near-miss DB when the repo provides one — never park non-reproducing C as a green src/ match.'
+    'Bank near-misses to the near-miss DB when the repo provides one - never park non-reproducing C as a green src/ match.'
   const label = role && role !== 'Unassigned' ? role : 'Similarity'
   // Landed short of what was asked? Say why. A high dropped-as-matched count means the clone is
   // behind main (the fix is to sync, not to grind); otherwise the role's pool is simply drained.

@@ -1,7 +1,7 @@
 /**
  * Read prior matching attempts / near-miss tips for one Atlas function.
  *
- * Data stays on disk (match_attempts.jsonl, nearmiss/db.jsonl) — Console only
+ * Data stays on disk (match_attempts.jsonl, nearmiss/db.jsonl) - Console only
  * summarizes it so the operator can plan a batch. Full C is never returned;
  * optional tipSrcPath lets the UI reveal the file.
  */
@@ -160,7 +160,7 @@ function orderTree(rows: Record<string, unknown>[]): AttemptNodeSummary[] {
     else roots.push(n)
   }
 
-  // Privacy: no loggedAt/ts — order by attemptId only.
+  // Privacy: no loggedAt/ts - order by attemptId only.
   const byIdKey = (a: Node, b: Node): number => a.attemptId.localeCompare(b.attemptId)
 
   roots.sort(byIdKey)
@@ -225,7 +225,7 @@ export function readFunctionHistory(
   if (!existsSync(aPath) && !existsSync(nPath)) {
     note = 'No attempt log or near-miss DB in this repo yet.'
   } else if (!attempts.length && !tip) {
-    note = 'Nothing logged for this function yet — open field for a first try.'
+    note = 'Nothing logged for this function yet - open field for a first try.'
   }
 
   return {

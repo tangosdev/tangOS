@@ -160,7 +160,7 @@ export function detectRepo(repoPath: string): GenerateReport {
       category: 'logging',
       readOnly: false,
       description:
-        'After MATCH: stamp final how (AI: model+reasoning+harness) to match_provenance.jsonl. Not a new try. Use this on SM64DS — tools/bank.py there is fan-out only.'
+        'After MATCH: stamp final how (AI: model+reasoning+harness) to match_provenance.jsonl. Not a new try. Use this on SM64DS - tools/bank.py there is fan-out only.'
     },
     'bank.py': {
       rel: 'tools/bank.py', id: 'bank', label: 'Bank match', category: 'logging', readOnly: false,

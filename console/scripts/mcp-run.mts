@@ -18,7 +18,7 @@ const AGENT = process.argv[3] || process.env.TANGOS_AGENT || 'agent'
 async function main(): Promise<void> {
   const client = new Client({ name: AGENT, version: '1.0.0' })
   await client.connect(new StreamableHTTPClientTransport(new URL(SERVER)))
-  console.log(`[${AGENT}] connected — watch the live viewer`)
+  console.log(`[${AGENT}] connected - watch the live viewer`)
   for (const c of calls) {
     console.log(`\n===== ${c.tool} ${JSON.stringify(c.args ?? {})} =====`)
     console.log(text(await client.callTool({ name: c.tool, arguments: c.args ?? {} })))

@@ -14,7 +14,7 @@ from PIL import Image
 
 HERE = pathlib.Path(__file__).resolve().parent
 SRC = HERE / "mascot.png"
-# Head crop at every size — the full body is too busy to read as an app icon.
+# Head crop at every size - the full body is too busy to read as an app icon.
 SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 
@@ -67,7 +67,7 @@ def write_ico(entries, out: pathlib.Path):
 def main():
     im = load_transparent()
     box = content_box(im)
-    # The source is already a full-body bust on transparent — center it in a square by
+    # The source is already a full-body bust on transparent - center it in a square by
     # its widest dimension with NO padding so it fills the frame as large as possible
     # (nothing cut, ears included). The user crops the source to control zoom.
     art = square(im, box, pad_frac=0.0)
