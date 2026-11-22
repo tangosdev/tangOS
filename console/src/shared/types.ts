@@ -534,7 +534,7 @@ export interface AiStats {
 export interface AiAgent {
   name: string
   kind: AiKind
-  provider?: string // api AIs: 'Claude' | 'GLM' | 'DeepSeek'
+  provider?: string // api AIs: the box's id in the model table (shared/models.ts)
   roles: string[] // zero or more assigned roles
   effort?: string // reasoning-effort level; valid values depend on the model family (see efforts.ts)
   attempts?: number // console-driven agents: max match attempts per function (glm_refine --attempts)

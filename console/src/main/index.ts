@@ -2224,26 +2224,26 @@ function agentsSnapshot(): AiAgent[] {
   //    Claude model). If already live via MCP, just tag the provider.
   for (const s of listSecrets()) {
     for (const provider of LLM_KEYS[s.name] ?? []) {
-    const existing = byName.get(provider)
-    if (existing) {
-      existing.provider = provider
-      continue
-    }
-    byName.set(provider, {
-      name: provider,
-      kind: 'api',
-      provider,
-      roles: agentRoles[provider] ?? [],
-      hiddenRole: hiddenRoles[provider],
-      effort: agentEfforts[provider],
-      attempts: agentAttempts[provider],
-      stopping: stopping.has(provider),
-      exhausted: exhausted.get(provider),
-      connected: apiDriving.has(provider),
-      currentBatchId: aiStats.currentBatchId(provider),
-      stats: aiStats.statsFor(provider),
-      run: aiStats.runStatsFor(provider)
-    })
+      const existing = byName.get(provider)
+      if (existing) {
+        existing.provider = provider
+        continue
+      }
+      byName.set(provider, {
+        name: provider,
+        kind: 'api',
+        provider,
+        roles: agentRoles[provider] ?? [],
+        hiddenRole: hiddenRoles[provider],
+        effort: agentEfforts[provider],
+        attempts: agentAttempts[provider],
+        stopping: stopping.has(provider),
+        exhausted: exhausted.get(provider),
+        connected: apiDriving.has(provider),
+        currentBatchId: aiStats.currentBatchId(provider),
+        stats: aiStats.statsFor(provider),
+        run: aiStats.runStatsFor(provider)
+      })
     }
   }
 
@@ -2702,7 +2702,7 @@ async function switchProject(id: string, path: string | null): Promise<RepoState
       })
     }
     startAtlasLive()
-  void prefetchRemoteDescriptors() // warm the switcher so picking an uncloned project is instant
+    void prefetchRemoteDescriptors() // warm the switcher so picking an uncloned project is instant
     saveSettings()
     // Resume the loops THIS project's agents were running when we last swapped away (same
     // contract as the boot resume): console-drivable agents restart their drive loop - which
@@ -3820,7 +3820,7 @@ async function nemotronModelId(): Promise<string> {
     ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id)
   } catch {
     throw new Error(
-      "Nemotron isn't reachable at localhost:1234 - start LM Studio first (run Start-Nemotron.ps1 in C:\\Users\\bmanu\\Documents\\Nemotron-3), then try again."
+      "Nemotron isn't reachable at localhost:1234 - start LM Studio and its local server first, then try again."
     )
   } finally {
     clearTimeout(timer)
@@ -3828,7 +3828,7 @@ async function nemotronModelId(): Promise<string> {
   const chat = ids.find((id) => !/embed/i.test(id))
   if (!chat)
     throw new Error(
-      `LM Studio is up at localhost:1234 but no chat model is loaded${ids.length ? ` (only: ${ids.join(', ')})` : ''} - load Nemotron via Start-Nemotron.ps1, then try again.`
+      `LM Studio is up at localhost:1234 but no chat model is loaded${ids.length ? ` (only: ${ids.join(', ')})` : ''} - load the Nemotron model in LM Studio, then try again.`
     )
   return chat
 }

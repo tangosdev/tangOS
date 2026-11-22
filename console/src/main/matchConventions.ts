@@ -32,8 +32,9 @@ export function autoPrAllowed(project?: TangosProject | null): boolean {
 }
 
 /** The language a new source should be written in. `project.languageMode` decides when it is "c" or
- *  "cpp"; otherwise a descriptor whose `language` starts with C++ is class-first (real methods, compiler-spelled names); anything else keeps the plain-C wording
- *  every function-match repo has always had. */
+ *  "cpp"; otherwise a descriptor whose `language` starts with C++ is class-first (real methods,
+ *  compiler-spelled names) and anything else keeps the plain-C wording every function-match repo
+ *  has always had. */
 export function prefersCpp(project?: TangosProject | null): boolean {
   // The explicit mode wins; "mixed" says nothing about which one new source uses, so it reads the text.
   if (project?.languageMode === 'cpp') return true

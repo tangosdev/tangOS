@@ -11,9 +11,7 @@
 // console/src/shared/types.ts (what the Console's types allow) and console/src/main/descriptor.ts
 // (the Console roles its structural validator accepts). A field added to one and not the others
 // fails here, in CI, instead of being accepted by the schema and silently ignored by the app.
-// CI runs this over the published reference descriptors so the schema and the
-// dialect the Console consumes (console/src/shared/types.ts) cannot drift apart
-// silently again.
+// CI also runs this over the published reference descriptors.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'

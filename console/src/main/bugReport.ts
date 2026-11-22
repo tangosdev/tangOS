@@ -1,6 +1,6 @@
 // Assemble a bug report: write a folder with the user's description, their screenshots, and a
 // debug bundle, and return a paste-ready markdown blob (copied to the clipboard for the user to
-// file wherever they report bugs). Never includes secret VALUES -- only which keys are present.
+// file wherever they report bugs). Never includes secret VALUES, only which keys are present.
 import { app } from 'electron'
 import { writeFileSync, mkdirSync, copyFileSync } from 'node:fs'
 import { join, basename } from 'node:path'

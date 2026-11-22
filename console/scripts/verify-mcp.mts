@@ -7,9 +7,12 @@ import { McpManager, activityBus, type McpContext } from '../src/main/mcpServer'
 import { runTool } from '../src/main/runTool'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { fileURLToPath } from 'node:url'
 import type { Batch } from '../src/shared/types'
 
-const REPO = 'C:/Users/bmanu/Documents/sm64ds-decomp'
+// The checkout these checks run against: TANGOS_VERIFY_REPO, or an sm64ds-decomp folder next to
+// this repo.
+const REPO = (process.env.TANGOS_VERIFY_REPO ?? '').trim() || fileURLToPath(new URL('../../../sm64ds-decomp', import.meta.url))
 const PORT = 4899
 const BUILTIN = 2 // next_batch + list_batches
 
