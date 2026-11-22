@@ -2,7 +2,8 @@
 // Run: npx tsx scripts/verify-gitsafe.mts
 import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import {
   currentBranch, ensureWorkBranch, statusMap, changedSince, diffForFile, commitFiles,
@@ -72,6 +73,16 @@ async function main(): Promise<void> {
   assert(!existsSync(join(repo, 'src', 'c.c')), 'discarded file must NOT exist on main')
   assert(sh(repo, ['rev-parse', '--verify', WORK_BRANCH]).status !== 0, 'work branch should be deleted after discard')
   log('DISCARD path OK')
+
+  // ---- a refused run never reaches the work branch ----
+  // With Writes off runTool refuses a mutating tool. The caller has to hand it over before the
+  // safe-mode wrap, which checks out the work branch as its first step.
+  const index = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'main', 'index.ts'), 'utf8')
+  assert(
+    /if \(!mutating \|\| !state\.allowMutations \|\| !state\.safeMode \|\| !\(await isGitRepo\(state\.repoPath\)\)\) \{\s+res = await runTool\(base\)/.test(index),
+    'a mutating run with Writes off must go straight to runTool (refused there), not through the work-branch wrap'
+  )
+  log('BLOCKED run leaves the checkout alone OK')
 
   log('ALL GITSAFE CHECKS PASSED')
   process.exit(0)

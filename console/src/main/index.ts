@@ -1012,8 +1012,11 @@ async function runToolSafely(
   }
   const mutating = !tool.readOnly
   let res: RunResult
-  if (!mutating || !state.safeMode || !(await isGitRepo(state.repoPath))) {
-    res = await runTool(base) // read-only, or write with safe-mode off / no git -> run directly
+  // With Writes off a mutating tool is refused by runTool. It must be refused before the safe-mode
+  // wrap, not inside it: the wrap switches the checkout to the work branch first, so a run that
+  // never happens would still move the repo off the branch the user was on.
+  if (!mutating || !state.allowMutations || !state.safeMode || !(await isGitRepo(state.repoPath))) {
+    res = await runTool(base) // read-only, blocked, or write with safe-mode off / no git -> run directly
   } else {
     res = await runSafeMode(base)
   }
