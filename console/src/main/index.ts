@@ -4863,8 +4863,9 @@ ipcMain.handle('shell:revealPath', (_e, p: string) => {
   const dir = dirname(p)
   return existsSync(dir) ? shell.openPath(dir) : shell.openPath(p)
 })
-ipcMain.handle('clipboard:write', (_e, text: string) => {
-  clipboard.writeText(text)
+// clipboard.writeText returns a promise from Electron 44 on; wait for it so a failed copy is not reported as done.
+ipcMain.handle('clipboard:write', async (_e, text: string) => {
+  await clipboard.writeText(text)
   return true
 })
 
@@ -4965,7 +4966,7 @@ ipcMain.handle('bug:submit', async (_e, payload: { description: string; screensh
     debug,
     appVersion: app.getVersion()
   })
-  clipboard.writeText(markdown)
+  await clipboard.writeText(markdown)
   await shell.openPath(folder)
   return { folder }
 })
